@@ -251,6 +251,40 @@ function aperturesFor() {
   return APERTURES.filter(a => a >= lens.ap - 1e-6);
 }
 const detailActive = () => S.focus.on && S.focus.detail;
+
+/* ---------- access: Normal mode for everyone, Advanced mode = signed in (Google/GitHub) + approved by the owner ----------
+   Only active on the web build (<html data-gated>, with auth.js on the page); everywhere else everything stays open. */
+const GATED = document.documentElement.hasAttribute('data-gated');
+const LOCKED_PANELS = ['pLight', 'pCam'];
+let PRO = !GATED || (() => { try { return localStorage.getItem('vp-pro') === '1'; } catch (e) { return false; } })();
+// put every Advanced-only setting back to its Normal value
+function enforce() {
+  if (PRO) return;
+  S.mode = 'normal'; S.lightOn = false; S.focus.on = false; S.focus.detail = false;
+  S.light = 'match'; S.bg = 'keep';
+}
+let advT;
+// the one "Advanced mode needed" popup every locked control uses
+function needAdv(what) {
+  const a = hooks.authInfo?.() || {};
+  $('advMsg').textContent = (what ? what + ' is part of Advanced mode. ' : '')
+    + (a.signedIn ? `Your account (${a.email}) is waiting for approval from framesbyismail.` : 'Sign in with Google or GitHub, then ask framesbyismail to approve Advanced mode.');
+  $('advSign').hidden = !!a.signedIn;
+  $('advPop').classList.add('show');
+  clearTimeout(advT); advT = setTimeout(hideAdv, 6000);
+}
+function hideAdv() { $('advPop').classList.remove('show'); }
+$('advClose').addEventListener('click', hideAdv);
+$('advSign').addEventListener('click', () => { hideAdv(); hooks.signIn?.(); });
+function setPro(v) {
+  v = !GATED || !!v;
+  try { localStorage.setItem('vp-pro', v ? '1' : '0'); } catch (e) {}
+  if (v === PRO) return;
+  PRO = v;
+  if (!PRO && S.app === 'video') { hooks.leaveVideo?.(); S.app = 'image'; }
+  enforce(); applyLayout(); changed();
+}
+document.body.classList.toggle('gated', GATED);
 function detailShot(ratio) {
   if (ratio < .7) return {name:'Macro detail', text:'extreme macro: the detail overflows the frame, showing micro texture'};
   if (ratio < 1.5) return {name:'Detail insert', text:'insert shot: the detail fills the whole frame'};
@@ -319,6 +353,7 @@ function setDof(on) {
 const DD = new Map();
 let ddOpen = null;
 const CHEV = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="m2 4 4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>';
+const LOCK = '<svg class="lk" viewBox="0 0 12 12" aria-hidden="true"><rect x="2.5" y="5.5" width="7" height="5" rx="1" fill="currentColor"/><path d="M4 5.5V4a2 2 0 0 1 4 0v1.5" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>';
 const CHECK = '<svg class="ck" viewBox="0 0 12 12" aria-hidden="true"><path d="m2 6.5 2.5 2.5L10 3.5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>';
 function enhance(sel) {
   if (DD.has(sel)) return;
@@ -349,10 +384,11 @@ function openDD(sel) {
   const pop = document.createElement('div'); pop.className = 'dd-pop'; pop.setAttribute('role', 'listbox');
   const items = [];
   const addOpt = o => {
-    const it = document.createElement('div');
-    it.className = 'dd-opt' + (o.classList.contains('c') ? ' c' : ''); it.setAttribute('role', 'option');
+    const it = document.createElement('div'), locked = !PRO && o.hasAttribute('data-adv');
+    it.className = 'dd-opt' + (o.classList.contains('c') ? ' c' : '') + (locked ? ' locked' : ''); it.setAttribute('role', 'option');
     it.setAttribute('aria-selected', o.selected ? 'true' : 'false'); it.dataset.v = o.value;
-    it.innerHTML = `<span>${esc(o.textContent)}</span>${CHECK}`;
+    if (locked) it.setAttribute('aria-disabled', 'true');
+    it.innerHTML = `<span>${esc(o.textContent)}</span>${locked ? LOCK : CHECK}`;
     it.addEventListener('click', () => pick(o.value));
     it.addEventListener('mousemove', () => setAct(items.indexOf(it)));
     pop.appendChild(it); items.push(it);
@@ -375,6 +411,7 @@ function openDD(sel) {
   function setAct(i) { items.forEach(x => x.classList.remove('act')); act = clamp(i, 0, items.length - 1); items[act]?.classList.add('act'); }
   function pick(v) {
     closeDD();
+    if (!PRO && [...sel.options].find(o => o.value === v)?.hasAttribute('data-adv')) { needAdv(`"${[...sel.options].find(o => o.value === v).textContent.replace('…', '')}"`); d.btn.focus(); return; }
     if (sel.value !== v) { sel.value = v; sel.dispatchEvent(new Event('change', {bubbles:true})); }
     refreshDD(sel); d.btn.focus();
   }
@@ -455,6 +492,7 @@ const hardName = h => h < 25 ? 'Very soft' : h < 45 ? 'Soft' : h < 65 ? 'Medium'
 function syncUI() {
   const k = calc(), body = getBody(), lens = getLens();
   document.body.classList.toggle('adv', S.mode === 'adv');
+  document.body.classList.toggle('pro', PRO);
   document.body.classList.toggle('video', S.app === 'video');
   $('modeNormal').setAttribute('aria-pressed', S.mode !== 'adv'); $('modeAdv').setAttribute('aria-pressed', S.mode === 'adv');
   $('appImage').setAttribute('aria-pressed', S.app !== 'video'); $('appVideo').setAttribute('aria-pressed', S.app === 'video');
@@ -576,6 +614,7 @@ document.addEventListener('keydown', e => {
 });
 let rafId = 0, lastObj = null, quiet = false;
 function changed() {
+  enforce();
   if (!quiet) { hooks.onChange?.(); queueSnapshot(); }
   save();
   if (!rafId) rafId = requestAnimationFrame(() => { rafId = 0; syncUI(); drawAll(); hooks.render?.(); });
@@ -1244,9 +1283,9 @@ $('themeBtn').addEventListener('click', () => {
   drawAll(); hooks.themeChanged?.();
 });
 $('modeNormal').onclick = () => { S.mode = 'normal'; changed(); };
-$('modeAdv').onclick = () => { S.mode = 'adv'; changed(); };
+$('modeAdv').onclick = () => { if (!PRO) return needAdv('Advanced controls'); S.mode = 'adv'; changed(); };
 $('appImage').onclick = () => { if (S.app === 'image') return; hooks.leaveVideo?.(); S.app = 'image'; applyLayout(); changed(); };
-$('appVideo').onclick = () => { if (S.app === 'video') return; hooks.enterVideo ? hooks.enterVideo() : toast('Video mode could not load'); };
+$('appVideo').onclick = () => { if (!PRO) return needAdv('Video mode'); if (S.app === 'video') return; hooks.enterVideo ? hooks.enterVideo() : toast('Video mode could not load'); };
 on('rot', 'input', v => setAz(+v));
 on('tilt', 'input', v => setEl(+v));
 on('shot', 'input', v => setDist(distForShot(NSH - +v)));
@@ -1291,7 +1330,7 @@ document.addEventListener('paste', e => {
   if (files.length) addFiles(files);
 });
 // focus point (main panel and the small one beside the video viewer share the same state)
-$('focusOn').addEventListener('click', () => { S.focus.on = !S.focus.on; changed(); });
+$('focusOn').addEventListener('click', () => { if (!PRO) return needAdv('Focus point'); S.focus.on = !S.focus.on; changed(); });
 $('vfOn').addEventListener('click', () => { S.focus.on = !S.focus.on; changed(); });
 $('focusTabs').addEventListener('click', e => { const b = e.target.closest('[data-fimg]'); if (!b) return; S.focus.img = +b.dataset.fimg; changed(); });
 $('focusPic').addEventListener('load', placeMark);
@@ -1300,6 +1339,7 @@ on('vfTarget', 'change', v => { S.focus.target = v; if (v) S.focus.on = true; })
 on('focusNote', 'input', v => { S.focus.note = v; });
 on('vfNote', 'input', v => { S.focus.note = v; });
 $('detailOn').addEventListener('click', () => {
+  if (!PRO) return needAdv('Focus point');
   S.focus.detail = !S.focus.detail;
   if (S.focus.detail) { S.focus.on = true; zoomToDetail(); }
   changed();
@@ -1308,7 +1348,7 @@ on('detailCm', 'change', v => { if (+v > 0) S.focus.detailCm = clamp(+v, .5, 200
 function zoomToDetail() { const k = calc(); setDist(1.15 * (S.focus.detailCm / 100) * S.focal / k.sH); }
 $('detailZoom').addEventListener('click', () => { zoomToDetail(); changed(); toast('Camera zoomed to the detail'); });
 // lighting
-$('lightOn').addEventListener('click', () => { S.lightOn = !S.lightOn; changed(); });
+$('lightOn').addEventListener('click', () => { if (!PRO) return needAdv('Lighting'); S.lightOn = !S.lightOn; changed(); });
 $('lightCat').addEventListener('click', e => {
   const b = e.target.closest('[data-cat]'); if (!b) return;
   S.lightCat = b.dataset.cat; pickSetup(LIGHTS[S.lightCat][0].id); changed();
@@ -1390,7 +1430,7 @@ function common() {
   const subjRef = noun;
   const action = desc ? `Scene and action (main instruction, follow it exactly): ${desc.replace(/\s*\n\s*/g, '; ')}.` : '';
   const aspectStr = S.aspect === 'custom' ? (S.aspectCustom.trim() || '4:5') : S.aspect;
-  const customNotes = S.customKeys.filter(c => S.keys.includes(c.id)).map(c => c.text);
+  const customNotes = PRO ? S.customKeys.filter(c => S.keys.includes(c.id)).map(c => c.text) : [];
   const keyTexts = KEYS.filter(x => S.keys.includes(x.id) && (!x.video || S.app === 'video') && (!x.when || x.when.includes(S.subjType) || (mixed && x.id !== 'logo')))
     .map(x => group && x.group ? x.group : x.text).concat(customNotes);
   const subs = allSubjects();
@@ -1653,12 +1693,14 @@ function renderDock() {
     const zone = gi => { const z = document.createElement('div'); z.className = 'dropzone'; z.dataset.col = col; z.dataset.gi = gi; return z; };
     box.appendChild(zone(0));
     d[col].forEach((g, gi) => {
+      if (!PRO && LOCKED_PANELS.includes(g.active)) { const free = g.tabs.find(t => !LOCKED_PANELS.includes(t)); if (free) g.active = free; else g.collapsed = true; }
       const el = document.createElement('div'); el.className = 'tgroup' + (g.collapsed ? ' collapsed' : ''); el.dataset.col = col; el.dataset.gi = gi;
       const bar = document.createElement('div'); bar.className = 'tabbar'; bar.setAttribute('role', 'tablist');
       g.tabs.forEach(id => {
         const t = document.createElement('button'); t.type = 'button'; t.className = 'tab'; t.draggable = true; t.dataset.pid = id;
         t.setAttribute('role', 'tab'); t.setAttribute('aria-selected', id === g.active ? 'true' : 'false');
         t.textContent = panelName(id);
+        if (!PRO && LOCKED_PANELS.includes(id)) { t.classList.add('locked'); t.draggable = false; t.insertAdjacentHTML('beforeend', LOCK); t.title = 'Advanced mode needed'; }
         t.title = id === g.active ? 'Click to minimize or open · drag onto another panel to join it, or between panels to move it' : 'Click to show · drag to move';
         bar.appendChild(t);
       });
@@ -1690,6 +1732,7 @@ function afterLayout() { requestAnimationFrame(() => { drawAll(); placeMark(); h
 // tabs: click to switch or minimize, drag to dock beside (onto a panel) or below (between panels)
 document.addEventListener('click', e => {
   const t = e.target.closest('.tab'); if (!t) return;
+  if (!PRO && LOCKED_PANELS.includes(t.dataset.pid)) { needAdv(panelName(t.dataset.pid)); return; }
   const grp = t.closest('.tgroup'), g = dockOf()[grp.dataset.col]?.[+grp.dataset.gi]; if (!g) return;
   if (g.active === t.dataset.pid) g.collapsed = !g.collapsed; else { g.active = t.dataset.pid; g.collapsed = false; }
   renderDock(); afterLayout(); changed();
@@ -1755,7 +1798,8 @@ readTokens();
 buildStatic();
 document.querySelectorAll('select').forEach(enhance);
 renderRefs();
-if (S.app === 'video' && !S.video.ready) S.app = 'image';
+if (S.app === 'video' && (!S.video.ready || !PRO)) S.app = 'image';
+enforce();
 showEmpty();
 const ro = new ResizeObserver(() => { drawAll(); placeMark(); });
 ['globe', 'top', 'side', 'lightDial', 'focusPic'].forEach(id => ro.observe($(id)));
@@ -1770,6 +1814,7 @@ window.AC = {S, DEF, refs, $, rad, deg, clamp, norm360, signed, rnd, cap, joinLi
   calc, getBody, getLens, setAz, setEl, setDist, setFocal, distForShot, allSubjects, currentThumb, sampleImg, onLights,
   changed, applyQuiet, syncUI, drawAll, readTokens, fit, drawCam, drawArrow, drawThumb, toast, enhance, refreshDD,
   common, angleParts, azInfo, elInfo, lensCharFor, lightPhrase, rigText, cameraJSON, lightingJSON, getSetup, kelvinRGB, apStr, hardName,
-  applyLayout, resetPrompt, save, views, DMIN, DMAX, showPanel, rigTarget, setIfIdle, undo, redo};
+  applyLayout, resetPrompt, save, views, DMIN, DMAX, showPanel, rigTarget, setIfIdle, undo, redo,
+  isPro:() => PRO, setPro, needAdv, GATED};
 document.dispatchEvent(new Event('ac-ready'));
 })();
