@@ -53,7 +53,7 @@ button,input,select,textarea{font:inherit;color:inherit}
 .brand .tagline{display:flex;flex-direction:column;gap:3px;padding-left:14px;border-left:1px solid var(--line);min-width:0}
 .brand .tagline span{font-size:12.5px;font-weight:500;letter-spacing:.01em;color:var(--fg-2);line-height:1.2}
 .brand .tagline small{font-size:10.5px;font-weight:500;letter-spacing:.02em;color:var(--muted);line-height:1.2}
-.brand .tagline b{color:var(--accent);font-weight:700}
+.brand .tagline b{font-weight:700}
 .fbi{color:var(--accent);text-decoration:none;display:inline-flex;align-items:center;gap:3px}
 .fbi:hover b,.fbi:focus-visible b{text-decoration:underline;text-underline-offset:2px}
 .fbi .cur{width:11px;height:11px;flex:none}
@@ -424,7 +424,7 @@ input.fr{width:78px;flex:none;height:28px;text-align:center;font-family:var(--f-
 /* access: Advanced mode needs sign-in + the owner's approval */
 body.gated:not(.pro) .pro-only{display:none!important}
 body.gated:not(.pro) #keys .tog.extra.y{display:none!important}
-.dd-opt.locked{opacity:.5}
+.dd-opt.locked{color:var(--muted)}
 .tab.locked{cursor:pointer}
 .lk{width:10px;height:10px;flex:none;margin-left:6px;vertical-align:-1px}
 .dd-opt.locked{cursor:not-allowed}
@@ -437,7 +437,7 @@ body.gated:not(.pro) #keys .tog.extra.y{display:none!important}
 .advpop b .lk{margin:0;color:var(--accent);width:12px;height:12px}
 .advpop p{margin:4px 0 12px;color:var(--fg-2);font-size:12.5px;line-height:1.45}
 .advpop .by{display:block;font-size:11px;font-weight:500;letter-spacing:.02em;color:var(--muted);margin-bottom:8px}
-.advpop .by b{color:var(--accent);font-weight:700;display:inline}
+.advpop .by b{font-weight:700;display:inline}
 .advpop .x{position:absolute;top:8px;right:8px;width:28px;height:28px;padding:0;border:0;font-size:18px;line-height:1;color:var(--muted)}
 .advpop .x:hover{color:var(--fg)}
 .advpop .acts{flex-wrap:wrap}
@@ -465,8 +465,21 @@ body.gated .authm{display:block}
 #authBtn{display:flex;align-items:center;gap:7px;max-width:180px}
 #authBtn img{width:18px;height:18px;border-radius:50%;flex:none}
 #authBtn span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#authBtn.pro{border-style:solid;border-color:var(--green);color:var(--green)}
-body.gated:not(.pro) .seg.app{display:none}
+#authBtn.pro{border-style:solid;font-weight:700}
+/* Normal mode: everything that needs Advanced mode is grey (still clickable: it opens the request panel) */
+body.gated:not(.pro) .tab.locked,body.gated:not(.pro) .tab.locked[aria-selected="true"]{background:var(--panel);color:var(--muted);border-color:var(--line)}
+body.gated:not(.pro) #appVideo,body.gated:not(.pro) #modeAdv{color:var(--muted);border-color:var(--line);background:transparent}
+body.gated:not(.pro) #focusOn,body.gated:not(.pro) #detailOn,body.gated:not(.pro) #lightOn{filter:grayscale(1)}
+/* shimmer: a lighter tint of the colour runs from right to left */
+@keyframes vp-shine{from{background-position:0% 0}to{background-position:100% 0}}
+.fbi b{background:linear-gradient(100deg,var(--accent) 0 38%,#ffc4a3 50%,var(--accent) 62% 100%);background-size:260% 100%;
+  -webkit-background-clip:text;background-clip:text;color:transparent;animation:vp-shine 2.8s linear infinite}
+.fbi .cur{background:linear-gradient(100deg,var(--accent) 0 38%,#ffc4a3 50%,var(--accent) 62% 100%);background-size:260% 100%;
+  -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M6 5.2v9l2.3-2.2 1.7 3.6 1.6-.7-1.7-3.5 3.2-.3z'/%3E%3Cpath d='M3.6 3.6 2.2 2.2M6.2 2.6V.9M2.6 6.2H.9' stroke='black' stroke-width='1.3' stroke-linecap='round'/%3E%3C/svg%3E") center/contain no-repeat;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M6 5.2v9l2.3-2.2 1.7 3.6 1.6-.7-1.7-3.5 3.2-.3z'/%3E%3Cpath d='M3.6 3.6 2.2 2.2M6.2 2.6V.9M2.6 6.2H.9' stroke='black' stroke-width='1.3' stroke-linecap='round'/%3E%3C/svg%3E") center/contain no-repeat;animation:vp-shine 2.8s linear infinite;animation-delay:-.35s}
+.fbi .cur *{fill:transparent;stroke:transparent}
+#authBtn.pro,.authm .who .st.on{background:linear-gradient(100deg,var(--green) 0 38%,#b7f0c4 50%,var(--green) 62% 100%);background-size:260% 100%;
+  color:var(--green-ink);border:1px solid var(--green);box-shadow:0 2px 0 rgba(0,0,0,.35);animation:vp-shine 2.8s linear infinite}
+@media (prefers-reduced-motion:reduce){.fbi b,.fbi .cur,#authBtn.pro,.authm .who .st.on{animation:none}}
 /* key prompts: raised orange buttons that press down when selected */
 #keys .tog{background:var(--accent);color:var(--accent-ink);border:1px solid var(--accent);font-weight:600;
   box-shadow:0 3px 0 color-mix(in srgb,var(--accent),#000 35%),0 5px 10px var(--shadow);transform:translateY(-2px);transition:transform .12s ease,box-shadow .12s ease,background .12s ease}
