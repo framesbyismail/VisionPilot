@@ -263,19 +263,16 @@ function enforce() {
   S.mode = 'normal'; S.lightOn = false; S.focus.on = false; S.focus.detail = false;
   S.light = 'match'; S.bg = 'keep';
 }
-let advT;
-// the one "Advanced mode needed" popup every locked control uses
+// the one "Advanced mode needed" panel every locked control uses; auth.js fills in the sign-in / request buttons
 function needAdv(what) {
-  const a = hooks.authInfo?.() || {};
   $('advMsg').textContent = (what ? what + ' is part of Advanced mode. ' : '')
-    + (a.signedIn ? `Your account (${a.email}) is waiting for approval from framesbyismail.` : 'Sign in with Google or GitHub, then ask framesbyismail to approve Advanced mode.');
-  $('advSign').hidden = !!a.signedIn;
+    + 'Advanced mode opens Video, Lighting, Camera & lens, Focus point, Extra notes and every background and lighting preset. Send a request and framesbyismail will give you access.';
+  hooks.advRender?.();
   $('advPop').classList.add('show');
-  clearTimeout(advT); advT = setTimeout(hideAdv, 6000);
 }
 function hideAdv() { $('advPop').classList.remove('show'); }
 $('advClose').addEventListener('click', hideAdv);
-$('advSign').addEventListener('click', () => { hideAdv(); hooks.signIn?.(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') hideAdv(); });
 function setPro(v) {
   v = !GATED || !!v;
   try { localStorage.setItem('vp-pro', v ? '1' : '0'); } catch (e) {}
@@ -1283,7 +1280,7 @@ $('themeBtn').addEventListener('click', () => {
   drawAll(); hooks.themeChanged?.();
 });
 $('modeNormal').onclick = () => { S.mode = 'normal'; changed(); };
-$('modeAdv').onclick = () => { if (!PRO) return needAdv('Advanced controls'); S.mode = 'adv'; changed(); };
+$('modeAdv').onclick = () => { if (!PRO) return needAdv(); S.mode = 'adv'; changed(); };
 $('appImage').onclick = () => { if (S.app === 'image') return; hooks.leaveVideo?.(); S.app = 'image'; applyLayout(); changed(); };
 $('appVideo').onclick = () => { if (!PRO) return needAdv('Video mode'); if (S.app === 'video') return; hooks.enterVideo ? hooks.enterVideo() : toast('Video mode could not load'); };
 on('rot', 'input', v => setAz(+v));
@@ -1700,7 +1697,7 @@ function renderDock() {
         const t = document.createElement('button'); t.type = 'button'; t.className = 'tab'; t.draggable = true; t.dataset.pid = id;
         t.setAttribute('role', 'tab'); t.setAttribute('aria-selected', id === g.active ? 'true' : 'false');
         t.textContent = panelName(id);
-        if (!PRO && LOCKED_PANELS.includes(id)) { t.classList.add('locked'); t.draggable = false; t.insertAdjacentHTML('beforeend', LOCK); t.title = 'Advanced mode needed'; }
+        if (!PRO && LOCKED_PANELS.includes(id)) { t.classList.add('locked'); t.draggable = false; t.title = 'Advanced mode needed'; }
         t.title = id === g.active ? 'Click to minimize or open · drag onto another panel to join it, or between panels to move it' : 'Click to show · drag to move';
         bar.appendChild(t);
       });
@@ -1815,6 +1812,6 @@ window.AC = {S, DEF, refs, $, rad, deg, clamp, norm360, signed, rnd, cap, joinLi
   changed, applyQuiet, syncUI, drawAll, readTokens, fit, drawCam, drawArrow, drawThumb, toast, enhance, refreshDD,
   common, angleParts, azInfo, elInfo, lensCharFor, lightPhrase, rigText, cameraJSON, lightingJSON, getSetup, kelvinRGB, apStr, hardName,
   applyLayout, resetPrompt, save, views, DMIN, DMAX, showPanel, rigTarget, setIfIdle, undo, redo,
-  isPro:() => PRO, setPro, needAdv, GATED};
+  isPro:() => PRO, setPro, needAdv, hideAdv, GATED};
 document.dispatchEvent(new Event('ac-ready'));
 })();
