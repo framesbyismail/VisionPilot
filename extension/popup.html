@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>VisionPilot AI Bridge</title>
+<style>
+  body {
+    margin: 0;
+    padding: 14px;
+    width: 310px;
+    background: #141414;
+    color: #e8e4df;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 12.5px;
+  }
+  .head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #2a2a2a;
+  }
+  .brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-weight: 700;
+    font-size: 13.5px;
+    color: #e85d2b;
+  }
+  .brand-logo {
+    width: 20px;
+    height: 20px;
+    display: block;
+    flex: none;
+  }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: rgba(63, 185, 80, 0.14);
+    border: 1px solid #3fb950;
+    color: #3fb950;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .pill i {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #3fb950;
+  }
+  .hint {
+    margin: 9px 0 6px;
+    color: #b5b0a8;
+    font-size: 11.5px;
+    line-height: 1.4;
+  }
+  .models {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .m-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    border-radius: 7px;
+    background: #1d1d1d;
+    border: 1px solid #2b2b2b;
+    color: #e8e4df;
+    cursor: pointer;
+    text-align: left;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .m-row:hover {
+    border-color: #3fb950;
+    background: #232824;
+  }
+  .m-row.active {
+    border-color: #3fb950;
+    background: rgba(63, 185, 80, 0.14);
+  }
+  .m-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    font-size: 12.5px;
+  }
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex: none;
+  }
+  .m-right {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .m-tag {
+    font-size: 10.5px;
+    color: #9e9a93;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: #262626;
+  }
+  .m-tag.ok {
+    color: #3fb950;
+    background: rgba(63, 185, 80, 0.14);
+    border: 1px solid rgba(63, 185, 80, 0.35);
+  }
+  .login-link {
+    font-size: 10.5px;
+    color: #e85d2b;
+    background: rgba(232, 93, 43, 0.12);
+    border: 1px solid rgba(232, 93, 43, 0.4);
+    border-radius: 4px;
+    padding: 2px 6px;
+    cursor: pointer;
+    text-decoration: none;
+  }
+  .login-link:hover {
+    background: #e85d2b;
+    color: #fff;
+  }
+  .status-msg {
+    margin-top: 9px;
+    padding: 7px 9px;
+    border-radius: 6px;
+    background: #1a241c;
+    border: 1px solid rgba(63, 185, 80, 0.35);
+    color: #b7f0c4;
+    font-size: 11.5px;
+    line-height: 1.35;
+  }
+</style>
+</head>
+<body>
+  <div class="head">
+    <span class="brand"><img class="brand-logo" src="visionpilot-icon-dark.svg" alt="VisionPilot">VisionPilot AI Bridge</span>
+    <span class="pill"><i></i>Connected</span>
+  </div>
+  <p class="hint">Click any AI below to activate it in VisionPilot. If a provider shows <b>Login</b>, click it to sign in to your free or paid account:</p>
+  <div class="models" id="modelList">
+    <div class="m-row" data-model="visionpilot">
+      <span class="m-left"><span class="dot" style="background:#e85d2b"></span>VisionPilot AI</span>
+      <span class="m-right"><span class="m-tag ok" id="st-visionpilot">Built-in Ready</span></span>
+    </div>
+    <div class="m-row" data-model="claude">
+      <span class="m-left"><span class="dot" style="background:#d97757"></span>Claude</span>
+      <span class="m-right">
+        <span class="m-tag" id="st-claude">Checking…</span>
+        <span class="login-link" data-login="claude" title="Open claude.ai to sign in">Login</span>
+      </span>
+    </div>
+    <div class="m-row" data-model="gpt">
+      <span class="m-left"><span class="dot" style="background:#10a37f"></span>GPT (ChatGPT)</span>
+      <span class="m-right">
+        <span class="m-tag" id="st-gpt">Checking…</span>
+        <span class="login-link" data-login="gpt" title="Open chatgpt.com to sign in">Login</span>
+      </span>
+    </div>
+    <div class="m-row" data-model="gemini">
+      <span class="m-left"><span class="dot" style="background:#4285f4"></span>Google Gemini</span>
+      <span class="m-right">
+        <span class="m-tag" id="st-gemini">Checking…</span>
+        <span class="login-link" data-login="gemini" title="Open gemini.google.com to sign in">Login</span>
+      </span>
+    </div>
+  </div>
+  <div class="status-msg" id="statusMsg">Extension active — select an AI model above or from the VisionPilot top bar.</div>
+  <script src="popup.js"></script>
+</body>
+</html>
