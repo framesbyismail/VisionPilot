@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "VisionPilot AI Bridge (Claude · GPT · Gemini)",
+  "short_name": "VisionPilot AI",
+  "version": "1.0.0",
+  "description": "Connects your Claude, ChatGPT (GPT), and Google Gemini web accounts (Free & Paid) directly to VisionPilot for AI detection, Focus Marker part analysis, and prompt workflow generation.",
+  "permissions": [
+    "storage",
+    "tabs",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://claude.ai/*",
+    "https://chatgpt.com/*",
+    "https://chat.openai.com/*",
+    "https://gemini.google.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*",
+    "https://*.github.io/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "action": {
+    "default_title": "VisionPilot AI Bridge",
+    "default_popup": "popup.html"
+  }
+}
