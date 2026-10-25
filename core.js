@@ -1520,6 +1520,7 @@ function addFiles(list) {
   const arr = [...(list || [])].filter(Boolean);
   const files = arr.filter(f => f.type && f.type.startsWith('image/'));
   if (!files.length) { toast('Choose image files (JPG, PNG or WebP)'); return; }
+  batchFolderState = null;
   // New image upload allows AI auto-description to populate #subjDesc (Part 7), without auto-pinning
   S.descUserEdited = false;
   S.focus.desc = '';
@@ -5426,22 +5427,68 @@ async function runRealEsrganImageUpscale(sourceImgOrCanvas, scaleFactor, onProgr
   };
 }
 
+function fitUpscaleDropMedia(dropEl, mediaEl, nw, nh) {
+  if (!dropEl || !mediaEl) return;
+  const w = nw || mediaEl.naturalWidth || mediaEl.width || 0;
+  const h = nh || mediaEl.naturalHeight || mediaEl.height || 0;
+  if (!w || !h) {
+    if (mediaEl.hasAttribute('data-fit')) mediaEl.removeAttribute('data-fit');
+    return;
+  }
+  const bw = dropEl.clientWidth || 290;
+  const bh = dropEl.clientHeight || 112;
+  const wantFit = (w / h) >= (bw / bh) - 1e-4 ? 'width' : 'height';
+  if (mediaEl.dataset.fit !== wantFit) mediaEl.dataset.fit = wantFit;
+}
+window.fitUpscaleDropMedia = fitUpscaleDropMedia;
+
+let batchFolderState = null; // { folderName, files: File[], dirHandle, localFolderPath }
+let lastCompletedBatch = null; // { folderName, outFolderName, scaleFactor, outDirHandle, savedFolderPath, items }
+
+function isSupportedBatchImageFile(fileOrName) {
+  const name = typeof fileOrName === 'string' ? fileOrName : (fileOrName?.name || '');
+  const type = typeof fileOrName === 'object' && fileOrName ? (fileOrName.type || '') : '';
+  if (type && type.startsWith('image/')) return true;
+  return /\.(png|jpe?g|webp|bmp|gif|avif)$/i.test(name);
+}
+
 function syncImageUpscalerUI() {
+  const drop = $('imgUpscaleDrop');
   const thumb = $('imgUpscaleThumb');
+  const folderPrev = $('imgUpscaleFolderPreview');
+  const folderNameEl = $('imgUpscaleFolderName');
   const empty = $('imgUpscaleEmpty');
   const meta = $('imgUpscaleMeta');
+  const batchBtn = $('imgBatchUpscaleBtn');
   if (!thumb || !empty) return;
 
   syncScaleButtonsLockState();
+
+  if (batchFolderState && batchFolderState.folderName) {
+    thumb.hidden = true;
+    empty.hidden = true;
+    if (meta) meta.hidden = true;
+    if (folderPrev) folderPrev.hidden = false;
+    if (folderNameEl) {
+      folderNameEl.textContent = batchFolderState.folderName;
+      folderNameEl.title = `${batchFolderState.folderName} (${batchFolderState.files?.length || 0} images)`;
+    }
+    batchBtn?.classList.add('has-folder');
+    return;
+  }
+
+  if (folderPrev) folderPrev.hidden = true;
+  batchBtn?.classList.remove('has-folder');
 
   const ref = refs[S.focus?.img] || refs[0];
   if (ref && ref.src) {
     if (thumb.getAttribute('src') !== ref.src) thumb.src = ref.src;
     thumb.hidden = false;
     empty.hidden = true;
+    const w = ref.img?.naturalWidth || 0;
+    const h = ref.img?.naturalHeight || 0;
+    fitUpscaleDropMedia(drop, thumb, w, h);
     if (meta) {
-      const w = ref.img?.naturalWidth || 0;
-      const h = ref.img?.naturalHeight || 0;
       meta.textContent = w && h ? `${w}×${h} px` : ref.name || 'Reference Image';
       meta.hidden = false;
     }
@@ -5452,6 +5499,9 @@ function syncImageUpscalerUI() {
   }
 }
 window.syncImageUpscalerUI = syncImageUpscalerUI;
+$('imgUpscaleThumb')?.addEventListener('load', () => {
+  fitUpscaleDropMedia($('imgUpscaleDrop'), $('imgUpscaleThumb'));
+});
 
 // Wire Image Upscaler box dropzone & file input (stays connected with Reference box)
 $('imgUpscaleDrop')?.addEventListener('click', () => {
@@ -5460,6 +5510,7 @@ $('imgUpscaleDrop')?.addEventListener('click', () => {
 });
 $('imgUpscaleFile')?.addEventListener('change', (e) => {
   if (e.target.files && e.target.files.length) {
+    batchFolderState = null;
     addFiles(e.target.files);
     if (refs.length) {
       S.focus.img = refs.length - 1;
@@ -5483,6 +5534,7 @@ $('imgUpscaleFile')?.addEventListener('change', (e) => {
     e.stopPropagation();
     $('imgUpscaleDrop').classList.remove('over');
     if (ev === 'drop' && e.dataTransfer?.files?.length) {
+      batchFolderState = null;
       addFiles(e.dataTransfer.files);
       if (refs.length) {
         S.focus.img = refs.length - 1;
@@ -5492,8 +5544,378 @@ $('imgUpscaleFile')?.addEventListener('change', (e) => {
   });
 });
 
+// Wire "Batch Upscaling" button & folder selection
+async function selectBatchFolderFromDirectoryHandle(dirHandle) {
+  if (!dirHandle) return;
+  const imgFiles = [];
+  for await (const [entryName, entryHandle] of dirHandle.entries()) {
+    if (entryHandle.kind === 'file' && isSupportedBatchImageFile(entryName)) {
+      try {
+        const f = await entryHandle.getFile();
+        imgFiles.push(f);
+      } catch (_) {}
+    }
+  }
+  imgFiles.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+  batchFolderState = {
+    folderName: dirHandle.name || 'Selected_Folder',
+    files: imgFiles,
+    dirHandle,
+    localFolderPath: ''
+  };
+  const errBox = $('imgUpscaleError');
+  if (errBox) { errBox.hidden = true; errBox.textContent = ''; }
+  syncImageUpscalerUI();
+  toast(`Selected folder "${batchFolderState.folderName}" (${imgFiles.length} image${imgFiles.length === 1 ? '' : 's'})`);
+}
+
+function selectBatchFolderFromFileList(fileList, explicitFolderName = '', localFolderPath = '') {
+  const allFiles = Array.from(fileList || []);
+  let folderName = explicitFolderName || '';
+  if (!folderName && allFiles.length) {
+    const rel = allFiles[0].webkitRelativePath || '';
+    if (rel && /[\\/]/.test(rel)) {
+      folderName = rel.split(/[\\/]/)[0];
+    }
+  }
+  if (!folderName) folderName = 'Selected_Folder';
+
+  // Keep images inside the selected folder
+  const imgFiles = allFiles.filter(f => isSupportedBatchImageFile(f));
+  imgFiles.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+
+  batchFolderState = {
+    folderName,
+    files: imgFiles,
+    dirHandle: null,
+    localFolderPath: localFolderPath || ''
+  };
+  const errBox = $('imgUpscaleError');
+  if (errBox) { errBox.hidden = true; errBox.textContent = ''; }
+  syncImageUpscalerUI();
+  toast(`Selected folder "${folderName}" (${imgFiles.length} image${imgFiles.length === 1 ? '' : 's'})`);
+}
+window.selectBatchFolderFromFileList = selectBatchFolderFromFileList;
+
+$('imgBatchUpscaleBtn')?.addEventListener('click', async () => {
+  if (imgUpscaleRunning) return;
+  const errBox = $('imgUpscaleError');
+  if (errBox) { errBox.hidden = true; errBox.textContent = ''; }
+
+  if (typeof window.showDirectoryPicker === 'function' && !window.__VP_USE_INPUT_FOLDER_PICKER) {
+    try {
+      const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+      await selectBatchFolderFromDirectoryHandle(dirHandle);
+      return;
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;
+    }
+  }
+  const folderInput = $('imgBatchFolderInput');
+  if (folderInput) {
+    folderInput.value = '';
+    folderInput.click();
+  }
+});
+
+$('imgBatchFolderInput')?.addEventListener('change', (e) => {
+  const files = e.target.files;
+  if (!files || !files.length) return;
+  const explicitName = e.target.dataset?.folderName || '';
+  const localPath = e.target.dataset?.localFolderPath || '';
+  selectBatchFolderFromFileList(files, explicitName, localPath);
+});
+
+function loadFileAsImageElement(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      try { URL.revokeObjectURL(url); } catch (_) {}
+      resolve(img);
+    };
+    img.onerror = () => {
+      try { URL.revokeObjectURL(url); } catch (_) {}
+      reject(new Error(`Could not decode image: ${file?.name || 'image'}`));
+    };
+    img.src = url;
+  });
+}
+
+async function dataUrlToBlob(dataUrl) {
+  const res = await fetch(dataUrl);
+  return await res.blob();
+}
+
+function openBatchUpscaleDoneModal(batchInfo) {
+  const modal = $('batchUpscaleDoneModal');
+  if (!modal) return;
+  const msgEl = $('batchUpscaleDoneMsg');
+  const pillEl = $('batchUpscaleDonePill');
+  const tagEl = $('batchUpscaleDoneFolderTag');
+  const viewBox = $('batchUpscaleDoneFolderView');
+  const pathEl = $('batchUpscaleDoneFolderPath');
+  const countEl = $('batchUpscaleDoneFolderCount');
+  const gridEl = $('batchUpscaleDoneGrid');
+
+  if (msgEl) {
+    msgEl.textContent = 'Batch Upscale Completed. The files have been saved to your device.';
+  }
+  const items = batchInfo?.items || [];
+  if (pillEl) {
+    pillEl.textContent = `${batchInfo?.scaleFactor || 2}x · ${items.length} file${items.length === 1 ? '' : 's'}`;
+  }
+  if (tagEl) {
+    tagEl.textContent = `📁 ${batchInfo?.outFolderName || ''}`;
+  }
+  if (pathEl) {
+    pathEl.textContent = batchInfo?.savedFolderPath || batchInfo?.outFolderName || '';
+  }
+  if (countEl) {
+    countEl.textContent = `${items.length} saved`;
+  }
+  if (gridEl) {
+    gridEl.innerHTML = items.map((it, idx) => `
+      <a class="batch-done-item" href="${escAttr(it.dataUrl)}" download="${escAttr(it.name)}" data-batch-idx="${idx}" title="${escAttr(it.name + ' (' + it.width + '×' + it.height + ')')}">
+        <img src="${escAttr(it.dataUrl)}" alt="${escAttr(it.name)}">
+        <span>${esc(it.name)}</span>
+      </a>
+    `).join('');
+  }
+  if (viewBox) {
+    viewBox.hidden = true;
+  }
+  modal.hidden = false;
+}
+
+function closeBatchUpscaleDoneModal() {
+  const modal = $('batchUpscaleDoneModal');
+  if (modal) modal.hidden = true;
+}
+
+$('batchUpscaleOkBtn')?.addEventListener('click', closeBatchUpscaleDoneModal);
+$('batchUpscaleDoneCloseX')?.addEventListener('click', closeBatchUpscaleDoneModal);
+$('batchUpscaleDoneModal')?.addEventListener('click', (e) => {
+  if (e.target === $('batchUpscaleDoneModal')) closeBatchUpscaleDoneModal();
+});
+
+$('batchUpscaleOpenFileBtn')?.addEventListener('click', async () => {
+  const viewBox = $('batchUpscaleDoneFolderView');
+  if (viewBox) viewBox.hidden = false;
+
+  if (!lastCompletedBatch) return;
+
+  // 1. Try local server helper endpoint to open the created folder directly in OS Explorer if available
+  let openedNativeFolder = false;
+  try {
+    const resp = await fetch('/__vp_open_folder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        folderPath: lastCompletedBatch.savedFolderPath || '',
+        outFolderName: lastCompletedBatch.outFolderName || ''
+      })
+    });
+    if (resp && resp.ok) {
+      const data = await resp.json().catch(() => null);
+      if (data && data.ok) openedNativeFolder = true;
+    }
+  } catch (_) {}
+
+  // 2. If File System Access API directory handle is present, open native file explorer inside the newly created folder
+  if (!openedNativeFolder && lastCompletedBatch.outDirHandle && typeof window.showOpenFilePicker === 'function') {
+    try {
+      await window.showOpenFilePicker({
+        startIn: lastCompletedBatch.outDirHandle,
+        multiple: true
+      });
+      openedNativeFolder = true;
+    } catch (_) {}
+  }
+
+  toast(`Opened folder: ${lastCompletedBatch.outFolderName}`);
+});
+
+async function runBatchFolderUpscale(scaleFactor) {
+  if (imgUpscaleRunning || !batchFolderState) return;
+  if (scaleFactor === 4 && S.mode !== 'adv' && !PRO) {
+    toast('4x Upscale requires Advanced mode or subscription.');
+    return;
+  }
+
+  const errBox = $('imgUpscaleError');
+  const loadBox = $('imgUpscaleLoading');
+  const loadLbl = $('imgUpscaleLoadingLbl');
+  const progBar = $('imgUpscaleProgBar');
+  const card = $('pImgUpscale');
+
+  if (errBox) { errBox.hidden = true; errBox.textContent = ''; }
+
+  const files = batchFolderState.files || [];
+  if (!files.length) {
+    const msg = 'No image files found in the selected folder.';
+    if (errBox) { errBox.textContent = msg; errBox.hidden = false; }
+    toast(msg);
+    return;
+  }
+
+  const folderName = batchFolderState.folderName || 'Selected_Folder';
+  const outFolderName = `${folderName}_UpScaled_${scaleFactor}x`;
+
+  imgUpscaleRunning = true;
+  imgUpscaleAbort = false;
+  card?.classList.add('upscale-busy');
+  setImageGenBoxesLocked(true);
+
+  if (loadBox) loadBox.hidden = false;
+  if (loadLbl) loadLbl.textContent = `Batch ${scaleFactor}x (0/${files.length})… 0%`;
+  if (progBar) progBar.style.width = '0%';
+
+  let outDirHandle = null;
+  if (batchFolderState.dirHandle) {
+    try {
+      if (typeof batchFolderState.dirHandle.requestPermission === 'function') {
+        await batchFolderState.dirHandle.requestPermission({ mode: 'readwrite' });
+      }
+      outDirHandle = await batchFolderState.dirHandle.getDirectoryHandle(outFolderName, { create: true });
+    } catch (e) {
+      console.warn('Could not create output folder handle via File System Access API:', e);
+    }
+  }
+
+  const savedItems = [];
+  let savedFolderPath = '';
+  const usedNames = new Set();
+
+  try {
+    for (let i = 0; i < files.length; i++) {
+      if (imgUpscaleAbort) {
+        const cancelErr = new Error('Batch upscale cancelled');
+        cancelErr.cancelled = true;
+        throw cancelErr;
+      }
+
+      const fileObj = files[i];
+      const imgEl = await loadFileAsImageElement(fileObj);
+
+      const res = await runRealEsrganImageUpscale(
+        imgEl,
+        scaleFactor,
+        (tilePct) => {
+          const overallPct = Math.round(((i + (tilePct / 100)) / files.length) * 100);
+          if (loadLbl) loadLbl.textContent = `Batch ${scaleFactor}x (${i + 1}/${files.length}): ${fileObj.name}… ${overallPct}%`;
+          if (progBar) progBar.style.width = `${overallPct}%`;
+        },
+        () => imgUpscaleAbort
+      );
+
+      if (!res || !res.dataUrl) {
+        throw new Error(`Upscaler returned an empty result for ${fileObj.name}.`);
+      }
+
+      const baseStem = (fileObj.name || `image_${i + 1}`).replace(/\.[^.]+$/, '');
+      let outFileName = `${baseStem}.png`;
+      let dup = 2;
+      while (usedNames.has(outFileName.toLowerCase())) {
+        outFileName = `${baseStem}_${dup++}.png`;
+      }
+      usedNames.add(outFileName.toLowerCase());
+
+      let wroteToDisk = false;
+
+      // Save via File System Access API into [Original_Folder_Name]_UpScaled_2x / 4x
+      if (outDirHandle) {
+        try {
+          const blob = await dataUrlToBlob(res.dataUrl);
+          const fh = await outDirHandle.getFileHandle(outFileName, { create: true });
+          const writable = await fh.createWritable();
+          await writable.write(blob);
+          await writable.close();
+          wroteToDisk = true;
+        } catch (wErr) {
+          console.warn('Failed writing file to directory handle:', wErr);
+        }
+      }
+
+      // Save via local companion endpoint if running on local server / desktop test
+      try {
+        const srvResp = await fetch('/__vp_batch_save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            folderName,
+            outFolderName,
+            localFolderPath: batchFolderState.localFolderPath || '',
+            fileName: outFileName,
+            dataUrl: res.dataUrl
+          })
+        });
+        if (srvResp && srvResp.ok) {
+          const srvJson = await srvResp.json().catch(() => null);
+          if (srvJson && srvJson.ok) {
+            wroteToDisk = true;
+            if (srvJson.savedFolderPath) savedFolderPath = srvJson.savedFolderPath;
+          }
+        }
+      } catch (_) {}
+
+      // Fallback browser download if neither FileSystemAccess API nor local companion wrote it
+      if (!wroteToDisk) {
+        const a = document.createElement('a');
+        a.href = res.dataUrl;
+        a.download = `${outFolderName}_${outFileName}`;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => a.remove(), 250);
+      }
+
+      savedItems.push({
+        name: outFileName,
+        origName: fileObj.name,
+        dataUrl: res.dataUrl,
+        width: res.width,
+        height: res.height
+      });
+    }
+
+    lastCompletedBatch = {
+      folderName,
+      outFolderName,
+      scaleFactor,
+      outDirHandle,
+      savedFolderPath: savedFolderPath || outFolderName,
+      items: savedItems
+    };
+    window.__lastCompletedBatch = lastCompletedBatch;
+
+    openBatchUpscaleDoneModal(lastCompletedBatch);
+    toast(`Batch Upscale (${scaleFactor}x) completed: ${savedItems.length} files saved to ${outFolderName}`);
+  } catch (err) {
+    if (!err?.cancelled) {
+      const msg = err?.message || String(err);
+      if (errBox) {
+        errBox.textContent = msg;
+        errBox.hidden = false;
+      }
+      toast(msg);
+    } else {
+      toast('Batch upscale cancelled');
+    }
+  } finally {
+    imgUpscaleRunning = false;
+    imgUpscaleAbort = false;
+    card?.classList.remove('upscale-busy');
+    if (loadBox) loadBox.hidden = true;
+    setImageGenBoxesLocked(false);
+    syncImageUpscalerUI();
+  }
+}
+
 async function startImageBoxUpscale(scaleFactor) {
   if (imgUpscaleRunning) return;
+  if (batchFolderState && batchFolderState.folderName) {
+    return await runBatchFolderUpscale(scaleFactor);
+  }
   if (scaleFactor === 4 && S.mode !== 'adv' && !PRO) {
     toast('4x Upscale requires Advanced mode or subscription.');
     return;
@@ -6161,8 +6583,19 @@ renderRefs();
 if (S.app === 'video' && !PRO) S.app = 'image';
 enforce();
 showEmpty();
-const ro = new ResizeObserver(() => { drawAll(); placeMark(); });
-['globe', 'top', 'side', 'lightDial', 'focusImg', 'focusPic'].forEach(id => ro.observe($(id)));
+const ro = new ResizeObserver(() => {
+  drawAll();
+  placeMark();
+  if ($('imgUpscaleDrop') && $('imgUpscaleThumb') && !$('imgUpscaleThumb').hidden) {
+    fitUpscaleDropMedia($('imgUpscaleDrop'), $('imgUpscaleThumb'));
+  }
+  if ($('vidUpscaleDrop') && $('vidUpscaleThumbImg') && !$('vidUpscaleThumbImg').hidden) {
+    fitUpscaleDropMedia($('vidUpscaleDrop'), $('vidUpscaleThumbImg'));
+  }
+});
+['globe', 'top', 'side', 'lightDial', 'focusImg', 'focusPic', 'imgUpscaleDrop', 'vidUpscaleDrop'].forEach(id => {
+  if ($(id)) ro.observe($(id));
+});
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { drawAll(); hooks.themeChanged?.(); });
 applyLayout();
 syncUI();

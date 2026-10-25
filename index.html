@@ -521,8 +521,15 @@
   <!-- PART 3: IN-BROWSER IMAGE UPSCALER (IMAGE MODE ONLY) -->
   <div class="card ionly" id="pImgUpscale" data-name="Upscale"><button class="tag tag-upscale" type="button">Upscale</button>
     <div class="cbody upscaler-cbody" id="imgUpscaleBody">
-      <div class="upscale-dropzone" id="imgUpscaleDrop" title="Click or drop an image to upscale">
+      <div class="upscale-dropzone img-upscale-dropzone" id="imgUpscaleDrop" title="Click or drop an image to upscale">
         <img id="imgUpscaleThumb" alt="Image to upscale" hidden>
+        <div class="upscale-folder-preview" id="imgUpscaleFolderPreview" hidden>
+          <svg class="upscale-folder-icon" viewBox="0 0 64 52" fill="none" aria-hidden="true">
+            <path d="M4 10C4 6.68629 6.68629 4 10 4H24.3431C25.9344 4 27.4606 4.63214 28.5858 5.75736L32.8284 10H54C57.3137 10 60 12.6863 60 16V42C60 45.3137 57.3137 48 54 48H10C6.68629 48 4 45.3137 4 42V10Z" fill="#787c85" stroke="#9a9ea8" stroke-width="2"/>
+            <path d="M4 18C4 15.7909 5.79086 14 8 14H56C58.2091 14 60 15.7909 60 18V42C60 45.3137 57.3137 48 54 48H10C6.68629 48 4 45.3137 4 42V18Z" fill="#9a9ea8"/>
+          </svg>
+          <span class="upscale-folder-name" id="imgUpscaleFolderName"></span>
+        </div>
         <div class="upscale-drop-empty" id="imgUpscaleEmpty">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 16V4m0 0-4 4m4-4 4 4M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
           <span>Drop image here or click to browse</span>
@@ -531,9 +538,14 @@
         <div class="upscale-meta-pill" id="imgUpscaleMeta" hidden></div>
       </div>
       <input type="file" id="imgUpscaleFile" accept="image/*" hidden>
+      <input type="file" id="imgBatchFolderInput" webkitdirectory directory multiple hidden>
 
-      <div class="field">
+      <div class="field upscale-controls-field">
         <span class="lbl">Upscale Scale</span>
+        <button type="button" class="btn batch-upscale-btn" id="imgBatchUpscaleBtn">
+          <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M2 4.75A1.75 1.75 0 0 1 3.75 3h4.086c.464 0 .909.184 1.237.513l1.414 1.414a.25.25 0 0 0 .177.073h5.586A1.75 1.75 0 0 1 18 6.75v8.5A1.75 1.75 0 0 1 16.25 17H3.75A1.75 1.75 0 0 1 2 15.25V4.75z"/></svg>
+          <span>Batch Upscaling</span>
+        </button>
         <div class="upscale-scale-row" id="imgUpscaleBtnRow">
           <button type="button" class="btn upscale-btn-2x" id="imgUpscale2xBtn">2x</button>
           <button type="button" class="btn upscale-btn-4x" id="imgUpscale4xBtn">4x</button>
@@ -559,7 +571,8 @@
   <!-- PART 5: NEW VIDEO UPSCALER (VIDEO AND 3D MODE ONLY) -->
   <div class="card vonly" id="pVidUpscale" data-name="Upscale"><button class="tag tag-upscale" type="button">Upscale</button>
     <div class="cbody upscaler-cbody" id="vidUpscaleBody">
-      <div class="upscale-dropzone" id="vidUpscaleDrop" title="Click or drop a video to upscale">
+      <div class="upscale-dropzone vid-upscale-dropzone" id="vidUpscaleDrop" title="Click or drop a video to upscale">
+        <img id="vidUpscaleThumbImg" alt="Video frame preview" draggable="false" hidden>
         <canvas id="vidUpscaleThumb" hidden></canvas>
         <div class="upscale-drop-empty" id="vidUpscaleEmpty">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="5" width="14" height="14" rx="2"/><path d="m17 10 4-2v8l-4-2z"/></svg>
@@ -697,6 +710,42 @@
           <button type="button" class="btn genwin-up-2x" id="genWinUpscale2xBtn">2x Upscale and Download</button>
           <button type="button" class="btn genwin-up-4x" id="genWinUpscale4xBtn">4x Upscale and Download</button>
         </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Batch Upscale Completion Popup Window -->
+<div class="modal" id="batchUpscaleDoneModal" role="dialog" aria-modal="true" aria-labelledby="batchUpscaleDoneTitle" hidden>
+  <div class="card modal-card batch-done-card" id="batchUpscaleDoneCard">
+    <div class="genimg-result-head">
+      <div class="genimg-result-title-wrap">
+        <span class="tag genimg-tag is-upscale" id="batchUpscaleDoneTitle">Batch Upscale</span>
+        <span class="genimg-model-pill" id="batchUpscaleDonePill"></span>
+      </div>
+      <button type="button" class="genimg-close-x" id="batchUpscaleDoneCloseX" aria-label="Close">×</button>
+    </div>
+    <div class="cbody batch-done-body">
+      <div class="batch-done-lead-box">
+        <svg class="batch-done-folder-svg" viewBox="0 0 64 52" fill="none" aria-hidden="true">
+          <path d="M4 10C4 6.68629 6.68629 4 10 4H24.3431C25.9344 4 27.4606 4.63214 28.5858 5.75736L32.8284 10H54C57.3137 10 60 12.6863 60 16V42C60 45.3137 57.3137 48 54 48H10C6.68629 48 4 45.3137 4 42V10Z" fill="#787c85" stroke="#9a9ea8" stroke-width="2"/>
+          <path d="M4 18C4 15.7909 5.79086 14 8 14H56C58.2091 14 60 15.7909 60 18V42C60 45.3137 57.3137 48 54 48H10C6.68629 48 4 45.3137 4 42V18Z" fill="#9a9ea8"/>
+        </svg>
+        <div class="batch-done-text-col">
+          <p class="batch-done-msg" id="batchUpscaleDoneMsg">Batch Upscale Completed. The files have been saved to your device.</p>
+          <span class="batch-done-folder-tag" id="batchUpscaleDoneFolderTag"></span>
+        </div>
+      </div>
+      <div class="batch-done-folder-view" id="batchUpscaleDoneFolderView" hidden>
+        <div class="batch-done-folder-head">
+          <span class="batch-done-folder-path" id="batchUpscaleDoneFolderPath"></span>
+          <span class="batch-done-folder-count" id="batchUpscaleDoneFolderCount"></span>
+        </div>
+        <div class="batch-done-grid" id="batchUpscaleDoneGrid"></div>
+      </div>
+      <div class="batch-done-actions">
+        <button type="button" class="btn primary batch-open-file-btn" id="batchUpscaleOpenFileBtn">Open File</button>
+        <button type="button" class="btn ghost batch-ok-btn" id="batchUpscaleOkBtn">Ok</button>
       </div>
     </div>
   </div>

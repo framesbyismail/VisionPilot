@@ -5394,6 +5394,7 @@ let vidUpQualityMode = 'balanced';
 
 function syncVideoUpscalerUI() {
   const drop = $('vidUpscaleDrop');
+  const thumbImg = $('vidUpscaleThumbImg');
   const thumbCvs = $('vidUpscaleThumb');
   const empty = $('vidUpscaleEmpty');
   const metaEl = $('vidUpscaleMeta');
@@ -5418,6 +5419,7 @@ function syncVideoUpscalerUI() {
 
   if (!vidUpInput) {
     if (empty) empty.hidden = false;
+    if (thumbImg) thumbImg.hidden = true;
     if (thumbCvs) thumbCvs.hidden = true;
     if (metaEl) metaEl.hidden = true;
     if (limitWarnEl) limitWarnEl.hidden = true;
@@ -5432,7 +5434,18 @@ function syncVideoUpscalerUI() {
   }
 
   if (empty) empty.hidden = true;
-  if (thumbCvs) thumbCvs.hidden = false;
+  if (thumbImg && vidUpInput.thumbDataUrl) {
+    if (thumbImg.getAttribute('src') !== vidUpInput.thumbDataUrl) {
+      thumbImg.src = vidUpInput.thumbDataUrl;
+    }
+    thumbImg.hidden = false;
+    if (thumbCvs) thumbCvs.hidden = true;
+    window.fitUpscaleDropMedia?.(drop, thumbImg, vidUpInput.width, vidUpInput.height);
+  } else if (thumbCvs) {
+    if (thumbImg) thumbImg.hidden = true;
+    thumbCvs.hidden = false;
+    window.fitUpscaleDropMedia?.(drop, thumbCvs, vidUpInput.width, vidUpInput.height);
+  }
   if (metaEl) {
     metaEl.textContent = `${vidUpInput.width}×${vidUpInput.height} · ${vidUpInput.duration.toFixed(1)}s`;
     metaEl.hidden = false;
@@ -5483,6 +5496,32 @@ function syncVideoUpscalerUI() {
 }
 hooks.syncVideoUpscalerUI = syncVideoUpscalerUI;
 window.syncVideoUpscalerUI = syncVideoUpscalerUI;
+$('vidUpscaleThumbImg')?.addEventListener('load', () => {
+  if (vidUpInput) {
+    window.fitUpscaleDropMedia?.($('vidUpscaleDrop'), $('vidUpscaleThumbImg'), vidUpInput.width, vidUpInput.height);
+  }
+});
+
+function isCanvasFrameNonBlack(ctx, w, h) {
+  try {
+    const sw = Math.min(64, Math.max(8, w));
+    const sh = Math.min(64, Math.max(8, h));
+    const data = ctx.getImageData(0, 0, sw, sh).data;
+    let nonZeroAlpha = 0;
+    let maxLuma = 0;
+    for (let i = 0; i < data.length; i += 16) {
+      const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
+      if (a > 16) {
+        nonZeroAlpha++;
+        const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+        if (luma > maxLuma) maxLuma = luma;
+      }
+    }
+    return nonZeroAlpha > 4 && maxLuma > 10;
+  } catch (_) {
+    return true;
+  }
+}
 
 async function handleVideoUpscaleFile(file) {
   if (!file || vidUpRunning) return;
@@ -5497,7 +5536,7 @@ async function handleVideoUpscaleFile(file) {
   }
   const url = URL.createObjectURL(file);
   const probeVid = document.createElement('video');
-  probeVid.preload = 'metadata';
+  probeVid.preload = 'auto';
   probeVid.muted = true;
   probeVid.playsInline = true;
 
@@ -5528,18 +5567,54 @@ async function handleVideoUpscaleFile(file) {
         try { probeVid.currentTime = 1e6; } catch (_) { res(); }
       });
       duration = (isFinite(probeVid.duration) && probeVid.duration > 0 && probeVid.duration < 1e5) ? probeVid.duration : 2.0;
+    }
+
+    const thumbCvs = $('vidUpscaleThumb') || document.createElement('canvas');
+    thumbCvs.width = width;
+    thumbCvs.height = height;
+    const tCtx = thumbCvs.getContext('2d');
+
+    const safeDur = Math.max(0.2, duration || 1.0);
+    const candidateTimes = [
+      Math.min(0.6, safeDur * 0.15),
+      Math.min(1.8, safeDur * 0.35),
+      Math.min(3.2, safeDur * 0.6),
+      0.05,
+      0
+    ];
+
+    let gotGoodFrame = false;
+    for (const tCand of candidateTimes) {
       try {
-        probeVid.currentTime = 0;
-        await new Promise(r => { probeVid.addEventListener('seeked', r, { once: true }); setTimeout(r, 200); });
+        await new Promise((res) => {
+          const onSeek = () => { probeVid.removeEventListener('seeked', onSeek); res(); };
+          probeVid.addEventListener('seeked', onSeek, { once: true });
+          setTimeout(res, 350);
+          probeVid.currentTime = clamp(tCand, 0, Math.max(0, safeDur - 0.02));
+        });
+        await new Promise(r => requestAnimationFrame(() => setTimeout(r, 25)));
+        tCtx.drawImage(probeVid, 0, 0, width, height);
+        if (isCanvasFrameNonBlack(tCtx, width, height)) {
+          gotGoodFrame = true;
+          break;
+        }
       } catch (_) {}
     }
-    const thumbCvs = $('vidUpscaleThumb');
-    if (thumbCvs) {
-      thumbCvs.width = width;
-      thumbCvs.height = height;
-      const tCtx = thumbCvs.getContext('2d');
-      tCtx.drawImage(probeVid, 0, 0, width, height);
+
+    if (!gotGoodFrame) {
+      try {
+        await probeVid.play();
+        await new Promise(r => setTimeout(r, 80));
+        probeVid.pause();
+        tCtx.drawImage(probeVid, 0, 0, width, height);
+      } catch (_) {}
     }
+
+    let thumbDataUrl = '';
+    try {
+      thumbDataUrl = thumbCvs.toDataURL('image/jpeg', 0.92);
+    } catch (_) {}
+
     vidUpInput = {
       file,
       name: file.name || 'video.mp4',
@@ -5547,7 +5622,8 @@ async function handleVideoUpscaleFile(file) {
       width,
       height,
       duration,
-      fps: 24
+      fps: 24,
+      thumbDataUrl
     };
     syncVideoUpscalerUI();
   } catch (err) {

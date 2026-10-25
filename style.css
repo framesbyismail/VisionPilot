@@ -1363,11 +1363,11 @@ body:not(.adv):not(.pro) #vidUpscale4kBtn{
   overflow-y:auto;
   display:flex;
   flex-direction:column;
-  gap:11px;
+  gap:9px;
 }
 .upscale-dropzone{
   position:relative;
-  min-height:132px;
+  min-height:112px;
   flex:1 1 auto;
   border:1.5px dashed var(--line);
   border-radius:9px;
@@ -1379,20 +1379,121 @@ body:not(.adv):not(.pro) #vidUpscale4kBtn{
   cursor:pointer;
   transition:border-color .18s,background .18s;
 }
+.img-upscale-dropzone{
+  height:112px;
+  min-height:112px;
+  max-height:112px;
+  flex:0 0 112px;
+}
+.vid-upscale-dropzone{
+  height:164px;
+  min-height:152px;
+  max-height:172px;
+  flex:1 1 164px;
+}
 .upscale-dropzone:hover,
 .upscale-dropzone.over{
   border-color:var(--green);
   background:var(--green-glow);
 }
-.upscale-dropzone img,
-.upscale-dropzone canvas{
-  max-width:100%;
-  max-height:165px;
+.upscale-dropzone > img,
+.upscale-dropzone > canvas{
+  display:block;
   width:auto;
   height:auto;
+  max-width:100%;
+  max-height:100%;
+  flex:0 0 auto;
   object-fit:contain;
+  border-radius:4px;
+}
+.upscale-dropzone > img[data-fit="width"],
+.upscale-dropzone > canvas[data-fit="width"]{
+  width:100%;
+  height:auto;
+  max-width:100%;
+  max-height:100%;
+}
+.upscale-dropzone > img[data-fit="height"],
+.upscale-dropzone > canvas[data-fit="height"]{
+  height:100%;
+  width:auto;
+  max-height:100%;
+  max-width:100%;
+}
+.upscale-folder-preview{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:6px;
+  padding:8px 12px;
+  width:100%;
+  height:100%;
+  box-sizing:border-box;
+  text-align:center;
+}
+.upscale-folder-preview[hidden]{
+  display:none!important;
+}
+.upscale-folder-icon{
+  width:44px;
+  height:36px;
+  flex:none;
   display:block;
-  border-radius:6px;
+  filter:drop-shadow(0 2px 6px rgba(0,0,0,.32));
+}
+.upscale-folder-name{
+  font-family:var(--f-mono);
+  font-size:11.5px;
+  font-weight:700;
+  color:var(--fg);
+  max-width:92%;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  line-height:1.25;
+}
+.upscale-controls-field{
+  display:flex;
+  flex-direction:column;
+  gap:7px;
+}
+.batch-upscale-btn{
+  width:100%;
+  height:35px;
+  min-height:35px;
+  padding:0 12px;
+  font-family:var(--f-mono);
+  font-size:12px;
+  font-weight:700;
+  letter-spacing:.02em;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:7px;
+  background:var(--panel-2);
+  border:1px solid var(--green);
+  color:var(--green);
+  border-radius:7px;
+  cursor:pointer;
+  transition:background .16s,color .16s,border-color .16s,box-shadow .16s;
+}
+.batch-upscale-btn svg{
+  width:15px;
+  height:15px;
+  flex:none;
+}
+.batch-upscale-btn:hover:not(:disabled),
+.batch-upscale-btn.has-folder{
+  background:var(--green-glow);
+  border-color:var(--green);
+  color:#fff;
+  box-shadow:0 0 10px var(--green-glow);
+}
+:root[data-mode="day"] .batch-upscale-btn:hover:not(:disabled),
+:root[data-mode="day"] .batch-upscale-btn.has-folder{
+  color:var(--green);
 }
 .upscale-drop-empty{
   display:flex;
@@ -1579,6 +1680,7 @@ body:not(.adv):not(.pro) #vidUpscale4kBtn{
   font-size:11px;
   line-height:1.4;
 }
+#pImgUpscale.upscale-busy #imgBatchUpscaleBtn,
 #pImgUpscale.upscale-busy #imgUpscaleBtnRow,
 #pImgUpscale.upscale-busy #imgUpscaleDrop,
 #pVidUpscale.upscale-busy #vidUpscaleBtnRow,
@@ -1586,6 +1688,158 @@ body:not(.adv):not(.pro) #vidUpscale4kBtn{
 #pVidUpscale.upscale-busy #vidUpscaleDrop{
   pointer-events:none!important;
   opacity:.5!important;
+}
+#batchUpscaleDoneModal{
+  z-index:2260;
+}
+.batch-done-card{
+  width:min(460px,94vw)!important;
+  max-height:88vh;
+  display:flex;
+  flex-direction:column;
+}
+.batch-done-body{
+  padding:14px 16px 18px!important;
+  display:flex;
+  flex-direction:column;
+  gap:14px;
+  overflow-y:auto;
+}
+.batch-done-lead-box{
+  display:flex;
+  align-items:center;
+  gap:13px;
+  padding:12px 14px;
+  border-radius:9px;
+  border:1px solid var(--line);
+  background:var(--panel-2);
+}
+.batch-done-folder-svg{
+  width:42px;
+  height:34px;
+  flex:none;
+  display:block;
+}
+.batch-done-text-col{
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+  min-width:0;
+}
+.batch-done-msg{
+  margin:0;
+  font-size:13.5px;
+  font-weight:600;
+  color:var(--fg);
+  line-height:1.42;
+}
+.batch-done-folder-tag{
+  font-family:var(--f-mono);
+  font-size:11px;
+  color:var(--green);
+  font-weight:700;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.batch-done-folder-view{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  padding:10px;
+  border-radius:9px;
+  border:1px solid var(--green);
+  background:var(--bg-2);
+  max-height:240px;
+  overflow-y:auto;
+}
+.batch-done-folder-view[hidden]{
+  display:none!important;
+}
+.batch-done-folder-head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+  padding-bottom:6px;
+  border-bottom:1px solid var(--line);
+  font-family:var(--f-mono);
+  font-size:10.5px;
+}
+.batch-done-folder-path{
+  color:var(--fg);
+  font-weight:700;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.batch-done-folder-count{
+  color:var(--green);
+  font-weight:700;
+  flex:none;
+}
+.batch-done-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(92px,1fr));
+  gap:8px;
+}
+.batch-done-item{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:4px;
+  padding:6px;
+  border-radius:7px;
+  border:1px solid var(--line);
+  background:var(--panel);
+  text-decoration:none;
+  color:var(--fg);
+  cursor:pointer;
+  transition:border-color .15s,transform .12s;
+}
+.batch-done-item:hover{
+  border-color:var(--green);
+  transform:translateY(-1px);
+}
+.batch-done-item img{
+  width:100%;
+  height:62px;
+  object-fit:contain;
+  border-radius:4px;
+  background:var(--bg-2);
+  display:block;
+}
+.batch-done-item span{
+  font-family:var(--f-mono);
+  font-size:9.5px;
+  color:var(--fg-2);
+  width:100%;
+  text-align:center;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.batch-done-actions{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:8px;
+  width:100%;
+}
+.batch-done-actions > .btn{
+  width:100%;
+  height:38px;
+  min-height:38px;
+  justify-content:center;
+  font-size:12.5px;
+  font-weight:700;
+}
+.batch-open-file-btn{
+  background:var(--green)!important;
+  border-color:var(--green)!important;
+  color:#fff!important;
+}
+.batch-open-file-btn:hover{
+  filter:brightness(1.08);
 }
 
 /* PART 6: Three-dot Menu at far right of top menu bar & Slide-Over History Library Drawer */
