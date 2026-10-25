@@ -1111,12 +1111,14 @@ let busyDetect = false, detectFailMsg = '';
 async function runQueue() {
   if (busyDetect) return;
   busyDetect = true;
+  if (typeof syncFocusLockState === 'function') syncFocusLockState();
   while (queue.length) {
     const ref = queue.shift();
     if (!refs.includes(ref)) continue;
     await detectRef(ref);
   }
   busyDetect = false;
+  if (typeof syncFocusLockState === 'function') syncFocusLockState();
 }
 function mapDetSubjects(det) {
   const counts = {};
@@ -1173,6 +1175,7 @@ function renderLiveAIStatus() {
 function setDescLoading(loading, customMsg = '') {
   aiBusyMsg = loading ? (customMsg || 'Analyzing image details…') : '';
   renderLiveAIStatus();
+  if (typeof syncFocusLockState === 'function') syncFocusLockState();
 }
 async function detectRef(ref, opts = {}) {
   if (!ref || ref.cancelled || !refs.includes(ref)) return;
@@ -1182,16 +1185,18 @@ async function detectRef(ref, opts = {}) {
 
   // When Single Mode is ON and no external AI model needs to run, built-in image detection stays OFF
   if (!shouldRunBuiltInDetection) {
+    ref.status = 'busy';
+    if (typeof syncFocusLockState === 'function') syncFocusLockState();
     try {
       await ref.ready;
     } catch (e) {}
     if (ref.cancelled || !refs.includes(ref)) {
       if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
+      if (typeof syncFocusLockState === 'function') syncFocusLockState();
       return;
     }
     ref.det = null;
     ref.subjects = [];
-    ref.status = 'ok';
 
     if (activeModel !== 'visionpilot' && !opts.skipRefStep && window.VPAIBridge?.runReferenceImageStep) {
       ref.status = 'busy';
@@ -1201,6 +1206,7 @@ async function detectRef(ref, opts = {}) {
         const replyText = await window.VPAIBridge.runReferenceImageStep(ref, activeModel);
         if (ref.cancelled || !refs.includes(ref)) {
           if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
+          if (typeof syncFocusLockState === 'function') syncFocusLockState();
           return;
         }
         ref.status = 'ok';
@@ -1213,6 +1219,7 @@ async function detectRef(ref, opts = {}) {
       } catch (aiErr) {
         if (aiErr?.cancelled || ref.cancelled || !refs.includes(ref)) {
           if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
+          if (typeof syncFocusLockState === 'function') syncFocusLockState();
           return;
         }
         ref.status = 'ok';
@@ -1220,9 +1227,12 @@ async function detectRef(ref, opts = {}) {
         lastAIError = errMsg;
         toast(`${info.name} Error: ${errMsg}`);
       }
+    } else {
+      ref.status = 'ok';
     }
     setDescLoading(false);
     focusKey = ''; renderRefs(); hooks.refsChanged?.(); changed();
+    if (typeof syncFocusLockState === 'function') syncFocusLockState();
     return;
   }
 
@@ -1237,6 +1247,7 @@ async function detectRef(ref, opts = {}) {
     await ref.ready;
     if (ref.cancelled || !refs.includes(ref)) {
       if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
+      if (typeof syncFocusLockState === 'function') syncFocusLockState();
       return;
     }
 
@@ -1259,12 +1270,12 @@ async function detectRef(ref, opts = {}) {
     window.VPDetectLoaded = true;
     if (ref.cancelled || !refs.includes(ref)) {
       if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
+      if (typeof syncFocusLockState === 'function') syncFocusLockState();
       return;
     }
     ref.det = det;
     ref.subjects = mapDetSubjects(det);
     ref.view = VIEW_TEXT[det.view] ? det.view : 'front';
-    ref.status = 'ok';
     syncHiddenSubjectTextboxes(currentImgSubjects());
 
     // 2. STEP ONE: When an external AI model (Claude / GPT / Gemini) is selected, immediately upload the reference image
@@ -1277,6 +1288,7 @@ async function detectRef(ref, opts = {}) {
         const replyText = await window.VPAIBridge.runReferenceImageStep(ref, activeModel);
         if (ref.cancelled || !refs.includes(ref)) {
           if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
+          if (typeof syncFocusLockState === 'function') syncFocusLockState();
           return;
         }
         ref.status = 'ok';
@@ -1289,6 +1301,7 @@ async function detectRef(ref, opts = {}) {
       } catch (aiErr) {
         if (aiErr?.cancelled || ref.cancelled || !refs.includes(ref)) {
           if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
+          if (typeof syncFocusLockState === 'function') syncFocusLockState();
           return;
         }
         ref.status = 'ok';
@@ -1296,10 +1309,13 @@ async function detectRef(ref, opts = {}) {
         lastAIError = errMsg;
         toast(`${info.name} Error: ${errMsg}`);
       }
+    } else {
+      ref.status = 'ok';
     }
   } catch (e) {
     if (ref.cancelled || !refs.includes(ref)) {
       if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
+      if (typeof syncFocusLockState === 'function') syncFocusLockState();
       return;
     }
     console.warn('Local detection failed', e);
@@ -1310,17 +1326,23 @@ async function detectRef(ref, opts = {}) {
   }
   if (ref.cancelled || !refs.includes(ref)) {
     if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
+    if (typeof syncFocusLockState === 'function') syncFocusLockState();
     return;
   }
-  setDescLoading(false);
+
+  const willRunFollowupMulti = activeModel !== 'visionpilot' && !opts.skipFollowup && !ref.cancelled && refs.includes(ref) && S.focus.on && S.focus.mode === 'multi' && refs[S.focus.img] === ref;
+  if (!willRunFollowupMulti) {
+    setDescLoading(false);
+  }
   if (ref.status === 'ok') applySummary(!!opts.forceDesc);
   else if (!S.descUserEdited && refs.every(x => x.status === 'fail')) { S.subjDesc = ''; setIfIdle($('subjDesc'), ''); }
   focusKey = ''; renderRefs(); hooks.refsChanged?.(); changed();
 
   // If external AI is active and Multiple Mode is already selected for this image, run Step 3 automatically
-  if (activeModel !== 'visionpilot' && !opts.skipFollowup && !ref.cancelled && refs.includes(ref) && S.focus.on && S.focus.mode === 'multi' && refs[S.focus.img] === ref) {
+  if (willRunFollowupMulti) {
     await runMultiModeAIStep(ref);
   }
+  if (typeof syncFocusLockState === 'function') syncFocusLockState();
 }
 async function detectRefAI(ref, opts = {}) {
   if (ref.cancelled || !refs.includes(ref)) return;
@@ -1372,6 +1394,7 @@ function renderRefs() {
   add.addEventListener('drop', e => addFiles(e.dataTransfer.files));
   renderRefBg(true);
   focusKey = ''; syncFocus();
+  if (typeof syncFocusLockState === 'function') syncFocusLockState();
 }
 // does a PNG/WebP actually use transparency? (sampled)
 function hasAlpha(img) {
@@ -4982,6 +5005,34 @@ $('genImgModelClose')?.addEventListener('click', () => {
 let imgGenBusy = false;
 let focusDetailLoading = false;
 
+function isFocusSectionLocked() {
+  return Boolean(
+    imgGenBusy ||
+    focusDetailLoading ||
+    busyDetect ||
+    aiBusyMsg ||
+    refs.some(r => r && !r.cancelled && (r.status === 'busy' || r.status === 'wait'))
+  );
+}
+
+function syncFocusLockState() {
+  const pFocus = $('pFocus');
+  if (!pFocus) return;
+  const locked = isFocusSectionLocked();
+  pFocus.classList.toggle('gen-locked', locked);
+  try { pFocus.inert = locked; } catch (e) {}
+  if (locked) {
+    pFocus.setAttribute('aria-disabled', 'true');
+    pFocus.setAttribute('aria-busy', 'true');
+  } else {
+    pFocus.removeAttribute('aria-disabled');
+    pFocus.removeAttribute('aria-busy');
+  }
+  const tg = pFocus.closest('.tgroup');
+  if (tg) tg.classList.toggle('gen-locked-group', locked && tg.contains(pFocus));
+}
+window.syncFocusLockState = syncFocusLockState;
+
 function setFocusDetailLoading(loading) {
   focusDetailLoading = !!loading;
   const pFocus = $('pFocus');
@@ -4999,6 +5050,7 @@ function setFocusDetailLoading(loading) {
       }
     }
   }
+  syncFocusLockState();
   renderLiveAIStatus();
 }
 window.setFocusDetailLoading = setFocusDetailLoading;
@@ -5006,31 +5058,37 @@ window.setFocusDetailLoading = setFocusDetailLoading;
 function setImageGenBoxesLocked(locked) {
   imgGenBusy = !!locked;
   document.body.classList.toggle('img-gen-busy', imgGenBusy);
-  ['pRef', 'pFocus'].forEach((id) => {
-    const el = $(id);
-    if (!el) return;
-    el.classList.toggle('gen-locked', imgGenBusy);
-    try { el.inert = imgGenBusy; } catch (e) {}
+  const pRef = $('pRef');
+  if (pRef) {
+    pRef.classList.toggle('gen-locked', imgGenBusy);
+    try { pRef.inert = imgGenBusy; } catch (e) {}
     if (imgGenBusy) {
-      el.setAttribute('aria-disabled', 'true');
-      el.setAttribute('aria-busy', 'true');
+      pRef.setAttribute('aria-disabled', 'true');
+      pRef.setAttribute('aria-busy', 'true');
     } else {
-      el.removeAttribute('aria-disabled');
-      el.removeAttribute('aria-busy');
+      pRef.removeAttribute('aria-disabled');
+      pRef.removeAttribute('aria-busy');
     }
-    const tg = el.closest('.tgroup');
-    if (tg) tg.classList.toggle('gen-locked-group', imgGenBusy && tg.contains(el));
-  });
+    const tg = pRef.closest('.tgroup');
+    if (tg) tg.classList.toggle('gen-locked-group', imgGenBusy && tg.contains(pRef));
+  }
+  syncFocusLockState();
 }
 window.setImageGenBoxesLocked = setImageGenBoxesLocked;
 
-// Block any interaction inside Reference (#pRef) or Image Detection & Focus (#pFocus) while an image is generating or upscaling,
-// or inside #pFocus > .cbody > .dim while Focus point detail is loading
+// Block any interaction inside Reference (#pRef) while generating/upscaling an image,
+// or inside Image Detection & Focus (#pFocus) while an image is generating, upscaling, or being processed by AI
 ['pointerdown', 'mousedown', 'click', 'dblclick', 'input', 'change', 'keydown', 'dragstart', 'drop'].forEach((evType) => {
   document.addEventListener(evType, (e) => {
     const t = e.target;
     if (!t || typeof t.closest !== 'function') return;
-    if (imgGenBusy && t.closest('#pRef, #pFocus, .tab[data-pid="pRef"], .tab[data-pid="pFocus"]')) {
+    if (imgGenBusy && t.closest('#pRef, .tab[data-pid="pRef"]')) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      return;
+    }
+    if (isFocusSectionLocked() && t.closest('#pFocus, .tab[data-pid="pFocus"]')) {
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();
@@ -5141,22 +5199,42 @@ let imgUpscalerSessionPromise = null;
 let imgUpscaleAbort = false;
 let imgUpscaleRunning = false;
 
+async function ensureLocalOrtRuntime() {
+  if (window.ort && window.ort.InferenceSession) return window.ort;
+  const loadScript = (relPath) => new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = new URL(relPath, document.baseURI).href;
+    s.async = true;
+    s.onload = () => res();
+    s.onerror = () => { s.remove(); rej(new Error('Could not load ' + relPath)); };
+    document.head.appendChild(s);
+  });
+  try {
+    await loadScript('models/ort.min.js');
+  } catch (e) {
+    await loadScript('models/ort.webgpu.min.js');
+  }
+  if (!window.ort || !window.ort.InferenceSession) {
+    throw new Error('Local ONNX Runtime Web engine (models/ort.min.js) is missing.');
+  }
+  return window.ort;
+}
+
 async function getOrCreateImageUpscalerSession() {
   if (imgUpscalerSession) return imgUpscalerSession;
   if (imgUpscalerSessionPromise) return imgUpscalerSessionPromise;
 
   imgUpscalerSessionPromise = (async () => {
-    if (!window.ort || !window.ort.InferenceSession) {
-      throw new Error('Local ONNX Runtime Web engine (models/ort.min.js) is missing.');
-    }
+    const ort = await ensureLocalOrtRuntime();
     try {
-      window.ort.env.wasm.wasmPaths = 'models/';
-      window.ort.env.wasm.numThreads = Math.min(4, navigator.hardwareConcurrency || 2);
+      ort.env.wasm.wasmPaths = new URL('models/', document.baseURI).href;
+      ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 2) : 1;
     } catch (_) {}
 
+    const modelUrl = new URL(IMG_UPSCALER_MODEL_PATH, document.baseURI).href;
     let modelRes;
     try {
-      modelRes = await fetch(IMG_UPSCALER_MODEL_PATH, { cache: 'no-store' });
+      modelRes = await fetch(modelUrl, { cache: 'default' });
     } catch (e) {
       throw new Error('The upscaler engine file is missing (models/realesr-general-x4v3.onnx).');
     }
@@ -5172,24 +5250,11 @@ async function getOrCreateImageUpscalerSession() {
       throw new Error('The upscaler engine file is missing (models/realesr-general-x4v3.onnx).');
     }
 
-    // Try WebGPU first, fallback to WASM
-    let session = null;
-    try {
-      if (navigator.gpu) {
-        session = await window.ort.InferenceSession.create(modelBuf, {
-          executionProviders: ['webgpu'],
-          graphOptimizationLevel: 'all'
-        });
-      }
-    } catch (gpuErr) {
-      session = null;
-    }
-    if (!session) {
-      session = await window.ort.InferenceSession.create(modelBuf, {
-        executionProviders: ['wasm'],
-        graphOptimizationLevel: 'all'
-      });
-    }
+    // Use WASM execution provider for reliable dynamic-shape inference across all browsers and GitHub Pages
+    const session = await ort.InferenceSession.create(modelBuf, {
+      executionProviders: ['wasm'],
+      graphOptimizationLevel: 'all'
+    });
     imgUpscalerSession = session;
     return session;
   })();
@@ -5233,12 +5298,14 @@ async function runRealEsrganImageUpscale(sourceImgOrCanvas, scaleFactor, onProgr
 
   const xSteps = [];
   for (let x = 0; x < srcW; x += stride) {
-    xSteps.push(Math.min(x, Math.max(0, srcW - tileSize)));
+    const xPos = Math.min(x, Math.max(0, srcW - tileSize));
+    if (!xSteps.includes(xPos)) xSteps.push(xPos);
     if (x + tileSize >= srcW) break;
   }
   const ySteps = [];
   for (let y = 0; y < srcH; y += stride) {
-    ySteps.push(Math.min(y, Math.max(0, srcH - tileSize)));
+    const yPos = Math.min(y, Math.max(0, srcH - tileSize));
+    if (!ySteps.includes(yPos)) ySteps.push(yPos);
     if (y + tileSize >= srcH) break;
   }
 
@@ -5394,6 +5461,10 @@ $('imgUpscaleDrop')?.addEventListener('click', () => {
 $('imgUpscaleFile')?.addEventListener('change', (e) => {
   if (e.target.files && e.target.files.length) {
     addFiles(e.target.files);
+    if (refs.length) {
+      S.focus.img = refs.length - 1;
+      syncImageUpscalerUI();
+    }
     e.target.value = '';
   }
 });
@@ -5413,6 +5484,10 @@ $('imgUpscaleFile')?.addEventListener('change', (e) => {
     $('imgUpscaleDrop').classList.remove('over');
     if (ev === 'drop' && e.dataTransfer?.files?.length) {
       addFiles(e.dataTransfer.files);
+      if (refs.length) {
+        S.focus.img = refs.length - 1;
+        syncImageUpscalerUI();
+      }
     }
   });
 });

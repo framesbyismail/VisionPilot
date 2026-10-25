@@ -1944,7 +1944,7 @@ function pathDist(o, t) {
     c = {sig, dt, N, u, s}; pathCache.set(o.id, c);
   }
   const f = clamp(t / c.dt, 0, c.N), i0 = Math.floor(f), i1 = Math.min(c.N, i0 + 1), w = f - i0;
-  return {u:c.u[i0] + (c.u[i1] - c.u[i0]) * w, s:c.s[i0] + (c.s[i1] - c.s[i0]) * w};
+  return {u:c.u[i0] + (c.u[i1] - c.u[i0]) * w, s:c.s[i0] + (c.s[i1] - c.s[i0]) * w, total:c.u[c.N]};
 }
 
 // Compute velocity, walk/run phase, jump preparation crouch, tails and vehicle wheel/drift dynamics
@@ -1953,7 +1953,7 @@ function updateRigPoseAndMotion(o, g, t) {
   if (!rig) return;
   let st = rigMotionState.get(o.id);
   if (!st) {
-    st = {x:o.x || 0, y:o.y || 0, z:o.z || 0, ry:o.ry || 0, t:performance.now(), phase:0, wheelSpin:0, moveHold:0, jumpPrep:0};
+    st = {x:o.x || 0, y:o.y || 0, z:o.z || 0, ry:o.ry || 0, t:performance.now(), phase:0.62, wheelSpin:0, moveHold:0, jumpPrep:0};
     rigMotionState.set(o.id, st);
   }
   const now = performance.now(), dt = clamp((now - st.t) / 1000, .001, .15);
@@ -1979,32 +1979,29 @@ function updateRigPoseAndMotion(o, g, t) {
   const dxDrag = (o.x || 0) - st.x, dzDrag = (o.z || 0) - st.z, dyDrag = (o.y || 0) - st.y;
   const dRyDrag = Math.abs(signed((o.ry || 0) - (st.ry ?? (o.ry || 0))));
   const dragMoveDist = Math.hypot(dxDrag, dzDrag);
-  const dragSpeed = dragMoveDist / dt;
-  const dragTurnSpeed = dRyDrag / dt;
   const timelineTurnSpeed = Math.abs(vRy);
   const animalish = rig.type === 'cat' || rig.type === 'animal';
   const wheelR = rig.wheelR || .3;
   const isPoseWalk = isRiggedChar(o.model) && o.pose === 'walking_still';
   const isPoseRun = isRiggedChar(o.model) && o.pose === 'running_still';
-  const hasTimelineTurn = isVideo() && tracks()[`obj.${o.id}.ry`]?.length > 1;
-  const useClock = clocked || !!pd || hasTimelineTurn;
+  const hasPath = Boolean(pd && pd.total > .001);
   const timeScrubbed = Math.abs(t - (st.lastT ?? t)) > 1e-4;
   st.lastT = t;
 
-  const isPreliminaryRun = isPoseRun || timelineSpeed > (animalish ? .85 : 1.02) || dragSpeed > (animalish ? .85 : 1.02);
+  const isPreliminaryRun = isPoseRun || (!isPoseWalk && hasPath && timelineSpeed > (animalish ? .85 : 1.02));
   const strideFreq = rig.type === 'cat'
     ? (isPreliminaryRun ? 10.4 : 13.2)
     : rig.type === 'animal'
       ? (isPreliminaryRun ? 8.4 : 10.6)
       : (isPreliminaryRun ? 5.6 : 4.8);
 
-  if (pd && !activeVpDrag && pd.u > .001) {
-    st.phase = pd.u * strideFreq;
+  if (hasPath && !activeVpDrag) {
+    st.phase = 0.62 + pd.u * strideFreq;
     st.wheelSpin = pd.s / wheelR;
-  } else if (useClock && timelineTurnSpeed > 1.5 && !activeVpDrag) {
+  } else if (clocked && !activeVpDrag && (isPoseWalk || isPoseRun || timelineTurnSpeed > 1.5)) {
     const turnCadence = rig.type === 'cat' ? (isPoseRun ? 11.5 : 7.5) : rig.type === 'animal' ? (isPoseRun ? 9.8 : 6.8) : (isPoseRun ? 9.2 : 5.2);
-    st.phase = t * turnCadence;
-  } else if (!useClock && o.pose !== 'sitting_chair' && (dragMoveDist > .0015 || dRyDrag > .2)) {
+    st.phase = 0.62 + t * turnCadence;
+  } else if (!clocked && !timeScrubbed && o.pose !== 'sitting_chair' && (dragMoveDist > .0008 || dRyDrag > .15)) {
     vx = dxDrag / dt; vz = dzDrag / dt;
     st.moveHold = now + 180;
     const stepAdvance = dragMoveDist + (dRyDrag * .018);
@@ -2013,22 +2010,21 @@ function updateRigPoseAndMotion(o, g, t) {
     clearTimeout(st.settleTimer);
     st.settleTimer = setTimeout(() => renderVP(), 190);
   }
-  if (dyDrag > .015 && (o.y || 0) < .28 && !useClock) st.jumpPrep = now + 220;
+  if (dyDrag > .015 && (o.y || 0) < .28 && !clocked) st.jumpPrep = now + 220;
 
   const isActivelyMoving = o.pose !== 'sitting_chair' && (
-    (useClock && (clocked || timeScrubbed) && (timelineSpeed > .03 || timelineTurnSpeed > 1.5)) ||
+    (isVideo() && (timelineSpeed > .03 || timelineTurnSpeed > 1.5 || (clocked && (isPoseWalk || isPoseRun)))) ||
     now < (st.moveHold || 0)
   );
-  const rawSpeed = o.pose === 'sitting_chair' ? 0 : Math.max(timelineSpeed, timelineTurnSpeed * .02, now < (st.moveHold || 0) ? Math.max(dragSpeed, dragTurnSpeed * .02, .65) : 0);
+  const rawSpeed = o.pose === 'sitting_chair' ? 0 : Math.max(timelineSpeed, timelineTurnSpeed * .02, now < (st.moveHold || 0) ? .68 : 0);
   const effSpeed = isPoseRun ? Math.max(rawSpeed, 2.3) : isPoseWalk ? Math.max(rawSpeed, .95) : rawSpeed;
-  const isRunning = (isPoseRun || (isActivelyMoving && effSpeed > (animalish ? .85 : 1.02))) && (o.y || 0) <= .08;
+  const isRunning = (isPoseRun || (!isPoseWalk && hasPath && timelineSpeed > (animalish ? .85 : 1.02))) && (o.y || 0) <= .08;
   const isMoving = (isPoseWalk || isRunning || (isActivelyMoving && effSpeed > .03)) && (o.y || 0) <= .08;
   const locoBlend = (isPoseWalk || isPoseRun) ? 1 : clamp(effSpeed / .32, 0, 1);
-  // 3D Mode Point 1: When stationary in Walking or Running mode, hold a static mid-stride Walking/Running Pose; when turned or moved, animate with st.phase!
-  const posePhi = isActivelyMoving ? st.phase : (isPoseRun ? 0.68 : isPoseWalk ? 0.62 : st.phase);
+  const posePhi = st.phase;
 
   st.x = o.x || 0; st.y = o.y || 0; st.z = o.z || 0; st.ry = o.ry || 0; st.t = now;
-  st.isMoving = isActivelyMoving;
+  st.isMoving = isMoving;
 
   const isPrep = crouchPrep > .05 || now < st.jumpPrep || o.pose === 'crouch_prep';
   const isAirborne = (o.y || 0) > .08 || JUMP_POSES.has(o.pose);
@@ -2088,13 +2084,13 @@ function updateRigPoseAndMotion(o, g, t) {
       torsoGrp.rotation.z = -Math.cos(phiL) * .022 * locoBlend;
       headGrp.rotation.y = -sL * .06 * locoBlend;
       leftLeg.hip.rotation.x = -sL * amp - .02 * locoBlend;
-      leftLeg.knee.rotation.x = (.05 + Math.pow(liftL, 1.8) * .68) * (amp / .50);
+      leftLeg.knee.rotation.x = (.05 + Math.pow(liftL, 1.5) * .68) * (amp / .50);
       rightLeg.hip.rotation.x = -sR * amp - .02 * locoBlend;
-      rightLeg.knee.rotation.x = (.05 + Math.pow(liftR, 1.8) * .68) * (amp / .50);
+      rightLeg.knee.rotation.x = (.05 + Math.pow(liftR, 1.5) * .68) * (amp / .50);
       leftArm.sh.rotation.x = sL * amp * .76;
-      leftArm.elbow.rotation.x = (-.16 - Math.max(0, -sL) * .32) * locoBlend;
+      leftArm.elbow.rotation.x = (-.16 - (.5 - .5 * sL) * .28) * locoBlend;
       rightArm.sh.rotation.x = -sL * amp * .76;
-      rightArm.elbow.rotation.x = (-.16 - Math.max(0, sL) * .32) * locoBlend;
+      rightArm.elbow.rotation.x = (-.16 - (.5 + .5 * sL) * .28) * locoBlend;
     } else if (airBlend < .99) {
       checkAutoSitOnChair(o, false);
       g.rotation.y = rad(o.ry || 0);
@@ -3888,7 +3884,7 @@ $('expFrame').addEventListener('click', () => {
     let promptObj = null, promptText = '';
     try {
       promptObj = hooks.buildFramePrompt ? hooks.buildFramePrompt() : AC.buildImagePrompt?.();
-      promptText = promptObj?.master_prompt || promptObj?.detailed_prompt || '';
+      promptText = promptObj ? JSON.stringify(promptObj, null, 2) : '';
     } catch (e) {}
     if (dataUrl) {
       if (typeof window.saveHistoryEntry === 'function') {
@@ -4013,7 +4009,7 @@ $('expVideo').addEventListener('click', async () => {
   let promptObj = null, promptText = '';
   try {
     promptObj = hooks.buildVideoPrompt ? hooks.buildVideoPrompt() : null;
-    promptText = promptObj?.master_prompt || promptObj?.detailed_prompt || '';
+    promptText = promptObj ? JSON.stringify(promptObj, null, 2) : '';
   } catch (e) {}
   try {
     const videoDataUrl = await new Promise((res, rej) => {
@@ -4380,7 +4376,7 @@ hooks.buildVideoPrompt = () => {
         videoFocusShifts: focusPartNote.trim()
       })
     : null;
-  const REQUIRED_VIDEO_LEAD = "Match the generated video's camera angles, camera movements, and motion with the provided reference video.";
+  const REQUIRED_VIDEO_LEAD = "Match the video's camera angle, camera movements, and motion with the provided reference video.";
   const master = `${REQUIRED_VIDEO_LEAD} ` + (aiWorkflow ? `[${aiWorkflow.active_ai_model} AI Workflow] ` : '')
     + `ONE continuous ${dur}-second shot, ${cm.aspectStr}, no cuts. ${showOnlyLead}${focusPartNote}${animPresetNote}${refVideoAiInstruction} CAMERA MOTION (follow this exact timing and direction): ${timing}. `
     + `First frame: ${ang0.A.label.toLowerCase()}, ${ang0.E.label.toLowerCase()}, ${shot0}. Last frame: ${ang1.A.label.toLowerCase()}, ${ang1.E.label.toLowerCase()}, ${shot1}. `
@@ -5220,23 +5216,29 @@ let vidUpAbort = false;
 let vidUpInput = null; // { file, name, url, width, height, duration, fps }
 
 async function loadLocalOrtForVideo() {
-  if (window.ort) return window.ort;
+  if (window.ort && window.ort.InferenceSession) {
+    try {
+      window.ort.env.wasm.wasmPaths = new URL('models/', document.baseURI).href;
+      window.ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 2) : 1;
+    } catch (_) {}
+    return window.ort;
+  }
   const loadLocal = src => new Promise((res, rej) => {
     const s = document.createElement('script');
-    s.src = src;
+    s.src = new URL(src, document.baseURI).href;
     s.async = true;
     s.onload = () => res();
     s.onerror = () => { s.remove(); rej(new Error('Missing local ONNX runtime file: ' + src)); };
     document.head.appendChild(s);
   });
   try {
-    await loadLocal('models/ort.webgpu.min.js');
-  } catch (e) {
     await loadLocal('models/ort.min.js');
+  } catch (e) {
+    await loadLocal('models/ort.webgpu.min.js');
   }
-  if (!window.ort) throw new Error('Local ONNX Runtime failed to initialize.');
-  window.ort.env.wasm.wasmPaths = 'models/';
-  window.ort.env.wasm.numThreads = Math.min(4, navigator.hardwareConcurrency || 2);
+  if (!window.ort || !window.ort.InferenceSession) throw new Error('Local ONNX Runtime failed to initialize.');
+  window.ort.env.wasm.wasmPaths = new URL('models/', document.baseURI).href;
+  window.ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 2) : 1;
   return window.ort;
 }
 
@@ -5244,9 +5246,10 @@ async function ensureVideoUpscalerSession(engineKey, onStatus) {
   const def = VID_UP_MODELS[engineKey] || VID_UP_MODELS.balanced;
   if (vidUpSessions.has(def.id)) return vidUpSessions.get(def.id);
   onStatus?.(`Checking local engine (${def.file})…`);
+  const modelUrl = new URL(def.path, document.baseURI).href;
   let resp;
   try {
-    resp = await fetch(def.path, { cache: 'no-cache' });
+    resp = await fetch(modelUrl, { cache: 'default' });
   } catch (e) {
     throw new Error(`Upscaler engine file is missing (${def.path}). Please place ${def.file} inside the project's "models" folder.`);
   }
@@ -5261,19 +5264,12 @@ async function ensureVideoUpscalerSession(engineKey, onStatus) {
   if (headerProbe.startsWith('<!DOCTYPE') || headerProbe.startsWith('<html')) {
     throw new Error(`Upscaler engine file is missing (${def.path}). Please place ${def.file} inside the project's "models" folder.`);
   }
-  onStatus?.('Initializing ONNX Runtime (WebGPU / WASM)…');
+  onStatus?.('Initializing ONNX Runtime (WASM)…');
   const ort = await loadLocalOrtForVideo();
-  let session = null;
-  if (navigator.gpu) {
-    try {
-      session = await ort.InferenceSession.create(buf, { executionProviders: ['webgpu'] });
-    } catch (e) {
-      session = null;
-    }
-  }
-  if (!session) {
-    session = await ort.InferenceSession.create(buf, { executionProviders: ['wasm'] });
-  }
+  const session = await ort.InferenceSession.create(buf, {
+    executionProviders: ['wasm'],
+    graphOptimizationLevel: 'all'
+  });
   vidUpSessions.set(def.id, session);
   return session;
 }
@@ -5520,7 +5516,23 @@ async function handleVideoUpscaleFile(file) {
     });
     const width = probeVid.videoWidth || 1280;
     const height = probeVid.videoHeight || 720;
-    const duration = probeVid.duration || 0;
+    let duration = probeVid.duration;
+    if (!isFinite(duration) || duration <= 0) {
+      await new Promise((res) => {
+        const onSeek = () => {
+          probeVid.removeEventListener('seeked', onSeek);
+          res();
+        };
+        probeVid.addEventListener('seeked', onSeek, { once: true });
+        setTimeout(res, 500);
+        try { probeVid.currentTime = 1e6; } catch (_) { res(); }
+      });
+      duration = (isFinite(probeVid.duration) && probeVid.duration > 0 && probeVid.duration < 1e5) ? probeVid.duration : 2.0;
+      try {
+        probeVid.currentTime = 0;
+        await new Promise(r => { probeVid.addEventListener('seeked', r, { once: true }); setTimeout(r, 200); });
+      } catch (_) {}
+    }
     const thumbCvs = $('vidUpscaleThumb');
     if (thumbCvs) {
       thumbCvs.width = width;
@@ -5548,7 +5560,8 @@ async function handleVideoUpscaleFile(file) {
 
 function seekVideoTo(videoEl, timeSec) {
   return new Promise((res, rej) => {
-    const t = clamp(timeSec, 0, Math.max(0, (videoEl.duration || 0) - 0.01));
+    const maxDur = (isFinite(videoEl.duration) && videoEl.duration > 0) ? videoEl.duration : (vidUpInput?.duration || 15);
+    const t = clamp(timeSec, 0, Math.max(0, maxDur - 0.01));
     if (Math.abs(videoEl.currentTime - t) < 0.005 && videoEl.readyState >= 2) {
       res();
       return;
@@ -5636,7 +5649,8 @@ async function runVideoUpscale(targetTier) {
       workVid.load();
     });
 
-    const dur = Math.min(15, workVid.duration || vidUpInput.duration || 1);
+    const rawDur = (isFinite(workVid.duration) && workVid.duration > 0) ? workVid.duration : (vidUpInput.duration || 1);
+    const dur = Math.min(15, rawDur);
 
     // 1. Extract and upscale the 5 section middle frames: (i + 0.5) / 5 * dur
     const origFrames = [];
