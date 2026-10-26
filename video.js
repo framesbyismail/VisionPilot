@@ -4570,7 +4570,7 @@ function renderPresets() {
   if (custom.length) {
     const minC = minVidPresetGroups.has('__custom');
     html += `<div class="pgroup${minC ? ' min' : ''}"><button type="button" class="psep-btn" data-pgrp="__custom" aria-expanded="${!minC}"><span>Saved to account</span><i class="psep-arr">${minC ? '▸' : '▾'}</i></button><div class="pgrid">`
-      + custom.map(c => `<div class="pitem-wrap"><button type="button" class="pitem custom" data-preset="${escAttr(c.id)}" aria-pressed="${S.video.activePreset === c.id}">${esc(c.name)}</button><button type="button" class="pdel" data-pdel="${escAttr(c.id)}" title="Delete preset" aria-label="Delete ${escAttr(c.name)}">×</button></div>`).join('')
+      + custom.map(c => `<div class="pitem-wrap"><button type="button" class="pitem custom" data-preset="${escAttr(c.id)}" aria-pressed="${S.video.activePreset === c.id}">${esc(c.name)}</button><button type="button" class="pdel" data-pdel="${escAttr(c.id)}" title="Delete preset" aria-label="Delete ${escAttr(c.name)}"><svg class="vp-x-ico" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 2.5 9.5 9.5M9.5 2.5 2.5 9.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div>`).join('')
       + `</div></div>`;
   }
   box.innerHTML = html;
@@ -5105,7 +5105,7 @@ function renderAnimPresets() {
   if (custom.length) {
     const minC = minAnimPresetGroups.has('__custom_anim');
     html += `<div class="pgroup${minC ? ' min' : ''}"><button type="button" class="psep-btn" data-apgrp="__custom_anim" aria-expanded="${!minC}"><span>Saved to account</span><i class="psep-arr">${minC ? '▸' : '▾'}</i></button><div class="pgrid">`
-      + custom.map(c => `<div class="pitem-wrap"><button type="button" class="pitem custom" data-apreset="${escAttr(c.id)}" aria-pressed="${S.video.activeAnimPreset === c.id}">${esc(c.name)}</button><button type="button" class="pdel" data-apdel="${escAttr(c.id)}" title="Delete preset">×</button></div>`).join('')
+      + custom.map(c => `<div class="pitem-wrap"><button type="button" class="pitem custom" data-apreset="${escAttr(c.id)}" aria-pressed="${S.video.activeAnimPreset === c.id}">${esc(c.name)}</button><button type="button" class="pdel" data-apdel="${escAttr(c.id)}" title="Delete preset"><svg class="vp-x-ico" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 2.5 9.5 9.5M9.5 2.5 2.5 9.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div>`).join('')
       + `</div></div>`;
   }
   box.innerHTML = html;

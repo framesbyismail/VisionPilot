@@ -763,14 +763,14 @@ function renderKeys() {
     if (S.descPinned && S.subjDesc.trim()) {
       topItems.push({
         at: S.descPinnedAt || 1,
-        html: `<button class="tog extra" data-k="__desc" aria-pressed="true" title="${escAttr(S.subjDesc.trim())}">${esc(shortNote('Subject: ' + S.subjDesc.trim()))}<span class="del" data-del="__desc" role="button" aria-label="Remove the subject description from the prompt" title="Remove from prompt">×</span></button>`
+        html: `<button class="tog extra" data-k="__desc" aria-pressed="true" title="${escAttr(S.subjDesc.trim())}">${esc(shortNote('Subject: ' + S.subjDesc.trim()))}<span class="del" data-del="__desc" role="button" aria-label="Remove the subject description from the prompt" title="Remove from prompt"><svg class="vp-x-ico" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 2.5 9.5 9.5M9.5 2.5 2.5 9.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span></button>`
       });
     }
     S.customKeys.forEach((c, idx) => {
       topItems.push({
         at: c.addedAt || (S.customKeys.length - idx),
         html: `<button class="tog extra y" data-k="${c.id}" aria-pressed="false" title="${escAttr(c.text)}">${esc(shortNote(c.text))}`
-          + `<span class="del" data-del="${c.id}" role="button" aria-label="Delete note" title="Delete note">×</span></button>`
+          + `<span class="del" data-del="${c.id}" role="button" aria-label="Delete note" title="Delete note"><svg class="vp-x-ico" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 2.5 9.5 9.5M9.5 2.5 2.5 9.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span></button>`
       });
     });
     topItems.sort((a, b) => (b.at || 0) - (a.at || 0));
@@ -806,7 +806,7 @@ function renderImgPresets() {
   if (custom.length) {
     const min = minPresetGroups.has('__custom');
     html += `<div class="pgroup${min ? ' min' : ''}"><button type="button" class="psep-btn" data-pgrp="__custom" aria-expanded="${!min}"><span>Saved to account</span><i class="psep-arr">${min ? '▸' : '▾'}</i></button><div class="pgrid">`
-      + custom.map(c => `<div class="pitem-wrap"><button type="button" class="pitem custom" data-ipreset="${escAttr(c.id)}" aria-pressed="${S.imgPresetId === c.id}" title="${escAttr(c.prompt || c.name)}">${esc(c.name)}</button><button type="button" class="pdel" data-ipdel="${escAttr(c.id)}" title="Delete preset" aria-label="Delete ${escAttr(c.name)}">×</button></div>`).join('')
+      + custom.map(c => `<div class="pitem-wrap"><button type="button" class="pitem custom" data-ipreset="${escAttr(c.id)}" aria-pressed="${S.imgPresetId === c.id}" title="${escAttr(c.prompt || c.name)}">${esc(c.name)}</button><button type="button" class="pdel" data-ipdel="${escAttr(c.id)}" title="Delete preset" aria-label="Delete ${escAttr(c.name)}"><svg class="vp-x-ico" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 2.5 9.5 9.5M9.5 2.5 2.5 9.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div>`).join('')
       + `</div></div>`;
   }
   box.innerHTML = html;
@@ -2001,7 +2001,7 @@ function syncFocus() {
         const glowCls = isMarkerItem ? ' marker-glow' : '';
         const dotCls = isMarkerItem ? 'sdot marker-dot' : 'sdot';
         const dotStyle = isMarkerItem ? '' : ` style="background:${escAttr(item.color)}"`;
-        return `<button type="button" class="tog fsubj${glowCls}" data-fsub="${escAttr(item.key)}" aria-pressed="${S.focus.activeSubjs.includes(item.key)}" style="--sc:${escAttr(item.color || '#3fb950')}" title="${escAttr(item.detail || item.label)}"><i class="${dotCls}"${dotStyle}></i><span>${esc(item.label)}</span><span class="del" data-fsubdel="${escAttr(item.key)}" role="button" aria-label="Remove ${escAttr(item.label)}" title="Remove">×</span></button>`;
+        return `<button type="button" class="tog fsubj${glowCls}" data-fsub="${escAttr(item.key)}" aria-pressed="${S.focus.activeSubjs.includes(item.key)}" style="--sc:${escAttr(item.color || '#3fb950')}" title="${escAttr(item.detail || item.label)}"><i class="${dotCls}"${dotStyle}></i><span>${esc(item.label)}</span><span class="del" data-fsubdel="${escAttr(item.key)}" role="button" aria-label="Remove ${escAttr(item.label)}" title="Remove"><svg class="vp-x-ico" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 2.5 9.5 9.5M9.5 2.5 2.5 9.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span></button>`;
       }).join('');
     } else {
       $('focusSubjList').innerHTML = '<span class="hint fsubj-empty">Use "Into Subject" above to add subjects here.</span>';
