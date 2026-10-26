@@ -1161,13 +1161,15 @@ function pointInfo(det, x, y, preferredSubj = null) {
   const s = h.s, b = s.box;
   const rx = clamp((x - b.x) / Math.max(.02, b.w), 0, 1);
   const ry = clamp((y - b.y) / Math.max(.02, b.h), 0, 1);
-  const side = rx < .5 ? 'right' : 'left', iside = rx < .5 ? 'left' : 'right';
+  const f = s.face;
+  const midlineX = (s.type === 'person' && f && f.box) ? (f.box.x + f.box.w * .5) : (b.x + b.w * .5);
+  const side = (s.type === 'person' ? (x < midlineX) : (rx < .5)) ? 'right' : 'left';
+  const iside = rx < .5 ? 'left' : 'right';
   const vert = ry < .28 ? 'upper' : ry > .68 ? 'lower' : 'middle';
   const horiz = rx < .34 ? 'left' : rx > .66 ? 'right' : 'center';
   let part = null;
 
   if (s.type === 'person') {
-    const f = s.face;
     if (f) {
       const fb = f.box, fs = Math.max(fb.w, fb.h);
       let best = null, bd = 1e9;
@@ -1181,13 +1183,13 @@ function pointInfo(det, x, y, preferredSubj = null) {
       }
       const browY = (Array.isArray(f.pts) && f.pts.length >= 25) ? Math.min(f.pts[19][1], f.pts[24][1]) : (fb.y + fb.h * .28);
       if (y < fb.y + fb.h * .12 && y >= b.y - fb.h * .6 && x >= fb.x - fb.w * .35 && x <= fb.x + fb.w * 1.35) {
-        part = `the person's hair`;
+        part = `the person's head and hair`;
       } else if (best && bd < fs * .16) {
         part = best === 'mouth and lips' ? `the person's mouth` : best === 'nose' ? `the person's nose` : `the person's ${best}`;
       } else if (inside(p, fb)) {
-        part = y < browY ? `the person's forehead` : `the person's ${x < fb.x + fb.w / 2 ? 'right' : 'left'} eye`;
+        part = y < browY ? `the person's forehead and head` : `the person's ${x < fb.x + fb.w / 2 ? 'right' : 'left'} eye`;
       } else if (y < fb.y && y > fb.y - fb.h * .85 && x > fb.x - fb.w * .35 && x < fb.x + fb.w * 1.35) {
-        part = `the person's hair`;
+        part = `the person's head and hair`;
       } else if (Math.abs(y - (fb.y + fb.h * .5)) < fb.h * .42 && (x < fb.x || x > fb.x + fb.w) && Math.abs(x - (fb.x + fb.w / 2)) < fb.w * .88) {
         part = `the person's ${x < fb.x ? 'right' : 'left'} ear`;
       }
@@ -1198,13 +1200,14 @@ function pointInfo(det, x, y, preferredSubj = null) {
       const skinHex = s.parts?.skin || null;
       const shirtName = s.partNames?.shirt || '';
       const tightName = tightCol?.name || '';
-      const isOuterArmZone = rx < .33 || rx > .67;
-      const isWristBandHeight = ry >= Math.max(faceBottom + .18, .41) && ry <= .49;
-      const isHandHeight = ry > .49 && ry <= .64;
+      const isOuterArmZone = rx < .34 || rx > .66;
+      const isHalfBodyOrSeated = Boolean(s.seatedOnChair || /seated|serving/i.test(s.pose || '') || (b.h < .58 && (b.y + b.h) < .84));
+      const isWristBandHeight = ry >= Math.max(faceBottom + .16, .39) && ry <= .49;
+      const isHandHeight = ry > .49 && ry <= (isHalfBodyOrSeated ? .96 : .65);
       const isDistinctFromShirt = tightName && shirtName && tightName !== shirtName;
 
-      if (ry < Math.max(.08, faceTop + .04)) {
-        part = `the person's ${side} hair and top of head`;
+      if (ry < Math.max(.09, faceTop + .05)) {
+        part = `the person's head and hair`;
       } else if (ry < faceBottom) {
         if (rx < .26 || rx > .74) part = `the person's ${side} ear`;
         else if (ry > (faceTop + faceBottom) * 0.62) part = rx > .42 && rx < .58 ? `the person's mouth` : `the person's nose`;
@@ -1216,34 +1219,54 @@ function pointInfo(det, x, y, preferredSubj = null) {
       } else if (isHandHeight && (isOuterArmZone || (skinHex && tightName === s.partNames?.skin && isDistinctFromShirt))) {
         part = `the person's ${side} hand`;
       } else if (ry < .54) {
-        if (rx < .26 || rx > .74) {
-          part = ry > .41 ? `the person's ${side} hand` : `the person's ${side} arm and sleeve`;
+        if (rx < .28 || rx > .72) {
+          part = ry > .39 ? `the person's ${side} hand` : `the person's ${side} arm and sleeve`;
         } else if (ry < faceBottom + .14) {
           part = `the person's ${side} shoulder`;
         } else {
           part = `the person's ${side} upper chest`;
         }
-      } else if (ry < .63) {
-        part = (rx < .34 || rx > .66) ? `the person's ${side} hand` : `the person's ${side} waist`;
-      } else if (ry < .89) {
+      } else if (ry < .63 || isHalfBodyOrSeated) {
+        part = (rx < .36 || rx > .64 || isHalfBodyOrSeated) ? `the person's ${side} hand` : `the person's ${side} waist`;
+      } else if (ry < .88) {
         part = `the person's ${side} leg`;
       } else {
         part = `the person's ${side} foot`;
       }
     }
   } else if (s.type === 'car' || s.type === 'vehicle') {
-    const sideView = s.viewCode === 'left' || s.viewCode === 'right';
-    const carSide = s.viewCode === 'left' ? 'left' : s.viewCode === 'right' ? 'right' : side;
-    if (sideView) {
-      if (ry > .54 && (rx < .35 || rx > .65)) { part = `the car's ${iside === 'left' ? 'front' : 'rear'} ${carSide} wheel`; }
-      else if (ry < .42) { part = rx < .32 ? `the car's windshield` : `the car's ${carSide} window`; }
-      else if (ry > .82) { part = `the car's ${carSide} lower side skirt`; }
-      else { part = rx < .22 ? `the car's front ${carSide} wheel and fender` : rx > .78 ? `the car's rear ${carSide} wheel and quarter panel` : `the car's ${carSide} window and door`; }
+    const viewCode = s.viewCode || 'front';
+    const isRearView = viewCode === 'back';
+    const isRightSide = viewCode === 'right';
+    const isLeftSide = viewCode === 'left' || viewCode === 'three-quarter';
+    if (ry >= .48 && (rx < .44 || rx > .56)) {
+      if (isRearView) {
+        part = rx < .5 ? `the car's rear left wheel` : `the car's rear right wheel`;
+      } else if (isRightSide) {
+        part = rx < .46 ? `the car's rear right wheel` : `the car's front right wheel`;
+      } else if (isLeftSide) {
+        part = rx < .54 ? `the car's front left wheel` : `the car's rear left wheel`;
+      } else {
+        part = rx < .5 ? `the car's front left wheel` : `the car's front right wheel`;
+      }
+    } else if (ry < .42) {
+      if (isRearView) {
+        part = `the car's rear window`;
+      } else if (rx > .24 && rx < .76 && !isLeftSide && !isRightSide) {
+        part = `the car's front windshield`;
+      } else if (isLeftSide && rx < .36) {
+        part = `the car's front windshield`;
+      } else if (isRightSide && rx > .64) {
+        part = `the car's front windshield`;
+      } else {
+        part = `the car's ${isRightSide ? 'right' : 'left'} side window`;
+      }
+    } else if (isRearView || (isLeftSide && rx > .74) || (isRightSide && rx < .26)) {
+      part = `the car's rear section and taillight`;
+    } else if (ry < .64 && ((rx < .30 || rx > .70) || (isLeftSide && rx < .32) || (isRightSide && rx > .68))) {
+      part = `the car's front ${rx < .5 ? 'left' : 'right'} headlight`;
     } else {
-      if (ry < .36) { part = rx > .25 && rx < .75 ? `the car's windshield` : `the car's ${side} window`; }
-      else if (ry < .62) { part = rx < .3 || rx > .7 ? `the car's front ${side} headlight` : `the car's front hood and windshield`; }
-      else if (ry > .62 && (rx < .32 || rx > .68)) { part = `the car's front ${side} wheel`; }
-      else { part = rx > .3 && rx < .7 ? `the car's front bumper and grille` : `the car's front ${side} wheel`; }
+      part = `the car's front hood and grille`;
     }
   } else if (s.type === 'phone') {
     if (rx < .52 && ry < .36) { part = `the phone's ${side} camera lens module`; }

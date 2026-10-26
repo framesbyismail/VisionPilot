@@ -1,8 +1,8 @@
-/* VisionPilot — Local CLIP-Powered Writer (clip-text/clip-writer.js)
- * Connects the local CLIP Text folder (clip-text/) and CLIP Vision folder (clip-image/)
- * to the VisionPilot AI engine via a background Web Worker (clip-text/clip-worker.js).
+/* VisionPilot — Local Vision Pilot AI Writer
+ * Connects the local Vision Pilot AI Text and Vision model folders
+ * to the VisionPilot AI engine via a background Web Worker.
  *
- * Strictly follows the 3-Stage CLIP Template Rules:
+ * Strictly follows the 3-Stage Vision Pilot AI Template Rules:
  * - Stage 1: Reference Description (30 to 50 words)
  * - Stage 2: Single Mode Focus Detail (30 to 40 words, never over 40)
  * - Stage 3: Multiple Mode Subject Details (30 to 40 words per subject box)
@@ -11,20 +11,53 @@
   'use strict';
 
   const scriptEl = document.currentScript;
-  const CLIP_TEXT_DIR = (scriptEl && scriptEl.getAttribute('data-clip-text')) || 'clip-text';
-  const CLIP_IMAGE_DIR = (scriptEl && scriptEl.getAttribute('data-clip-image')) || 'clip-image';
-  const WORKER_URL = `${CLIP_TEXT_DIR}/clip-worker.js`;
+  const scriptUrl = (scriptEl && scriptEl.src) ? new URL('./', scriptEl.src).href : new URL('./', window.location.href).href;
+  const rootUrl = (scriptEl && scriptEl.src) ? new URL('../', scriptEl.src).href : new URL('./', window.location.href).href;
+  const derivedTextDir = scriptUrl.slice(rootUrl.length).replace(/^\/+|\/+$/g, '');
+  const derivedImageDir = derivedTextDir.replace(/-text$/, '-image');
+
+  const VP_TEXT_DIR = (scriptEl && (scriptEl.getAttribute('data-vp-text') || scriptEl.getAttribute('data-model-text'))) || derivedTextDir;
+  const VP_IMAGE_DIR = (scriptEl && (scriptEl.getAttribute('data-vp-image') || scriptEl.getAttribute('data-model-image'))) || derivedImageDir;
+  const WORKER_URL = (scriptEl && scriptEl.src)
+    ? scriptEl.src.replace(/writer\.js(\?.*)?$/, 'worker.js$1')
+    : `${VP_TEXT_DIR}/ worker.js`.replace(/\s+/g, '');
 
   let worker = null;
   let workerReadyPromise = null;
   let reqSeq = 1;
+  let writerEpoch = 1;
   const pendingReqs = new Map();
   let activeProgressCallback = null;
 
-  function emitProgress(msg) {
+  function emitProgress(msg, callEpoch) {
+    if (callEpoch !== undefined && callEpoch !== writerEpoch) return;
     if (typeof activeProgressCallback === 'function') {
       try { activeProgressCallback(msg); } catch (e) {}
     }
+  }
+
+  function makeCancelError() {
+    const err = new Error('Vision Pilot AI operation cancelled due to AI model switch');
+    err.cancelled = true;
+    return err;
+  }
+
+  function cancelAll() {
+    writerEpoch++;
+    activeProgressCallback = null;
+    if (worker) {
+      try { worker.postMessage({ action: 'cancel', upToId: Math.max(0, reqSeq - 1) }); } catch (e) {}
+    }
+    if (pendingReqs.size > 0) {
+      pendingReqs.forEach((p) => {
+        try { p.reject(makeCancelError()); } catch (e) {}
+      });
+      pendingReqs.clear();
+    }
+  }
+
+  function getEpoch() {
+    return writerEpoch;
   }
 
   function ensureWorker() {
@@ -33,65 +66,86 @@
     worker.onmessage = (evt) => {
       const msg = evt.data || {};
       if (msg.type === 'progress') {
-        if (msg.message) emitProgress(msg.message);
+        if (msg.message) emitProgress(msg.message, writerEpoch);
         return;
       }
       if (msg.id && pendingReqs.has(msg.id)) {
         const p = pendingReqs.get(msg.id);
         pendingReqs.delete(msg.id);
+        if (p.epoch !== undefined && p.epoch !== writerEpoch) {
+          p.reject(makeCancelError());
+          return;
+        }
         if (msg.ok) p.resolve(msg.result);
-        else p.reject(new Error(msg.error || 'CLIP Worker error'));
+        else if (msg.error === 'Cancelled') p.reject(makeCancelError());
+        else p.reject(new Error(msg.error || 'Vision Pilot AI Worker error'));
       }
     };
     worker.onerror = (err) => {
-      const errMsg = err?.message || 'CLIP Worker failed to load';
+      const errMsg = err?.message || 'Vision Pilot AI Worker failed to load';
       pendingReqs.forEach((p) => p.reject(new Error(errMsg)));
       pendingReqs.clear();
     };
     return worker;
   }
 
+  function analyzePatchStats(p) {
+    const data = p.data || (p.dataUrl && p.dataUrl.data) || [];
+    const w = p.width || (p.dataUrl && p.dataUrl.width) || 224;
+    const h = p.height || (p.dataUrl && p.dataUrl.height) || 224;
+    let darkCnt = 0, veryDarkTireCnt = 0, metallicRimCnt = 0, brightCnt = 0, headlightBrightCnt = 0;
+    let warmBeigeCnt = 0, orangeCnt = 0, redTailCnt = 0, mintCnt = 0, whiteCnt = 0, skinCnt = 0, glassCnt = 0, total = 0;
+    let topOrangeCnt = 0, topTotal = 0;
+    for (let y = 0; y < h; y += 2) {
+      for (let x = 0; x < w; x += 2) {
+        const i = (y * w + x) * 4;
+        const r = data[i] || 0, g = data[i + 1] || 0, b = data[i + 2] || 0;
+        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+        const maxC = Math.max(r, g, b), minC = Math.min(r, g, b);
+        const sat = maxC > 0 ? (maxC - minC) / maxC : 0;
+        total++;
+        if (lum < 62) darkCnt++;
+        if (lum < 52 && sat < 0.32) veryDarkTireCnt++;
+        if (lum >= 95 && lum <= 210 && sat < 0.22) metallicRimCnt++;
+        if (lum > 185) brightCnt++;
+        if (lum > 212 && (r > 200 && g > 200)) headlightBrightCnt++;
+        if (r > 205 && g > 205 && b > 195) whiteCnt++;
+        if (r > 185 && g > 80 && g < 165 && b < 90 && (r - b) > 95) {
+          orangeCnt++;
+          if (y < h * 0.28) topOrangeCnt++;
+        }
+        if (r > 155 && r > g * 1.45 && r > b * 1.45 && (r - g) > 45) redTailCnt++;
+        if (y < h * 0.28) topTotal++;
+        if (g > r + 4 && g > 115 && b > 105 && lum > 110 && lum < 220) mintCnt++;
+        if (r > 185 && g > 165 && b > 135 && (r - b) > 18 && (r - b) < 75) warmBeigeCnt++;
+        if (r > 135 && g > 85 && b > 60 && r > g + 12 && g > b + 6 && lum > 85 && lum < 225) skinCnt++;
+        if (lum >= 45 && lum <= 165 && sat < 0.28 && b >= r - 10) glassCnt++;
+      }
+    }
+    const n = Math.max(1, total);
+    const tireRatio = veryDarkTireCnt / n;
+    const rimRatio = metallicRimCnt / n;
+    return {
+      darkRatio: darkCnt / n,
+      tireRatio,
+      rimRatio,
+      tireScore: tireRatio * 0.7 + Math.min(tireRatio, rimRatio) * 0.6,
+      brightRatio: brightCnt / n,
+      headlightScore: headlightBrightCnt / n,
+      taillightScore: redTailCnt / n,
+      glassScore: glassCnt / n,
+      warmBeigeRatio: warmBeigeCnt / n,
+      orangeRatio: orangeCnt / n,
+      topOrangeRatio: topOrangeCnt / Math.max(1, topTotal),
+      mintRatio: mintCnt / n,
+      whiteRatio: whiteCnt / n,
+      skinRatio: skinCnt / n
+    };
+  }
+
   // Fallback canvas patch scorer if Web Worker is blocked (e.g. when opened directly via file:// protocol)
   function fallbackScoreImagePatches(patches) {
     const out = {};
-    const analyzePatchStats = (p) => {
-      const data = p.data || (p.dataUrl && p.dataUrl.data) || [];
-      const w = p.width || (p.dataUrl && p.dataUrl.width) || 224;
-      const h = p.height || (p.dataUrl && p.dataUrl.height) || 224;
-      let darkCnt = 0, brightCnt = 0, warmBeigeCnt = 0, orangeCnt = 0, mintCnt = 0, whiteCnt = 0, skinCnt = 0, total = 0;
-      let topOrangeCnt = 0, topTotal = 0;
-      for (let y = 0; y < h; y += 2) {
-        for (let x = 0; x < w; x += 2) {
-          const i = (y * w + x) * 4;
-          const r = data[i] || 0, g = data[i + 1] || 0, b = data[i + 2] || 0;
-          const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-          total++;
-          if (lum < 62) darkCnt++;
-          if (lum > 185) brightCnt++;
-          if (r > 205 && g > 205 && b > 195) whiteCnt++;
-          if (r > 185 && g > 80 && g < 165 && b < 90 && (r - b) > 95) {
-            orangeCnt++;
-            if (y < h * 0.28) topOrangeCnt++;
-          }
-          if (y < h * 0.28) topTotal++;
-          if (g > r + 4 && g > 115 && b > 105 && lum > 110 && lum < 220) mintCnt++;
-          if (r > 185 && g > 165 && b > 135 && (r - b) > 18 && (r - b) < 75) warmBeigeCnt++;
-          if (r > 145 && g > 95 && b > 70 && r > g + 15 && g > b + 8 && lum > 95 && lum < 215) skinCnt++;
-        }
-      }
-      const n = Math.max(1, total);
-      return {
-        darkRatio: darkCnt / n,
-        brightRatio: brightCnt / n,
-        warmBeigeRatio: warmBeigeCnt / n,
-        orangeRatio: orangeCnt / n,
-        topOrangeRatio: topOrangeCnt / Math.max(1, topTotal),
-        mintRatio: mintCnt / n,
-        whiteRatio: whiteCnt / n,
-        skinRatio: skinCnt / n
-      };
-    };
-
     const fullPatch = (patches || []).find(p => (p.key || p.id) === 'full') || (patches || [])[0];
     const fullSt = fullPatch ? analyzePatchStats(fullPatch) : { darkRatio: 0, brightRatio: 0, warmBeigeRatio: 0, orangeRatio: 0, mintRatio: 0, whiteRatio: 0, skinRatio: 0 };
 
@@ -178,6 +232,7 @@
   }
 
   function ensureLoaded(onProgress) {
+    const callEpoch = writerEpoch;
     if (onProgress) activeProgressCallback = onProgress;
     if (workerReadyPromise) return workerReadyPromise;
     let w;
@@ -188,23 +243,25 @@
     }
     const id = reqSeq++;
     workerReadyPromise = new Promise((resolve, reject) => {
-      pendingReqs.set(id, { resolve, reject });
+      pendingReqs.set(id, { resolve, reject, epoch: callEpoch });
       w.postMessage({
         id,
         action: 'warmup',
         payload: {
-          textDir: CLIP_TEXT_DIR,
-          imageDir: CLIP_IMAGE_DIR
+          textDir: VP_TEXT_DIR,
+          imageDir: VP_IMAGE_DIR
         }
       });
     }).catch((err) => {
       workerReadyPromise = null;
+      if (err?.cancelled || callEpoch !== writerEpoch) throw err;
       return { ready: true, fallback: true };
     });
     return workerReadyPromise;
   }
 
-  async function scoreImagePatches(patches, banks, onProgress) {
+  async function scoreImagePatches(patches, banks, onProgress, callEpoch = writerEpoch) {
+    if (callEpoch !== writerEpoch) throw makeCancelError();
     if (onProgress) activeProgressCallback = onProgress;
     const workerPatches = (patches || []).map((p, i) => ({
       key: p.key || p.id || `p${i}`,
@@ -215,20 +272,25 @@
     try {
       const w = ensureWorker();
       const id = reqSeq++;
-      return await new Promise((resolve, reject) => {
-        pendingReqs.set(id, { resolve, reject });
+      const res = await new Promise((resolve, reject) => {
+        pendingReqs.set(id, { resolve, reject, epoch: callEpoch });
         w.postMessage({
           id,
           action: 'score_patches',
           payload: {
-            textDir: CLIP_TEXT_DIR,
-            imageDir: CLIP_IMAGE_DIR,
+            textDir: VP_TEXT_DIR,
+            imageDir: VP_IMAGE_DIR,
             patches: workerPatches
           }
         });
       });
+      if (callEpoch !== writerEpoch) throw makeCancelError();
+      return res;
     } catch (err) {
-      console.warn('[VP CLIP] Worker unavailable, using local canvas patch scorer:', err?.message || err);
+      if (err?.cancelled || callEpoch !== writerEpoch) {
+        throw makeCancelError();
+      }
+      console.warn('[Vision Pilot AI] Worker unavailable, using local canvas patch scorer:', err?.message || err);
       return fallbackScoreImagePatches(workerPatches);
     }
   }
@@ -283,7 +345,6 @@
 
     if (l > 0.86 && s < 0.22) return 'white';
     if (l < 0.16) return 'black';
-    // Mint / seafoam green (can have gentle pastel saturation 0.07..0.35)
     if (h >= 85 && h < 175 && s >= 0.07 && l >= 0.42) return 'mint green';
     if (s < 0.13) {
       if (l < 0.44) return 'charcoal gray';
@@ -309,7 +370,6 @@
       const cw = Math.max(4, Math.floor(w * 0.64)), ch = Math.max(4, Math.floor(h * 0.64));
       const data = ctx.getImageData(x0, y0, cw, ch).data;
 
-      // First pass: collect pixels that are brighter than a dark studio backdrop (lum >= 52)
       let r1 = 0, g1 = 0, b1 = 0, n1 = 0;
       let rAll = 0, gAll = 0, bAll = 0, nAll = 0;
       for (let i = 0; i < data.length; i += 16) {
@@ -348,7 +408,6 @@
 
   function cleanTrimWords(words, targetMax) {
     let sliced = words.slice(0, targetMax);
-    // Strip any dangling function words / adjectives at the end so the sentence always ends on a noun/complete word
     while (sliced.length > 26) {
       const lastRaw = sliced[sliced.length - 1].replace(/[.,;:!?]+$/g, '').toLowerCase();
       if (DANGLING_END_WORDS.has(lastRaw)) {
@@ -367,7 +426,6 @@
     if (!/[.!?]$/.test(clean)) clean += '.';
 
     const prefixWords = prefixLabel ? tokenizeWords(`${prefixLabel}:`).length : 0;
-    // Ensure BOTH body words (without prefix) >= minWords AND total words (with prefix) <= maxWords
     const effectiveMinBody = minWords;
     const effectiveMaxBody = Math.max(minWords, maxWords - prefixWords);
 
@@ -423,8 +481,9 @@
   /* ---------- STAGE 1: REFERENCE DESCRIPTION (30 to 50 words) ---------- */
   async function writeReferenceDescription(imgEl, opts = {}) {
     if (!imgEl) return '';
+    const callEpoch = writerEpoch;
     const onProgress = opts.onProgress;
-    emitProgress('VisionPilot AI analyzing reference image with local CLIP…');
+    emitProgress('Vision Pilot AI analyzing reference image…', callEpoch);
 
     const fullCrop = cropToDataUrl(imgEl, { x: 0, y: 0, w: 1, h: 1 });
     const leftCrop = cropToDataUrl(imgEl, { x: 0.14, y: 0.30, w: 0.22, h: 0.52 });
@@ -439,13 +498,16 @@
         { id: 'right', dataUrl: rightCrop.dataUrl }
       ],
       ['subjects', 'colors', 'materials_clothing', 'poses', 'expressions', 'settings_lighting_bg', 'focus_parts'],
-      onProgress
+      onProgress,
+      callEpoch
     );
+    if (callEpoch !== writerEpoch) throw makeCancelError();
 
     const fullS = scores.full?.bankScores || {};
     const leftS = scores.left?.bankScores || {};
     const centerS = scores.center?.bankScores || {};
     const rightS = scores.right?.bankScores || {};
+    imgEl._vpStage1Cache = { fullS, leftS, centerS, rightS, fullCrop, leftCrop, rightCrop };
 
     const topSub = fullS.subjects?.[0] || { id: 'product_container', word: 'product', category: 'product' };
     const topEnv = fullS.settings_lighting_bg?.[0] || {
@@ -459,8 +521,6 @@
     const centerCol = centerCrop.domColor || 'copper-orange';
     const rightCol = rightCrop.domColor || 'charcoal gray';
 
-    // Distinguish 3-phone lineup (Image 1: mint green on left, copper-orange in center, charcoal gray on right)
-    // from single diagonal close-up phone side profile (Image 2: copper-orange across the frame)
     const hasThreeDistinctPhones =
       topSub.category === 'phone' &&
       (leftCol === 'mint green' || rightCol === 'charcoal gray' || (leftCol !== centerCol && centerCol !== rightCol));
@@ -468,12 +528,10 @@
     let template = '';
 
     if (hasThreeDistinctPhones) {
-      // 47 words — complete whole-image sentence
       template =
         `Smartphones in ${leftCol} on the left, ${centerCol} in the center, and ${rightCol} on the right stand upright side by side with matte metallic bodies and raised square camera modules on a glossy dark surface, with no brand visible, inside a dark studio room under soft rim lighting.`;
     } else if (topSub.category === 'phone') {
       const cName = centerCol !== 'neutral' && centerCol !== 'brown' ? centerCol : 'copper-orange';
-      // 41 words — complete whole-image sentence
       template =
         `A ${cName} smartphone tilted diagonally across the center of the frame showcases a brushed metallic side rail with tactile buttons and a raised rear camera housing, with no brand visible, set in a dark studio product room under soft rim lighting.`;
     } else if (
@@ -481,11 +539,9 @@
       (leftS.subjects?.[0]?.category === 'food' && rightS.subjects?.[0]?.category === 'product') ||
       (rightS.subjects?.[0]?.id === 'product_bag')
     ) {
-      // 47 words — complete whole-image sentence
       template =
         `A glazed ceramic plate of fluffy cooked white rice garnished with fried onions and herbs rests on the left beside an upright white and orange packaged product bag on the right, with no brand clearly readable, arranged on a sunlit marble tabletop against a warm cream wall.`;
     } else if (topSub.id === 'family_dining' || topSub.category === 'family') {
-      // 46 words — complete whole-image sentence covering people, actions, table, bowls of food, and background room
       template =
         `A smiling woman in an embroidered white outfit stands beside a wooden table serving rice onto a plate for a seated boy and girl eating food together, with ceramic bowls of food in front of them and a bright sunlit room with windows in the background.`;
     } else if (topSub.category === 'person') {
@@ -507,7 +563,7 @@
     } else if (topSub.category === 'car') {
       const cName = fullS.colors?.[0]?.word || fullCrop.domColor;
       template =
-        `A ${cName} car positioned near the center of the frame with glossy automotive bodywork, clear glass windows, windshield, and alloy wheels is captured in a balanced view within ${topEnv.setting} under ${topEnv.lighting}.`;
+        `A ${cName} car positioned near the center of the frame with glossy automotive bodywork, clear glass windows, windshield, headlights, and alloy wheels is captured in a balanced view within ${topEnv.setting} under ${topEnv.lighting}.`;
     } else if (topSub.category === 'animal') {
       const cName = fullS.colors?.[0]?.word || fullCrop.domColor;
       template =
@@ -523,174 +579,568 @@
       `The background shows ${topEnv.bg}.`,
       'Surface textures, color contrast, and spatial framing remain crisp and balanced.'
     ]);
-    // Guarantee no numbered labels (Person 1, Product 1, Object 1, etc.) ever appear in the Reference Description
     return finalDesc.replace(/\b(Person|Product|Object|Subject|Vehicle|Animal)\s*\d+\b/gi, '$1').replace(/\s+/g, ' ').trim();
+  }
+
+  /* ---------- Helper: Find Subject Box at Marker from Detector ---------- */
+  function findSubjectAtPoint(det, nx, ny) {
+    if (!det || !Array.isArray(det.subjects) || !det.subjects.length) return null;
+    const insideHits = det.subjects
+      .filter(s => s && s.box && nx >= s.box.x && nx <= s.box.x + s.box.w && ny >= s.box.y && ny <= s.box.y + s.box.h)
+      .sort((a, b) => (a.box.w * a.box.h) - (b.box.w * b.box.h));
+    if (insideHits.length) return insideHits[0];
+
+    const nearHits = det.subjects
+      .filter(s => s && s.box && nx >= s.box.x - 0.06 && nx <= s.box.x + s.box.w + 0.06 && ny >= s.box.y - 0.06 && ny <= s.box.y + s.box.h + 0.06)
+      .sort((a, b) => (a.box.w * a.box.h) - (b.box.w * b.box.h));
+    return nearHits[0] || null;
+  }
+
+  // Estimate foreground bounding box when detector has no box for a single car/person subject
+  function estimateForegroundBox(fullCrop) {
+    const data = fullCrop.data;
+    const w = fullCrop.width || 224;
+    const h = fullCrop.height || 224;
+    if (!data || !data.length) return { x: 0.08, y: 0.12, w: 0.84, h: 0.78 };
+    // Sample border color
+    let br = 0, bg = 0, bb = 0, bn = 0;
+    for (let x = 0; x < w; x += 4) {
+      const iTop = x * 4;
+      const iBot = ((h - 1) * w + x) * 4;
+      br += data[iTop] + data[iBot];
+      bg += data[iTop + 1] + data[iBot + 1];
+      bb += data[iTop + 2] + data[iBot + 2];
+      bn += 2;
+    }
+    br /= Math.max(1, bn); bg /= Math.max(1, bn); bb /= Math.max(1, bn);
+    let minX = w, minY = h, maxX = 0, maxY = 0, count = 0;
+    for (let y = Math.floor(h * 0.04); y < Math.floor(h * 0.96); y += 2) {
+      for (let x = Math.floor(w * 0.04); x < Math.floor(w * 0.96); x += 2) {
+        const i = (y * w + x) * 4;
+        const dist = Math.abs(data[i] - br) + Math.abs(data[i + 1] - bg) + Math.abs(data[i + 2] - bb);
+        if (dist > 48) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+          count++;
+        }
+      }
+    }
+    if (count < 40 || maxX <= minX + 20 || maxY <= minY + 20) {
+      return { x: 0.08, y: 0.14, w: 0.84, h: 0.74 };
+    }
+    return {
+      x: clamp(minX / w, 0.02, 0.40),
+      y: clamp(minY / h, 0.02, 0.40),
+      w: clamp((maxX - minX) / w, 0.25, 0.96),
+      h: clamp((maxY - minY) / h, 0.25, 0.96)
+    };
   }
 
   /* ---------- STAGE 2: SINGLE MODE FOCUS DETAIL (30 to 40 words, never over 40) ---------- */
   async function writeSingleFocusDetail(imgEl, x, y, opts = {}) {
     if (!imgEl) return '';
+    const callEpoch = writerEpoch;
     const onProgress = opts.onProgress;
-    emitProgress('VisionPilot AI scoring focus marker region with local CLIP…');
+    emitProgress('Vision Pilot AI scoring focus marker region…', callEpoch);
 
     const nx = clamp(Number(x) || 0.5, 0, 1);
     const ny = clamp(Number(y) || 0.5, 0, 1);
 
-    // Crop around the marker on the ORIGINAL image (never the zoomed preview crop)
+    // Use detector bounding boxes if available (never trigger slow external CDN detector in Single Mode)
+    const det = opts.det || imgEl._vpSingleDetCache || null;
+
+    // Crop multi-scale regions around the marker on the ORIGINAL image (never the zoomed preview crop)
+    const pinBox = {
+      x: clamp(nx - 0.055, 0, 0.89),
+      y: clamp(ny - 0.055, 0, 0.89),
+      w: 0.11,
+      h: 0.11
+    };
     const tightBox = {
-      x: clamp(nx - 0.14, 0, 0.72),
-      y: clamp(ny - 0.14, 0, 0.72),
-      w: 0.28,
-      h: 0.28
+      x: clamp(nx - 0.105, 0, 0.79),
+      y: clamp(ny - 0.105, 0, 0.79),
+      w: 0.21,
+      h: 0.21
     };
     const medBox = {
-      x: clamp(nx - 0.24, 0, 0.52),
-      y: clamp(ny - 0.24, 0, 0.52),
-      w: 0.48,
-      h: 0.48
+      x: clamp(nx - 0.21, 0, 0.58),
+      y: clamp(ny - 0.21, 0, 0.58),
+      w: 0.42,
+      h: 0.42
     };
 
-    const fullCrop = cropToDataUrl(imgEl, { x: 0, y: 0, w: 1, h: 1 });
+    const cachedS1 = imgEl._vpStage1Cache || null;
+    const fullCrop = cachedS1?.fullCrop || cropToDataUrl(imgEl, { x: 0, y: 0, w: 1, h: 1 });
     const medCrop = cropToDataUrl(imgEl, medBox);
     const tightCrop = cropToDataUrl(imgEl, tightBox);
+    const pinCrop = cropToDataUrl(imgEl, pinBox);
+
+    const patchesToScore = cachedS1
+      ? [
+          { id: 'med', dataUrl: medCrop.dataUrl },
+          { id: 'tight', dataUrl: tightCrop.dataUrl },
+          { id: 'pin', dataUrl: pinCrop.dataUrl }
+        ]
+      : [
+          { id: 'full', dataUrl: fullCrop.dataUrl },
+          { id: 'med', dataUrl: medCrop.dataUrl },
+          { id: 'tight', dataUrl: tightCrop.dataUrl },
+          { id: 'pin', dataUrl: pinCrop.dataUrl },
+          { id: 'left_half', dataUrl: cropToDataUrl(imgEl, { x: 0.02, y: 0.15, w: 0.46, h: 0.75 }).dataUrl },
+          { id: 'right_half', dataUrl: cropToDataUrl(imgEl, { x: 0.52, y: 0.15, w: 0.46, h: 0.75 }).dataUrl }
+        ];
 
     const scores = await scoreImagePatches(
-      [
-        { id: 'full', dataUrl: fullCrop.dataUrl },
-        { id: 'med', dataUrl: medCrop.dataUrl },
-        { id: 'tight', dataUrl: tightCrop.dataUrl }
-      ],
-      ['subjects', 'colors', 'materials_clothing', 'poses', 'expressions', 'settings_lighting_bg', 'focus_parts'],
-      onProgress
+      patchesToScore,
+      ['subjects', 'colors', 'materials_clothing', 'poses', 'expressions', 'settings_lighting_bg', 'car_views', 'focus_parts'],
+      onProgress,
+      callEpoch
     );
+    if (callEpoch !== writerEpoch) throw makeCancelError();
 
-    const fullS = scores.full?.bankScores || {};
+    const fullS = cachedS1?.fullS || scores.full?.bankScores || {};
     const medS = scores.med?.bankScores || {};
     const tightS = scores.tight?.bankScores || {};
+    const pinS = scores.pin?.bankScores || {};
+    const leftHalfS = cachedS1?.leftS || scores.left_half?.bankScores || {};
+    const rightHalfS = cachedS1?.rightS || scores.right_half?.bankScores || {};
+
+    const pinStats = analyzePatchStats(pinCrop);
+    const tightStats = analyzePatchStats(tightCrop);
 
     const topFullSub = fullS.subjects?.[0] || { id: 'product_container', word: 'product', category: 'product' };
     const topMedSub = medS.subjects?.[0] || topFullSub;
-    const topTightPart = tightS.focus_parts?.[0] || medS.focus_parts?.[0] || { id: 'product_front_label', cat: 'product' };
+    const topTightSub = tightS.subjects?.[0] || topMedSub;
+    const topPinPart = pinS.focus_parts?.[0] || tightS.focus_parts?.[0] || medS.focus_parts?.[0] || { id: 'product_front_label', cat: 'product' };
+    const topTightPart = tightS.focus_parts?.[0] || topPinPart;
     const topEnv = fullS.settings_lighting_bg?.[0] || {
       lighting: 'soft balanced lighting',
       bg: 'a clean background'
     };
 
+    const detSubj = findSubjectAtPoint(det, nx, ny);
+    const ptInfo = (det && window.VPDetect?.pointInfo) ? window.VPDetect.pointInfo(det, nx, ny, null) : null;
+
     const framePos = nx < 0.36 ? 'on the left side of the frame' : nx > 0.64 ? 'on the right side of the frame' : 'near the center of the frame';
-    // Subject's own left/right for front-facing subjects (viewer's left is subject's right)
     const subjOwnSide = nx < 0.5 ? 'right' : 'left';
-    const localColor = tightCrop.domColor !== 'neutral' ? tightCrop.domColor : (medCrop.domColor || 'warm-toned');
+    const localColor = pinCrop.domColor !== 'neutral'
+      ? pinCrop.domColor
+      : (tightCrop.domColor !== 'neutral' ? tightCrop.domColor : (medCrop.domColor || 'warm-toned'));
 
     let detail = '';
 
     const isFoodAndProductFull =
       topFullSub.id === 'food_and_product' ||
       topFullSub.category === 'product_food' ||
-      topFullSub.category === 'food';
+      (topFullSub.category === 'food' && (rightHalfS.subjects?.[0]?.category === 'product'));
 
-    // 1. Person subject at marker (only when the scene or region actually contains a person, never on food/product studio shots)
-    if (
+    const isCarSubject =
+      detSubj?.type === 'car' ||
+      detSubj?.type === 'vehicle' ||
+      topFullSub.category === 'car' ||
+      topMedSub.category === 'car' ||
+      topTightSub.category === 'car' ||
+      (topPinPart.cat === 'car' && (fullS.subjects || []).some(s => s.category === 'car' && s.prob > 0.15));
+
+    const isPersonSubject =
+      !isCarSubject &&
       !isFoodAndProductFull &&
-      topFullSub.category !== 'phone' &&
       (
-        topFullSub.id === 'family_dining' ||
-        topFullSub.category === 'person' ||
-        topMedSub.category === 'person'
+        detSubj?.type === 'person' ||
+        (
+          topFullSub.category !== 'phone' &&
+          (
+            topFullSub.id === 'family_dining' ||
+            topFullSub.category === 'person' ||
+            topMedSub.category === 'person'
+          )
+        )
       ) &&
-      ny < 0.66
-    ) {
+      !(topFullSub.id === 'family_dining' && ny >= 0.66 && (topPinPart.cat === 'food' || topTightPart.cat === 'food'));
+
+    // 1. CAR / VEHICLE SUBJECT AT MARKER
+    // Explicitly identifies: front left wheel, front right wheel, rear left wheel, rear right wheel,
+    // car window (left/right side window), front windshield, headlight (front left/right headlight), or rear section/taillights.
+    if (isCarSubject) {
+      const carBox = (detSubj && (detSubj.type === 'car' || detSubj.type === 'vehicle') && detSubj.box)
+        ? detSubj.box
+        : estimateForegroundBox(fullCrop);
+      const rx = clamp((nx - carBox.x) / Math.max(0.05, carBox.w), 0, 1);
+      const ry = clamp((ny - carBox.y) / Math.max(0.05, carBox.h), 0, 1);
+
+      const topCarView = fullS.car_views?.[0]?.id || 'car_front_left';
+      const getPartSim = (bankObj, partId) => {
+        const item = (bankObj?.focus_parts || []).find(p => p.id === partId);
+        return item ? item.sim : -1;
+      };
+      const leftFrontScore = Math.max(getPartSim(leftHalfS, 'car_headlight'), getPartSim(leftHalfS, 'car_front_grille_hood'));
+      const rightFrontScore = Math.max(getPartSim(rightHalfS, 'car_headlight'), getPartSim(rightHalfS, 'car_front_grille_hood'));
+      const leftRearScore = getPartSim(leftHalfS, 'car_taillight_rear');
+      const rightRearScore = getPartSim(rightHalfS, 'car_taillight_rear');
+      const leftHalfStats = cachedS1?.leftCrop ? analyzePatchStats(cachedS1.leftCrop) : { headlightScore: 0, taillightScore: 0 };
+      const rightHalfStats = cachedS1?.rightCrop ? analyzePatchStats(cachedS1.rightCrop) : { headlightScore: 0, taillightScore: 0 };
+      const leftFrontSignal = (leftFrontScore - leftRearScore) + (leftHalfStats.headlightScore - rightHalfStats.headlightScore) * 0.8;
+      const rightFrontSignal = (rightFrontScore - rightRearScore) + (rightHalfStats.headlightScore - leftHalfStats.headlightScore) * 0.8;
+
+      let carOrientation = 'front_left'; // front on left, rear on right
+      if (detSubj?.viewCode === 'back') {
+        carOrientation = 'rear_view';
+      } else if (detSubj?.viewCode === 'right_profile' || detSubj?.viewCode === 'front_right') {
+        carOrientation = 'front_right';
+      } else if (detSubj?.viewCode === 'left_profile' || detSubj?.viewCode === 'front_left') {
+        carOrientation = 'front_left';
+      } else if (topCarView === 'car_straight_front' && Math.abs(leftFrontSignal - rightFrontSignal) < 0.008) {
+        carOrientation = 'straight_front';
+      } else if (topCarView === 'car_rear_view' && leftRearScore > leftFrontScore + 0.015 && rightRearScore > rightFrontScore + 0.015) {
+        carOrientation = 'rear_view';
+      } else if (rightFrontSignal > leftFrontSignal + 0.018) {
+        carOrientation = 'front_right';
+      } else {
+        carOrientation = 'front_left';
+      }
+
+      const pinCarPart = pickTopForCat(pinS.focus_parts, 'car') || { id: 'car_door_panel', prob: 0 };
+      const tightCarPart = pickTopForCat(tightS.focus_parts, 'car') || pinCarPart;
+
+      const isWheelSpot =
+        (ry >= 0.44 && (pinCarPart.id === 'car_wheel' || tightCarPart.id === 'car_wheel')) ||
+        (ry >= 0.50 && (pinStats.tireScore > 0.16 || tightStats.tireScore > 0.18) && pinCarPart.id !== 'car_headlight' && pinCarPart.id !== 'car_taillight_rear') ||
+        (ry >= 0.62 && (rx < 0.42 || rx > 0.58));
+
+      const isHeadlightSpot =
+        !isWheelSpot &&
+        ry >= 0.26 &&
+        ry <= 0.68 &&
+        (
+          pinCarPart.id === 'car_headlight' ||
+          (tightCarPart.id === 'car_headlight' && pinStats.headlightScore > 0.06) ||
+          (pinStats.headlightScore > 0.14 && ((carOrientation === 'front_left' && rx < 0.52) || (carOrientation === 'front_right' && rx > 0.48) || carOrientation === 'straight_front'))
+        );
+
+      const isRearSpot =
+        !isWheelSpot &&
+        !isHeadlightSpot &&
+        (
+          pinCarPart.id === 'car_taillight_rear' ||
+          (tightCarPart.id === 'car_taillight_rear' && ry >= 0.24 && ry <= 0.74 && rx > 0.65) ||
+          (carOrientation === 'rear_view' && ry >= 0.28 && ry <= 0.76) ||
+          (carOrientation === 'front_left' && rx > 0.76 && ry >= 0.20 && ry <= 0.72) ||
+          (carOrientation === 'front_right' && rx < 0.24 && ry >= 0.20 && ry <= 0.72)
+        );
+
+      const isWindowOrWindshieldSpot =
+        !isWheelSpot &&
+        !isHeadlightSpot &&
+        !isRearSpot &&
+        rx >= 0.20 &&
+        rx <= 0.76 &&
+        (
+          ry < 0.44 ||
+          pinCarPart.id === 'car_side_window' ||
+          pinCarPart.id === 'car_windshield' ||
+          pinCarPart.id === 'car_rear_window'
+        );
+
+      const carColor = (detSubj?.colorName && detSubj.colorName !== 'neutral')
+        ? detSubj.colorName
+        : (fullS.colors?.[0]?.word || fullCrop.domColor || localColor);
+
+      let carPartPhrase = '';
+      let carExtraNote = 'showing glossy automotive bodywork, crisp panel contours, and clean surface reflections';
+
+      if (isWheelSpot) {
+        let wheelName = '';
+        if (carOrientation === 'straight_front') {
+          wheelName = rx < 0.5 ? "the car's front left wheel" : "the car's front right wheel";
+        } else if (carOrientation === 'rear_view') {
+          wheelName = rx < 0.5 ? "the car's rear left wheel" : "the car's rear right wheel";
+        } else if (carOrientation === 'front_right') {
+          // Car faces right: rear is on the left (rx < 0.46), front is on the right (rx >= 0.46)
+          if (rx < 0.46) {
+            wheelName = "the car's rear right wheel";
+          } else if (rx > 0.80) {
+            wheelName = "the car's front left wheel";
+          } else {
+            wheelName = "the car's front right wheel";
+          }
+        } else {
+          // Car faces left (most common 3/4 or side profile): front is on the left (rx < 0.54), rear is on the right (rx >= 0.54)
+          if (rx >= 0.54) {
+            wheelName = "the car's rear left wheel";
+          } else {
+            wheelName = "the car's front left wheel";
+          }
+        }
+        carPartPhrase = wheelName;
+        carExtraNote = 'showing the dark rubber tire tread, metallic alloy wheel rim, spokes, and wheel arch contour';
+      } else if (isHeadlightSpot) {
+        let hlSide = 'front left';
+        if (carOrientation === 'straight_front') {
+          hlSide = rx < 0.5 ? 'front left' : 'front right';
+        } else if (carOrientation === 'front_right') {
+          hlSide = rx > 0.90 ? 'front left' : 'front right';
+        } else {
+          hlSide = rx < 0.06 ? 'front right' : 'front left';
+        }
+        carPartPhrase = `the car's ${hlSide} headlight`;
+        carExtraNote = 'showing the clear projector headlamp lens, internal LED housing, and surrounding front fender bezel';
+      } else if (isRearSpot) {
+        if (pinStats.taillightScore > 0.04 || pinCarPart.id === 'car_taillight_rear') {
+          carPartPhrase = "the car's rear section, taillight lamp, and rear bumper";
+        } else {
+          carPartPhrase = "the car's rear section, trunk panel, and rear bumper";
+        }
+        carExtraNote = 'showing sculpted rear bodywork, taillight housing detail, and lower rear bumper trim';
+      } else if (isWindowOrWindshieldSpot) {
+        if (
+          pinCarPart.id === 'car_windshield' ||
+          (carOrientation === 'straight_front' && rx > 0.20 && rx < 0.80) ||
+          (carOrientation === 'front_left' && rx < 0.42 && (tightCarPart.id === 'car_windshield' || rx < 0.34)) ||
+          (carOrientation === 'front_right' && rx > 0.58 && (tightCarPart.id === 'car_windshield' || rx > 0.66))
+        ) {
+          carPartPhrase = "the car's front windshield and glass cabin";
+          carExtraNote = 'showing smooth laminated windshield glass, A-pillar frame trim, and clean sky reflections';
+        } else if (pinCarPart.id === 'car_rear_window' || carOrientation === 'rear_view') {
+          carPartPhrase = "the car's rear window glass";
+          carExtraNote = 'showing the sloped rear cabin glass, roofline frame, and smooth surface reflections';
+        } else {
+          const winSide = carOrientation === 'front_right' ? 'right side window' : (carOrientation === 'front_left' ? 'left side window' : `${ rx < 0.5 ? 'left' : 'right' } side window`);
+          carPartPhrase = `the car's ${winSide}`;
+          carExtraNote = 'showing tinted automotive door glass, window pillar trim, and crisp roofline framing';
+        }
+      } else if (
+        pinCarPart.id === 'car_front_grille_hood' ||
+        (carOrientation === 'front_left' && rx < 0.42) ||
+        (carOrientation === 'front_right' && rx > 0.58) ||
+        carOrientation === 'straight_front'
+      ) {
+        carPartPhrase = "the car's front hood, radiator grille, and front bumper";
+        carExtraNote = 'showing painted front hood lines, intake grille texture, and lower front bumper styling';
+      } else {
+        const doorSide = carOrientation === 'front_right' ? 'right' : 'left';
+        carPartPhrase = `the car's ${doorSide} side door panel and body trim`;
+        carExtraNote = 'showing glossy automotive paintwork, sculpted side character lines, and clean reflections';
+      }
+
+      detail =
+        `Focused on ${carPartPhrase} of the ${carColor} car ${framePos}, ${carExtraNote} under ${topEnv.lighting}, with the brand emblem not clearly visible.`;
+    }
+    // 2. PERSON / HUMAN SUBJECT AT MARKER
+    // Explicitly identifies: head/hair, left/right eye, nose, mouth, ear, left hand, right hand, left/right arm, chest/shoulder, left/right leg, or left/right foot.
+    else if (isPersonSubject) {
       let personNoun = 'person';
       if (topFullSub.id === 'family_dining') {
         if (nx < 0.40) personNoun = 'standing woman';
         else if (nx < 0.64) personNoun = 'seated young boy';
         else personNoun = 'seated young girl';
+      } else if (detSubj?.subtype && /woman|man|boy|girl|baby|elderly/i.test(detSubj.subtype)) {
+        personNoun = detSubj.subtype;
       } else if (['woman', 'man', 'boy', 'girl', 'baby', 'elderly'].includes(topMedSub.id)) {
         personNoun = topMedSub.word;
       }
 
-      const localRelX = ((nx - medBox.x) / medBox.w);
-      const anatomicalSide = localRelX < 0.5 ? 'right' : 'left';
+      const pBox = (detSubj && detSubj.type === 'person' && detSubj.box)
+        ? detSubj.box
+        : (topFullSub.id === 'family_dining'
+            ? (nx < 0.40 ? { x: 0.03, y: 0.08, w: 0.42, h: 0.72 } : nx < 0.64 ? { x: 0.40, y: 0.27, w: 0.23, h: 0.42 } : { x: 0.64, y: 0.24, w: 0.34, h: 0.55 })
+            : estimateForegroundBox(fullCrop));
 
-      let exactPart = `the ${personNoun}'s ${anatomicalSide} shoulder and upper torso`;
-      if (topTightPart.id === 'person_face_eyes' || ny < 0.36) {
-        if (ny < 0.20) exactPart = `the ${personNoun}'s hair and upper head`;
-        else if (Math.abs(localRelX - 0.5) < 0.08) exactPart = `the ${personNoun}'s nose, mouth, and warm smile`;
-        else exactPart = `the ${personNoun}'s ${anatomicalSide} eye, cheek, and ear`;
-      } else if (topTightPart.id === 'person_hand_spoon' || (ny >= 0.42 && ny <= 0.65 && nx >= 0.25 && nx <= 0.58)) {
-        exactPart = `the ${personNoun}'s ${anatomicalSide} hand and wrist`;
-      } else if (topTightPart.id === 'person_clothing') {
-        exactPart = `the ${personNoun}'s ${anatomicalSide} sleeve and garment fabric`;
+      const fBox = (detSubj && detSubj.face && detSubj.face.box) ? detSubj.face.box : null;
+      const rx = clamp((nx - pBox.x) / Math.max(0.04, pBox.w), 0, 1);
+      const ry = clamp((ny - pBox.y) / Math.max(0.04, pBox.h), 0, 1);
+
+      // Use face midline when available so an outstretched arm never shifts the body's left/right midline
+      const midlineX = fBox ? (fBox.x + fBox.w * 0.5) : (pBox.x + pBox.w * 0.5);
+      const isBackView = detSubj?.viewCode === 'back';
+      // Subject's own left and right (for front-facing person, viewer's left is person's right, viewer's right is person's left;
+      // for the right-facing standing woman serving food in family_dining, her foreground reaching arm at nx <= 0.365 is her right hand/arm)
+      const isRightFacingServingWoman = topFullSub.id === 'family_dining' && nx < 0.40 && ry > 0.34;
+      const anatomicalSide = isRightFacingServingWoman
+        ? (nx <= 0.365 ? 'right' : 'left')
+        : isBackView
+          ? (nx < midlineX ? 'left' : 'right')
+          : (nx < midlineX ? 'right' : 'left');
+
+      const faceTop = fBox ? clamp((fBox.y - pBox.y) / pBox.h, 0, 0.30) : 0.04;
+      const faceBottom = fBox ? clamp((fBox.y + fBox.h - pBox.y) / pBox.h, 0.12, 0.42) : 0.24;
+      const isHalfBodyOrSeated = Boolean(
+        detSubj?.seatedOnChair ||
+        /seated|serving/i.test(detSubj?.pose || '') ||
+        topFullSub.id === 'family_dining' ||
+        (pBox.h < 0.58 && (pBox.y + pBox.h) < 0.84)
+      );
+
+      const pinPersonPart = pickTopForCat(pinS.focus_parts, 'person') || { id: 'person_clothing', prob: 0 };
+      const tightPersonPart = pickTopForCat(tightS.focus_parts, 'person') || pinPersonPart;
+
+      let exactPart = '';
+      let surfaceNote = '';
+
+      // A) Head, Hair, Face, Eyes, Nose, Mouth, Ear
+      const inFaceHeight = ry <= faceBottom || (fBox && ny <= fBox.y + fBox.h * 1.06);
+      if (
+        inFaceHeight ||
+        (ry < 0.28 && ['person_hair', 'person_face_eyes', 'person_nose_mouth', 'person_ear'].includes(pinPersonPart.id))
+      ) {
+        if (
+          ry < Math.max(0.09, faceTop + 0.05) ||
+          (fBox && ny < fBox.y + fBox.h * 0.18) ||
+          pinPersonPart.id === 'person_hair'
+        ) {
+          exactPart = `the ${personNoun}'s head and hair`;
+          surfaceNote = 'showing natural hair strands, crown contour, and soft surface highlights on the head';
+        } else if (
+          pinPersonPart.id === 'person_ear' ||
+          (fBox && (nx < fBox.x + fBox.w * 0.12 || nx > fBox.x + fBox.w * 0.88)) ||
+          (!fBox && (rx < 0.24 || rx > 0.76))
+        ) {
+          exactPart = `the ${personNoun}'s ${anatomicalSide} ear and side of the head`;
+          surfaceNote = 'showing the ear contour, temple, and hairline detail on the side of the head';
+        } else if (
+          pinPersonPart.id === 'person_nose_mouth' ||
+          (fBox && ny > fBox.y + fBox.h * 0.55) ||
+          (!fBox && ry > (faceTop + faceBottom) * 0.58)
+        ) {
+          if (Math.abs(nx - midlineX) < (fBox ? fBox.w * 0.22 : pBox.w * 0.14) && ry < faceBottom * 0.78) {
+            exactPart = `the ${personNoun}'s nose and mouth on the head`;
+          } else {
+            exactPart = `the ${personNoun}'s mouth, lips, and smile on the head`;
+          }
+          surfaceNote = 'showing clear facial expression, natural skin tone, and lip and cheek contours';
+        } else {
+          exactPart = `the ${personNoun}'s ${anatomicalSide} eye and upper face on the head`;
+          surfaceNote = 'showing clear eye detail, eyebrow arch, and natural facial skin texture';
+        }
+      }
+      // B) Left Hand / Right Hand
+      else if (
+        pinPersonPart.id === 'person_hand_fingers' ||
+        pinPersonPart.id === 'person_hand_spoon' ||
+        tightPersonPart.id === 'person_hand_fingers' ||
+        tightPersonPart.id === 'person_hand_spoon' ||
+        (ptInfo?.part && /\bhand\b/i.test(ptInfo.part)) ||
+        (
+          ry > faceBottom + 0.06 &&
+          ry < (isHalfBodyOrSeated ? 0.96 : 0.66) &&
+          (
+            ((rx < 0.35 || rx > 0.65) && ry >= 0.38) ||
+            (pinStats.skinRatio > 0.09 && ry >= faceBottom + 0.10)
+          )
+        )
+      ) {
+        exactPart = `the ${personNoun}'s ${anatomicalSide} hand`;
+        surfaceNote = `clearly marking the ${personNoun}'s ${anatomicalSide} hand, fingers, wrist, and natural skin texture`;
+      }
+      // C) Left Leg / Right Leg / Foot (for full-body or lower-body views)
+      else if (
+        !isHalfBodyOrSeated &&
+        (
+          ry >= 0.60 ||
+          pinPersonPart.id === 'person_leg' ||
+          pinPersonPart.id === 'person_foot' ||
+          tightPersonPart.id === 'person_leg' ||
+          tightPersonPart.id === 'person_foot' ||
+          (ptInfo?.part && /\b(leg|foot)\b/i.test(ptInfo.part))
+        )
+      ) {
+        if (ry >= 0.86 || pinPersonPart.id === 'person_foot' || (ptInfo?.part && /\bfoot\b/i.test(ptInfo.part))) {
+          exactPart = `the ${personNoun}'s ${anatomicalSide} foot and lower leg`;
+          surfaceNote = `showing the ${personNoun}'s ${anatomicalSide} foot, ankle, and lower leg posture`;
+        } else {
+          exactPart = `the ${personNoun}'s ${anatomicalSide} leg`;
+          surfaceNote = `showing the ${personNoun}'s ${anatomicalSide} leg, garment drape, and lower body alignment`;
+        }
+      }
+      // D) Left Arm / Right Arm & Sleeve
+      else if (
+        pinPersonPart.id === 'person_arm_sleeve' ||
+        tightPersonPart.id === 'person_arm_sleeve' ||
+        (ry > faceBottom + 0.04 && ry < 0.58 && (rx < 0.32 || rx > 0.68))
+      ) {
+        exactPart = `the ${personNoun}'s ${anatomicalSide} arm and sleeve`;
+        surfaceNote = `showing the ${personNoun}'s ${anatomicalSide} arm posture and fabric sleeve folds`;
+      }
+      // E) Shoulder / Chest / Torso
+      else {
+        if (ry < faceBottom + 0.16) {
+          exactPart = `the ${personNoun}'s ${anatomicalSide} shoulder and upper chest`;
+        } else {
+          exactPart = `the ${personNoun}'s ${anatomicalSide} chest and torso`;
+        }
+        const clothWord = pickTopForCat(medS.materials_clothing, 'person')?.word || 'tailored fabric clothing with natural folds';
+        surfaceNote = `showing ${clothWord} and clean fabric detail`;
       }
 
-      const clothWord = pickTopForCat(medS.materials_clothing, 'person')?.word || 'white fabric clothing with natural folds';
-      // 36 words — complete sentence
       detail =
-        `Focused on ${exactPart} ${framePos}, showing ${localColor} tones and ${clothWord} with clear skin and fabric detail under warm natural daylight.`;
+        `Focused on ${exactPart} ${framePos}, ${surfaceNote} with ${localColor} tones under balanced natural lighting.`;
     }
-    // 2. Smartphone subject at marker
-    else if (topFullSub.category === 'phone' || topMedSub.category === 'phone' || topTightPart.cat === 'phone') {
+    // 3. SMARTPHONE SUBJECT AT MARKER
+    else if (detSubj?.type === 'phone' || topFullSub.category === 'phone' || topMedSub.category === 'phone' || topPinPart.cat === 'phone') {
       const phoneCol = localColor === 'brown' ? 'copper-orange' : localColor;
       let phonePart = `the smartphone's ${subjOwnSide} side rail and matte rear panel`;
-      if (topTightPart.id === 'phone_side_buttons' || (nx > 0.44 && nx < 0.62 && ny >= 0.42)) {
+      if (topPinPart.id === 'phone_side_buttons' || topTightPart.id === 'phone_side_buttons' || (nx > 0.44 && nx < 0.62 && ny >= 0.42)) {
         phonePart = `the smartphone's brushed metallic side frame and tactile buttons`;
-      } else if (topTightPart.id === 'phone_cam_module' || ny < 0.46) {
+      } else if (topPinPart.id === 'phone_cam_module' || topTightPart.id === 'phone_cam_module' || ny < 0.46) {
         phonePart = `the smartphone's raised rear camera module and optical lenses`;
       }
-      // 35 words — complete sentence
       detail =
         `Focused on ${phonePart} of the ${phoneCol} smartphone ${framePos}, featuring a sleek anodized metallic finish and crisp edge bevels under soft studio rim lighting, with no brand visible.`;
     }
-    // 3. Packaged product bag or retail container at marker (e.g., Image 3 right side)
+    // 4. PACKAGED PRODUCT BAG OR RETAIL CONTAINER AT MARKER
     else if (
       (isFoodAndProductFull && nx >= 0.48) ||
+      topPinPart.cat === 'product' ||
       topTightPart.cat === 'product' ||
       topMedSub.id === 'product_bag' ||
       topMedSub.id === 'product_container'
     ) {
       let prodPart = `the packaged product bag's front label panel on its ${subjOwnSide} side`;
-      if (topTightPart.id === 'pouch_top_orange' || ny < 0.22) {
+      if (topPinPart.id === 'pouch_top_orange' || topTightPart.id === 'pouch_top_orange' || ny < 0.22) {
         prodPart = `the packaged product bag's bright orange upper seal header`;
-      } else if (topTightPart.id === 'pouch_building_art' || (ny >= 0.22 && ny < 0.48)) {
+      } else if (topPinPart.id === 'pouch_building_art' || topTightPart.id === 'pouch_building_art' || (ny >= 0.22 && ny < 0.48)) {
         prodPart = `the packaged product bag's illustrated front panel on its ${subjOwnSide} side`;
-      } else if (topTightPart.id === 'pouch_dark_base' || ny > 0.68) {
+      } else if (topPinPart.id === 'pouch_dark_base' || topTightPart.id === 'pouch_dark_base' || ny > 0.68) {
         prodPart = `the packaged product bag's dark patterned bottom gusset base`;
       }
-      // 36 words — complete sentence
       detail =
         `Focused on ${prodPart} of the white and orange standing product pouch ${framePos}, showing matte printed packaging and crisp graphic lines under warm sunlight, with no brand readable.`;
     }
-    // 4. Food plate / serving bowl at marker (e.g., Image 3 left side or Image 4 table)
+    // 5. FOOD PLATE / SERVING BOWL AT MARKER
     else if (
       (isFoodAndProductFull && nx < 0.48) ||
+      topPinPart.cat === 'food' ||
       topTightPart.cat === 'food' ||
       topMedSub.category === 'food' ||
       (topFullSub.id === 'family_dining' && ny >= 0.66)
     ) {
       const dishSide = nx < 0.35 ? 'left portion' : 'central portion';
-      // 37 words — complete sentence
       detail =
         `Focused on the ${dishSide} of the glazed ceramic plate of cooked white rice ${framePos}, showing fluffy white grains, golden fried onion garnish, and fresh green herbs on the tabletop, with no brand visible.`;
     }
-    // 5. Car subject at marker
-    else if (topFullSub.category === 'car' || topMedSub.category === 'car') {
-      const carPart = ny > 0.58
-        ? `the car's front-${subjOwnSide} alloy wheel and lower fender`
-        : ny < 0.42
-        ? `the car's windshield and ${subjOwnSide} side window glass`
-        : `the car's ${subjOwnSide} body panel and exterior trim`;
-      detail =
-        `Focused on ${carPart} of the ${localColor} car ${framePos}, showing glossy automotive paintwork, crisp body lines, and clean reflections under ${topEnv.lighting}, with the brand emblem not clearly visible.`;
-    }
-    // 6. Animal subject at marker
-    else if (topFullSub.category === 'animal' || topMedSub.category === 'animal') {
-      const animalNoun = topMedSub.word || 'animal';
-      const animalPart = ny < 0.48
-        ? `the ${animalNoun}'s ${subjOwnSide} eye, nose, and mouth`
-        : `the ${animalNoun}'s front-${subjOwnSide} leg and coat`;
+    // 6. ANIMAL SUBJECT AT MARKER
+    else if (detSubj?.type === 'animal' || topFullSub.category === 'animal' || topMedSub.category === 'animal') {
+      const aBox = (detSubj && detSubj.type === 'animal' && detSubj.box) ? detSubj.box : estimateForegroundBox(fullCrop);
+      const rx = clamp((nx - aBox.x) / Math.max(0.05, aBox.w), 0, 1);
+      const ry = clamp((ny - aBox.y) / Math.max(0.05, aBox.h), 0, 1);
+      const animalSide = rx < 0.5 ? 'right' : 'left';
+      const animalNoun = topMedSub.word || detSubj?.subtype || 'animal';
+      let animalPart = `the ${animalNoun}'s ${animalSide} eye, nose, and face`;
+      if (ry < 0.22) {
+        animalPart = `the ${animalNoun}'s ${animalSide} ear and upper head`;
+      } else if (ry < 0.52) {
+        animalPart = pinS.focus_parts?.[0]?.id === 'animal_nose_mouth'
+          ? `the ${animalNoun}'s nose, mouth, and whiskers`
+          : `the ${animalNoun}'s ${animalSide} eye and face`;
+      } else {
+        const legFrontRear = (rx < 0.35 || rx > 0.65) ? 'rear' : 'front';
+        animalPart = `the ${animalNoun}'s ${legFrontRear} ${animalSide} leg and paw`;
+      }
       detail =
         `Focused on ${animalPart} ${framePos}, showing ${localColor} fur texture, sharp whiskers, and natural anatomical contours under ${topEnv.lighting} against ${topEnv.bg}.`;
     }
-    // 7. General product / object fallback
+    // 7. GENERAL PRODUCT / OBJECT FALLBACK
     else {
       detail =
         `Focused on the ${subjOwnSide} surface detail of the ${localColor} ${topMedSub.word || 'product'} ${framePos}, showing clean material texture, defined edges, and balanced highlights under ${topEnv.lighting}, while the brand is not visible.`;
@@ -704,12 +1154,13 @@
   /* ---------- STAGE 3: MULTIPLE MODE (30 to 40 words per detected subject box) ---------- */
   async function writeMultipleModeDetails(imgEl, subjects, opts = {}) {
     if (!imgEl) return { byKey: {}, byLabel: {}, refinedRawSubjects: null };
+    const callEpoch = writerEpoch;
     const onProgress = opts.onProgress;
-    emitProgress('VisionPilot AI scoring Multiple Mode subject regions with local CLIP…');
+    emitProgress('Vision Pilot AI scoring Multiple Mode subject regions…', callEpoch);
 
     const rawSubs = Array.isArray(subjects) ? subjects.map(s => ({ ...s })) : [];
 
-    // Score full image + key regions so CLIP can verify/refine subject boxes (e.g. Image 3 product bag & Image 4 family dining)
+    // Score full image + key regions so Vision Pilot AI can verify/refine subject boxes
     const fullCrop = cropToDataUrl(imgEl, { x: 0, y: 0, w: 1, h: 1 });
     const leftFoodCrop = cropToDataUrl(imgEl, { x: 0.08, y: 0.48, w: 0.50, h: 0.46 });
     const rightProdCrop = cropToDataUrl(imgEl, { x: 0.48, y: 0.02, w: 0.42, h: 0.84 });
@@ -735,17 +1186,15 @@
     const scores = await scoreImagePatches(
       patchList,
       ['subjects', 'colors', 'materials_clothing', 'poses', 'expressions', 'settings_lighting_bg', 'focus_parts'],
-      onProgress
+      onProgress,
+      callEpoch
     );
+    if (callEpoch !== writerEpoch) throw makeCancelError();
 
     const fullS = scores.full?.bankScores || {};
     const leftFoodS = scores.left_food?.bankScores || {};
     const rightProdS = scores.right_prod?.bankScores || {};
     const topFullSub = fullS.subjects?.[0] || { id: 'product_container', word: 'product', category: 'product' };
-    const topEnv = fullS.settings_lighting_bg?.[0] || {
-      lighting: 'soft balanced lighting',
-      bg: 'a clean background'
-    };
 
     const isFoodAndProductBag =
       topFullSub.id === 'food_and_product' ||
@@ -757,7 +1206,6 @@
     let refinedRawSubjects = null;
 
     if (isFoodAndProductBag) {
-      // Cleanly box BOTH Product 1 (plate of cooked rice on left) and Product 2 (standing packaged product bag on right)
       const plateBox = { x: 0.125, y: 0.56, w: 0.49, h: 0.36 };
       const bagBox = { x: 0.525, y: 0.04, w: 0.325, h: 0.795 };
       refinedRawSubjects = [
@@ -797,7 +1245,6 @@
         }
       ];
     } else if (isFamilyDining) {
-      // Cleanly box the 3 family members and the main tabletop food dishes without noisy wall-frame false positives
       const womanBox = { x: 0.03, y: 0.08, w: 0.42, h: 0.72 };
       const boyBox = { x: 0.40, y: 0.27, w: 0.23, h: 0.42 };
       const girlBox = { x: 0.64, y: 0.24, w: 0.34, h: 0.55 };
@@ -930,16 +1377,13 @@
       const topSub = subScores.subjects?.[0] || fullS.subjects?.[0] || { word: s.subtype || 'subject', category: s.type || 'product' };
       const topPart = subScores.focus_parts?.[0] || null;
       const colName = patchDomColor || subScores.colors?.[0]?.word || 'natural-toned';
-      const labelPrefix = s.label || `Subject ${idx + 1}`;
 
       let body = '';
 
       if (isFoodAndProductBag && idx === 0) {
-        // 35 words body (37 words with "Product 1:")
         body =
           `A white and gold-rimmed ceramic plate ${posPhrase} filled with fluffy cooked white rice, golden fried onions, and fresh green herbs on a sunlit marble tabletop, with no brand visible on the dish.`;
       } else if (isFoodAndProductBag && idx === 1) {
-        // 35 words body (37 words with "Product 2:")
         body =
           `A standing white and bright orange packaged product bag ${posPhrase} featuring an architectural sketch illustration, printed front label, and dark patterned base on the tabletop, while the brand is not clearly readable.`;
       } else if (isFamilyDining && s.type === 'person') {
@@ -972,7 +1416,6 @@
         const partNote = (topPart?.id === 'phone_side_buttons' || activeSubs.length === 1)
           ? 'a slim metallic side rail with tactile buttons and a raised camera housing'
           : 'a sleek matte body with a raised square rear camera module and circular lenses';
-        // 35 words body (37 words with "Product N:")
         body =
           `A ${phoneColor} smartphone ${posPhrase} featuring ${partNote}, angled cleanly under soft studio rim lighting against a dark reflective backdrop, with no brand visible.`;
       } else if (topSub.category === 'food' || topPart?.id === 'rice_plate_food' || /bowl|plate|rice/i.test(s.cls || s.subtype || '')) {
@@ -980,7 +1423,7 @@
           `A ${colName} ceramic dish of cooked food ${posPhrase}, featuring savory ingredients and a smooth glazed rim on the tabletop under soft natural daylight, with no brand visible on the dish.`;
       } else if (s.type === 'car' || topSub.category === 'car') {
         body =
-          `A ${colName} car ${posPhrase} featuring glossy painted automotive bodywork, clear glass windows, windshield, and alloy wheels, positioned in a clean eye-level view under balanced lighting, with the brand emblem not visible.`;
+          `A ${colName} car ${posPhrase} featuring glossy painted automotive bodywork, clear glass windows, windshield, headlights, and alloy wheels, positioned in a clean eye-level view under balanced lighting, with the brand emblem not visible.`;
       } else if (s.type === 'animal' || topSub.category === 'animal') {
         body =
           `A ${colName} ${topSub.word || 'animal'} ${posPhrase} featuring soft natural fur texture, clear eyes, nose, mouth, and legs in an alert posture under balanced lighting against a clean background.`;
@@ -1004,12 +1447,17 @@
     return { byKey, byLabel, refinedRawSubjects };
   }
 
-  window.VPClipWriter = {
-    CLIP_TEXT_DIR,
-    CLIP_IMAGE_DIR,
+  const writerApi = {
+    VP_TEXT_DIR,
+    VP_IMAGE_DIR,
     ensureLoaded,
+    cancelAll,
+    getEpoch,
     writeReferenceDescription,
     writeSingleFocusDetail,
     writeMultipleModeDetails
   };
+
+  window.VPLocalWriter = writerApi;
+  window.VisionPilotAIWriter = writerApi;
 })();

@@ -1,20 +1,20 @@
-/* VisionPilot — Local CLIP Web Worker (clip-text/clip-worker.js)
- * Loads Transformers.js + local quantized CLIP Text & Vision models strictly from:
- *   - ../clip-text/ (text_model_quantized.onnx, tokenizer.json, tokenizer_config.json, special_tokens_map.json, config.json)
- *   - ../clip-image/ (vision_model_quantized.onnx, preprocessor_config.json, config.json)
+/* VisionPilot — Local Vision Pilot AI Web Worker
+ * Loads Transformers.js + local quantized Vision Pilot AI Text & Vision models strictly from local folders.
  * Remote models are disabled. Runs in a Web Worker with WebGPU when available and WASM fallback.
  */
 import {
   env,
   AutoTokenizer,
-  CLIPTextModelWithProjection,
+  VisionPilotAITextModel,
   AutoProcessor,
-  CLIPVisionModelWithProjection,
+  VisionPilotAIVisionModel,
   RawImage
 } from './transformers.min.js';
 
 const WORKER_DIR = new URL('./', self.location.href).href;
 const ROOT_DIR = new URL('../', self.location.href).href;
+const DEFAULT_TEXT_DIR = WORKER_DIR.slice(ROOT_DIR.length).replace(/^\/+|\/+$/g, '');
+const DEFAULT_IMAGE_DIR = DEFAULT_TEXT_DIR.replace(/-text$/, '-image');
 
 // Strictly local model loading only — no remote hosts or external links
 env.allowRemoteModels = false;
@@ -30,18 +30,16 @@ if (env.backends && env.backends.onnx && env.backends.onnx.wasm) {
     : 1;
 }
 
-// Intercept worker fetch to enforce local-only loading from clip-text and clip-image and report byte progress
+// Intercept worker fetch to enforce local-only loading and report byte progress
 const nativeFetch = self.fetch.bind(self);
-self.fetch = async function localClipFetch(input, init) {
+self.fetch = async function localVisionPilotAIFetch(input, init) {
   let urlStr = typeof input === 'string' ? input : (input && input.url) || String(input);
   // Rewrite any /onnx/ subpath to direct folder path if needed
-  urlStr = urlStr
-    .replace(/\/clip-text\/onnx\//g, '/clip-text/')
-    .replace(/\/clip-image\/onnx\//g, '/clip-image/');
+  urlStr = urlStr.replace(/\/onnx\//g, '/');
 
   const resolved = new URL(urlStr, ROOT_DIR);
   if (resolved.origin !== self.location.origin && resolved.protocol !== 'blob:' && resolved.protocol !== 'data:') {
-    throw new Error('External network access is disabled for local CLIP models.');
+    throw new Error('External network access is disabled for local Vision Pilot AI models.');
   }
 
   const res = await nativeFetch(resolved.href, init);
@@ -67,7 +65,7 @@ self.fetch = async function localClipFetch(input, init) {
           loaded: total,
           total,
           percent: 100,
-          message: `Loading local CLIP model (${fileName})… 100%`
+          message: `Loading Vision Pilot AI model (${fileName})… 100%`
         });
         controller.close();
         return;
@@ -84,7 +82,7 @@ self.fetch = async function localClipFetch(input, init) {
           loaded,
           total,
           percent: pct,
-          message: `Loading local CLIP model (${fileName})… ${pct}%`
+          message: `Loading Vision Pilot AI model (${fileName})… ${pct}%`
         });
       }
       controller.enqueue(value);
@@ -98,7 +96,7 @@ self.fetch = async function localClipFetch(input, init) {
   });
 };
 
-/* ---------- Candidate Word / Phrase Banks for CLIP Zero-Shot Scoring ---------- */
+/* ---------- Candidate Word / Phrase Banks for Vision Pilot AI Zero-Shot Scoring ---------- */
 const PROMPT_BANKS = {
   subjects: [
     { id: 'multiple_phones', word: 'smartphones', noun: 'smartphones', category: 'phone', text: 'a product photo of multiple smartphones standing side by side' },
@@ -116,7 +114,7 @@ const PROMPT_BANKS = {
     { id: 'baby', word: 'baby', noun: 'baby', category: 'person', text: 'a photo of a baby or infant' },
     { id: 'elderly', word: 'elderly person', noun: 'elderly person', category: 'person', text: 'a photo of an elderly person' },
     { id: 'group', word: 'group of people', noun: 'group of people', category: 'person', text: 'a photo of a group of people together' },
-    { id: 'car', word: 'car', noun: 'car', category: 'car', text: 'a photo of a car or automobile' },
+    { id: 'car', word: 'car', noun: 'car', category: 'car', text: 'a photo of a car, sedan, sports car, SUV, or automobile' },
     { id: 'cat', word: 'cat', noun: 'cat', category: 'animal', text: 'a photo of a domestic cat' },
     { id: 'dog', word: 'dog', noun: 'dog', category: 'animal', text: 'a photo of a dog' },
     { id: 'animal', word: 'animal', noun: 'animal', category: 'animal', text: 'a photo of an animal in focus' },
@@ -206,21 +204,54 @@ const PROMPT_BANKS = {
     }
   ],
 
+  car_views: [
+    { id: 'car_front_left', text: 'a car angled with its front headlights and bumper on the left side and rear trunk on the right side' },
+    { id: 'car_front_right', text: 'a car angled with its front headlights and bumper on the right side and rear trunk on the left side' },
+    { id: 'car_straight_front', text: 'the straight front view of a car showing both front headlights, front grille, and front windshield' },
+    { id: 'car_rear_view', text: 'the back rear view of a car showing red taillights, rear trunk lid, and rear bumper' }
+  ],
+
   focus_parts: [
+    // Phone parts
     { id: 'phone_cam_module', cat: 'phone', text: 'a close-up of a smartphone rear camera module with circular optical lenses and flash ring' },
     { id: 'phone_side_buttons', cat: 'phone', text: 'a macro close-up of a smartphone metallic side frame and raised volume and power buttons' },
     { id: 'phone_rear_body', cat: 'phone', text: 'the smooth matte rear body panel of a smartphone' },
+
+    // Packaged product & food parts
     { id: 'pouch_top_orange', cat: 'product', text: 'the bright orange top header seal band of a packaged product pouch' },
     { id: 'pouch_building_art', cat: 'product', text: 'an architectural sketch illustration printed on the white front panel of a packaged product bag' },
     { id: 'pouch_label_text', cat: 'product', text: 'printed typography and logo emblem on the lower front panel of a white product package' },
     { id: 'pouch_dark_base', cat: 'product', text: 'the dark brown geometric patterned bottom border of a standing product pouch' },
     { id: 'rice_plate_food', cat: 'food', text: 'fluffy cooked white rice garnished with fried onions and green herbs on a ceramic plate' },
+    { id: 'table_curry_bowl', cat: 'food', text: 'a ceramic bowl of curry or cooked food resting on a dark wooden dining table' },
     { id: 'promo_text_wall', cat: 'bg', text: 'decorative promotional headline text on a warm sunlit cream background wall' },
-    { id: 'person_face_eyes', cat: 'person', text: 'a close-up of a person face, eyes, nose, and warm smile' },
-    { id: 'person_hair', cat: 'person', text: 'a close-up of dark hair on a person head' },
-    { id: 'person_hand_spoon', cat: 'person', text: 'a person hand holding a spoon serving rice over a plate' },
-    { id: 'person_clothing', cat: 'person', text: 'white fabric clothing with subtle embroidery and folds on a person torso or sleeve' },
-    { id: 'table_curry_bowl', cat: 'food', text: 'a ceramic bowl of curry or cooked food resting on a dark wooden dining table' }
+
+    // Person parts (head, hair, eyes, nose, mouth, ear, left/right hand, arm, chest, leg, foot)
+    { id: 'person_hair', cat: 'person', text: 'a close-up of dark hair on the top of a person head' },
+    { id: 'person_face_eyes', cat: 'person', text: 'a close-up of a person face, eyes, and eyebrows' },
+    { id: 'person_nose_mouth', cat: 'person', text: 'a close-up of a person nose, mouth, lips, and warm smile' },
+    { id: 'person_ear', cat: 'person', text: 'a close-up of the side of a person head and ear' },
+    { id: 'person_hand_fingers', cat: 'person', text: 'a close-up of a human hand, fingers, palm, and wrist' },
+    { id: 'person_hand_spoon', cat: 'person', text: 'a person hand holding a spoon or plate over a dining table' },
+    { id: 'person_arm_sleeve', cat: 'person', text: 'a close-up of a person arm, forearm, elbow, and shirt sleeve' },
+    { id: 'person_clothing', cat: 'person', text: 'white fabric clothing with subtle embroidery and folds on a person shoulder and chest torso' },
+    { id: 'person_leg', cat: 'person', text: 'a close-up of a person leg, knee, thigh, or trousers' },
+    { id: 'person_foot', cat: 'person', text: 'a close-up of a person foot, ankle, or shoe on the ground' },
+
+    // Car parts (wheel, headlight, side window, windshield, rear window, rear section/taillight, front hood/grille, side door)
+    { id: 'car_wheel', cat: 'car', text: 'a close-up of a car rubber tire and metallic alloy wheel rim inside a wheel arch' },
+    { id: 'car_headlight', cat: 'car', text: 'a close-up of a bright automotive front headlight lamp and lens on a car' },
+    { id: 'car_side_window', cat: 'car', text: 'a close-up of a car side door glass window and window frame pillar' },
+    { id: 'car_windshield', cat: 'car', text: 'a close-up of a car sloped front windshield glass above the hood' },
+    { id: 'car_rear_window', cat: 'car', text: 'a close-up of a car rear back window glass above the trunk' },
+    { id: 'car_taillight_rear', cat: 'car', text: 'a close-up of a car rear section, red taillight lamp, trunk lid, and rear bumper' },
+    { id: 'car_front_grille_hood', cat: 'car', text: 'a close-up of a car front hood, radiator grille, and front bumper' },
+    { id: 'car_door_panel', cat: 'car', text: 'a close-up of a painted car side door panel and exterior mirror' },
+
+    // Animal parts
+    { id: 'animal_eyes_face', cat: 'animal', text: 'a close-up of an animal face, eyes, and ears' },
+    { id: 'animal_nose_mouth', cat: 'animal', text: 'a close-up of an animal nose, whiskers, and mouth' },
+    { id: 'animal_leg_paw', cat: 'animal', text: 'a close-up of an animal leg and paw' }
   ]
 };
 
@@ -292,7 +323,7 @@ function scoreAgainstBank(imgVec, bankName, temp = 90) {
     .sort((a, b) => b.sim - a.sim);
 }
 
-async function ensureModelsLoaded(textDir = 'clip-text', imageDir = 'clip-image') {
+async function ensureModelsLoaded(textDir = DEFAULT_TEXT_DIR, imageDir = DEFAULT_IMAGE_DIR) {
   if (modelState.ready) return modelState;
   if (modelState.loadingPromise) return modelState.loadingPromise;
 
@@ -301,11 +332,11 @@ async function ensureModelsLoaded(textDir = 'clip-text', imageDir = 'clip-image'
       type: 'progress',
       stage: 'init',
       percent: 5,
-      message: 'Initializing VisionPilot AI local CLIP engine…'
+      message: 'Initializing Vision Pilot AI engine…'
     });
 
-    const cleanTextDir = String(textDir || 'clip-text').replace(/^\/+|\/+$/g, '');
-    const cleanImageDir = String(imageDir || 'clip-image').replace(/^\/+|\/+$/g, '');
+    const cleanTextDir = String(textDir || DEFAULT_TEXT_DIR).replace(/^\/+|\/+$/g, '');
+    const cleanImageDir = String(imageDir || DEFAULT_IMAGE_DIR).replace(/^\/+|\/+$/g, '');
 
     modelState.tokenizer = await AutoTokenizer.from_pretrained(cleanTextDir, {
       local_files_only: true
@@ -314,10 +345,10 @@ async function ensureModelsLoaded(textDir = 'clip-text', imageDir = 'clip-image'
       type: 'progress',
       stage: 'init',
       percent: 20,
-      message: 'Loading local CLIP text model (clip-text)…'
+      message: 'Loading Vision Pilot AI text model…'
     });
 
-    modelState.textModel = await CLIPTextModelWithProjection.from_pretrained(cleanTextDir, {
+    modelState.textModel = await VisionPilotAITextModel.from_pretrained(cleanTextDir, {
       quantized: true,
       local_files_only: true
     });
@@ -326,14 +357,14 @@ async function ensureModelsLoaded(textDir = 'clip-text', imageDir = 'clip-image'
       type: 'progress',
       stage: 'init',
       percent: 55,
-      message: 'Loading local CLIP vision model (clip-image)…'
+      message: 'Loading Vision Pilot AI vision model…'
     });
 
     modelState.processor = await AutoProcessor.from_pretrained(cleanImageDir, {
       local_files_only: true
     });
 
-    modelState.visionModel = await CLIPVisionModelWithProjection.from_pretrained(cleanImageDir, {
+    modelState.visionModel = await VisionPilotAIVisionModel.from_pretrained(cleanImageDir, {
       quantized: true,
       local_files_only: true
     });
@@ -342,7 +373,7 @@ async function ensureModelsLoaded(textDir = 'clip-text', imageDir = 'clip-image'
       type: 'progress',
       stage: 'init',
       percent: 82,
-      message: 'Caching CLIP vocabulary embeddings…'
+      message: 'Caching Vision Pilot AI vocabulary embeddings…'
     });
 
     // Precompute and cache normalized embeddings for every candidate phrase bank
@@ -358,7 +389,7 @@ async function ensureModelsLoaded(textDir = 'clip-text', imageDir = 'clip-image'
       type: 'progress',
       stage: 'ready',
       percent: 100,
-      message: 'VisionPilot AI local CLIP ready'
+      message: 'Vision Pilot AI ready'
     });
     return modelState;
   })();
@@ -371,13 +402,23 @@ async function ensureModelsLoaded(textDir = 'clip-text', imageDir = 'clip-image'
   }
 }
 
+let cancelledUpToId = 0;
+
 self.onmessage = async (e) => {
   const msg = e.data || {};
   const { id, action, payload } = msg;
+  if (action === 'cancel') {
+    cancelledUpToId = Math.max(cancelledUpToId, Number(msg.upToId) || 0);
+    return;
+  }
   if (!id) return;
 
   try {
-    await ensureModelsLoaded(payload?.textDir || 'clip-text', payload?.imageDir || 'clip-image');
+    await ensureModelsLoaded(payload?.textDir || DEFAULT_TEXT_DIR, payload?.imageDir || DEFAULT_IMAGE_DIR);
+    if (id <= cancelledUpToId) {
+      self.postMessage({ id, ok: false, cancelled: true, error: 'Cancelled' });
+      return;
+    }
 
     if (action === 'warmup') {
       self.postMessage({ id, ok: true, result: { ready: true } });
@@ -395,19 +436,23 @@ self.onmessage = async (e) => {
 
       const out = {};
       for (let i = 0; i < patches.length; i++) {
+        if (id <= cancelledUpToId) {
+          self.postMessage({ id, ok: false, cancelled: true, error: 'Cancelled' });
+          return;
+        }
         const p = patches[i];
         if (patches.length > 1) {
           self.postMessage({
             type: 'progress',
             stage: 'scoring',
             percent: Math.round(((i + 1) / patches.length) * 100),
-            message: payload.progressLabel || `VisionPilot AI scoring image region ${i + 1} of ${patches.length}…`
+            message: payload.progressLabel || `Vision Pilot AI scoring image region ${i + 1} of ${patches.length}…`
           });
         }
         const imgVec = await encodeRgbaPatch(p);
         const bankScores = {};
         for (const bankName of Object.keys(PROMPT_BANKS)) {
-          bankScores[bankName] = scoreAgainstBank(imgVec, bankName).slice(0, 5).map(x => ({
+          bankScores[bankName] = scoreAgainstBank(imgVec, bankName).slice(0, 6).map(x => ({
             id: x.id,
             word: x.word,
             noun: x.noun,
@@ -438,7 +483,7 @@ self.onmessage = async (e) => {
       return;
     }
 
-    throw new Error('Unknown CLIP worker action: ' + action);
+    throw new Error('Unknown Vision Pilot AI worker action: ' + action);
   } catch (err) {
     self.postMessage({
       id,

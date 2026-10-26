@@ -963,6 +963,24 @@ function allSubjects() {
 let lastAIError = '';
 let aiBusyMsg = '';
 let aiConnectedOk = false;
+let aiModelSessionEpoch = 1;
+
+function cancelAllRunningAIWork() {
+  aiModelSessionEpoch++;
+  if (window.VPLocalWriter?.cancelAll) {
+    try { window.VPLocalWriter.cancelAll(); } catch (e) {}
+  }
+  queue.length = 0;
+  busyDetect = false;
+  refs.forEach((r) => {
+    if (!r) return;
+    r._vpRefPromise = null;
+    if (r.status === 'busy') r.status = 'ok';
+  });
+  if (typeof setFocusDetailLoading === 'function') setFocusDetailLoading(false);
+  setDescLoading(false);
+  renderRefs();
+}
 
 function stripNumberedSubjectLabels(text) {
   return String(text || '')
@@ -973,33 +991,41 @@ function stripNumberedSubjectLabels(text) {
     .trim();
 }
 
-async function ensureClipRefDesc(ref, opts = {}) {
-  if (!ref || ref.cancelled || !refs.includes(ref) || !window.VPClipWriter?.writeReferenceDescription) return '';
-  if (ref.clipRefDesc && !opts.forceRegen) return ref.clipRefDesc;
-  if (!ref._clipRefPromise || opts.forceRegen) {
-    ref._clipRefPromise = (async () => {
+async function ensureVpRefDesc(ref, opts = {}) {
+  const myEpoch = aiModelSessionEpoch;
+  if ((S.aiModel || 'visionpilot') !== 'visionpilot') return '';
+  if (!ref || ref.cancelled || !refs.includes(ref) || !window.VPLocalWriter?.writeReferenceDescription) return '';
+  if (ref.vpRefDesc && !opts.forceRegen) return ref.vpRefDesc;
+  if (!ref._vpRefPromise || opts.forceRegen) {
+    ref._vpRefPromise = (async () => {
       try {
         await ref.ready;
       } catch (e) {}
-      if (ref.cancelled || !refs.includes(ref)) return '';
-      const raw = await window.VPClipWriter.writeReferenceDescription(ref.img, {
-        onProgress: opts.onProgress
+      if (myEpoch !== aiModelSessionEpoch || (S.aiModel || 'visionpilot') !== 'visionpilot' || ref.cancelled || !refs.includes(ref)) return '';
+      const raw = await window.VPLocalWriter.writeReferenceDescription(ref.img, {
+        onProgress: (msg) => {
+          if (myEpoch === aiModelSessionEpoch && (S.aiModel || 'visionpilot') === 'visionpilot' && typeof opts.onProgress === 'function') {
+            opts.onProgress(msg);
+          }
+        }
       });
+      if (myEpoch !== aiModelSessionEpoch || (S.aiModel || 'visionpilot') !== 'visionpilot' || ref.cancelled || !refs.includes(ref)) return '';
       const clean = stripNumberedSubjectLabels(raw);
       if (!ref.cancelled && refs.includes(ref) && clean) {
-        ref.clipRefDesc = clean;
+        ref.vpRefDesc = clean;
       }
       return clean;
     })().finally(() => {
-      ref._clipRefPromise = null;
+      ref._vpRefPromise = null;
     });
   }
-  return ref._clipRefPromise;
+  return ref._vpRefPromise;
 }
 
 function updateAutoDescription(force = false) {
   if (S.descUserEdited && !force) return;
   const activeModel = S.aiModel || 'visionpilot';
+  const myEpoch = aiModelSessionEpoch;
   const r = refs[S.focus.img] || refs[0];
 
   // When an external AI model (Claude / GPT / Gemini) is active, NEVER use local VisionPilot AI descriptions.
@@ -1023,18 +1049,19 @@ function updateAutoDescription(force = false) {
     return;
   }
 
-  // Always use the whole-image Stage 1 CLIP Reference Description (never mention Person 1, 2, Product 1, 2, Object 1, 2)
-  if (r.clipRefDesc) {
-    const clean = stripNumberedSubjectLabels(r.clipRefDesc);
+  // Always use the whole-image Stage 1 Vision Pilot AI Reference Description (never mention Person 1, 2, Product 1, 2, Object 1, 2)
+  if (r.vpRefDesc) {
+    const clean = stripNumberedSubjectLabels(r.vpRefDesc);
     S.subjDesc = clean;
     setIfIdle($('subjDesc'), S.subjDesc);
     return;
   }
 
-  if (window.VPClipWriter?.writeReferenceDescription) {
-    ensureClipRefDesc(r).then((clipText) => {
-      if (clipText && (!S.descUserEdited || force) && (refs[S.focus.img] === r || refs[0] === r)) {
-        S.subjDesc = clipText;
+  if (window.VPLocalWriter?.writeReferenceDescription) {
+    ensureVpRefDesc(r).then((vpText) => {
+      if (myEpoch !== aiModelSessionEpoch || (S.aiModel || 'visionpilot') !== 'visionpilot') return;
+      if (vpText && (!S.descUserEdited || force) && (refs[S.focus.img] === r || refs[0] === r)) {
+        S.subjDesc = vpText;
         setIfIdle($('subjDesc'), S.subjDesc);
       }
     }).catch(() => {});
@@ -1068,8 +1095,8 @@ function applySummary(forceDesc = false) {
         S.focus.desc = '';
         setIfIdle($('focusDesc'), '');
       }
-    } else if (rCur?.clipSingleFocusDesc) {
-      S.focus.desc = rCur.clipSingleFocusDesc;
+    } else if (rCur?.vpSingleFocusDesc) {
+      S.focus.desc = rCur.vpSingleFocusDesc;
       setIfIdle($('focusDesc'), S.focus.desc);
     }
     return;
@@ -1105,14 +1132,14 @@ function applySummary(forceDesc = false) {
   }
 
   // Built-in VisionPilot AI mode (Multiple Mode)
-  if (rCur?.clipMultiEdits) {
-    S.focus.multiEdits = {...(S.focus.multiEdits || {}), ...rCur.clipMultiEdits};
+  if (rCur?.vpMultiEdits) {
+    S.focus.multiEdits = {...(S.focus.multiEdits || {}), ...rCur.vpMultiEdits};
   }
   if (forceDesc) {
     S.focus.multiEdits = S.focus.multiEdits || {};
     all.forEach(s => {
-      if ((forceDesc && !rCur?.clipMultiEdits?.[s.key]) || !S.focus.multiEdits[s.key]) {
-        S.focus.multiEdits[s.key] = rCur?.clipMultiEdits?.[s.key] || s.detail || s.desc || s.label;
+      if ((forceDesc && !rCur?.vpMultiEdits?.[s.key]) || !S.focus.multiEdits[s.key]) {
+        S.focus.multiEdits[s.key] = rCur?.vpMultiEdits?.[s.key] || s.detail || s.desc || s.label;
       }
     });
     if (S.focus.multiSel && $('focusMultiText') && S.focus.multiEdits[S.focus.multiSel]) {
@@ -1210,6 +1237,7 @@ function setDescLoading(loading, customMsg = '') {
 }
 async function detectRef(ref, opts = {}) {
   if (!ref || ref.cancelled || !refs.includes(ref)) return;
+  const myEpoch = aiModelSessionEpoch;
   const activeModel = S.aiModel || 'visionpilot';
   const info = window.VPAIBridge?.getModelInfo ? window.VPAIBridge.getModelInfo(activeModel) : {name:activeModel};
   const shouldRunBuiltInDetection = S.focus.mode === 'multi' || Boolean(opts.forMultiMode);
@@ -1221,7 +1249,8 @@ async function detectRef(ref, opts = {}) {
     try {
       await ref.ready;
     } catch (e) {}
-    if (ref.cancelled || !refs.includes(ref)) {
+    if (myEpoch !== aiModelSessionEpoch || (S.aiModel || 'visionpilot') !== activeModel || ref.cancelled || !refs.includes(ref)) {
+      if (ref) ref.status = 'ok';
       if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
       if (typeof syncFocusLockState === 'function') syncFocusLockState();
       return;
@@ -1235,7 +1264,8 @@ async function detectRef(ref, opts = {}) {
       setDescLoading(true, `Uploading reference image to ${info.name} & waiting for reply…`);
       try {
         const replyText = await window.VPAIBridge.runReferenceImageStep(ref, activeModel);
-        if (ref.cancelled || !refs.includes(ref)) {
+        if (myEpoch !== aiModelSessionEpoch || (S.aiModel || 'visionpilot') !== activeModel || ref.cancelled || !refs.includes(ref)) {
+          if (ref) ref.status = 'ok';
           if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
           if (typeof syncFocusLockState === 'function') syncFocusLockState();
           return;
@@ -1248,7 +1278,8 @@ async function detectRef(ref, opts = {}) {
         if ($('subjDesc')) $('subjDesc').value = replyText;
         toast(`${info.name} reference description pasted`);
       } catch (aiErr) {
-        if (aiErr?.cancelled || ref.cancelled || !refs.includes(ref)) {
+        if (aiErr?.cancelled || myEpoch !== aiModelSessionEpoch || (S.aiModel || 'visionpilot') !== activeModel || ref.cancelled || !refs.includes(ref)) {
+          if (ref) ref.status = 'ok';
           if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
           if (typeof syncFocusLockState === 'function') syncFocusLockState();
           return;
@@ -1258,36 +1289,41 @@ async function detectRef(ref, opts = {}) {
         lastAIError = errMsg;
         toast(`${info.name} Error: ${errMsg}`);
       }
-    } else if (activeModel === 'visionpilot' && (!opts.skipRefStep || !ref.clipRefDesc) && window.VPClipWriter?.writeReferenceDescription) {
+    } else if (activeModel === 'visionpilot' && (!opts.skipRefStep || !ref.vpRefDesc) && window.VPLocalWriter?.writeReferenceDescription) {
       ref.status = 'busy';
       renderRefs();
-      setDescLoading(true, 'VisionPilot AI analyzing reference image with local CLIP…');
+      setDescLoading(true, 'Vision Pilot AI analyzing reference image…');
       try {
-        const clipText = await ensureClipRefDesc(ref, {
+        const vpText = await ensureVpRefDesc(ref, {
           forceRegen: Boolean(opts.forceDesc && !opts.skipRefStep),
-          onProgress: (msg) => setDescLoading(true, msg)
+          onProgress: (msg) => {
+            if (myEpoch === aiModelSessionEpoch && (S.aiModel || 'visionpilot') === 'visionpilot') {
+              setDescLoading(true, msg);
+            }
+          }
         });
-        if (ref.cancelled || !refs.includes(ref)) {
+        if (myEpoch !== aiModelSessionEpoch || (S.aiModel || 'visionpilot') !== 'visionpilot' || ref.cancelled || !refs.includes(ref)) {
+          if (ref) ref.status = 'ok';
           if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
           if (typeof syncFocusLockState === 'function') syncFocusLockState();
           return;
         }
-        if (clipText && (!S.descUserEdited || opts.forceDesc)) {
-          S.subjDesc = clipText;
-          if ($('subjDesc')) $('subjDesc').value = clipText;
+        if (vpText && (!S.descUserEdited || opts.forceDesc)) {
+          S.subjDesc = vpText;
+          if ($('subjDesc')) $('subjDesc').value = vpText;
         }
-        if (activeModel === 'visionpilot' && S.focus.on && S.focus.mode === 'single' && refs[S.focus.img] === ref && !ref.clipSingleFocusDesc) {
+        if (myEpoch === aiModelSessionEpoch && (S.aiModel || 'visionpilot') === 'visionpilot' && S.focus.on && S.focus.mode === 'single' && refs[S.focus.img] === ref && !ref.vpSingleFocusDesc) {
           await identifyAt(ref, S.focus.x, S.focus.y);
         }
         ref.status = 'ok';
-      } catch (clipErr) {
-        console.warn('[VP CLIP Stage 1] Error:', clipErr);
+      } catch (vpErr) {
+        if (!vpErr?.cancelled) console.warn('[Vision Pilot AI Stage 1] Error:', vpErr);
         ref.status = 'ok';
       }
     } else {
       ref.status = 'ok';
     }
-    setDescLoading(false);
+    if (myEpoch === aiModelSessionEpoch) setDescLoading(false);
     focusKey = ''; renderRefs(); hooks.refsChanged?.(); changed();
     if (typeof syncFocusLockState === 'function') syncFocusLockState();
     return;
@@ -1302,7 +1338,8 @@ async function detectRef(ref, opts = {}) {
   try {
     if (!window.VPDetect) throw new Error('detector script missing');
     await ref.ready;
-    if (ref.cancelled || !refs.includes(ref)) {
+    if (myEpoch !== aiModelSessionEpoch || (S.aiModel || 'visionpilot') !== activeModel || ref.cancelled || !refs.includes(ref)) {
+      if (ref) ref.status = 'ok';
       if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
       if (typeof syncFocusLockState === 'function') syncFocusLockState();
       return;
@@ -1325,7 +1362,8 @@ async function detectRef(ref, opts = {}) {
       }
     }
     window.VPDetectLoaded = true;
-    if (ref.cancelled || !refs.includes(ref)) {
+    if (myEpoch !== aiModelSessionEpoch || (S.aiModel || 'visionpilot') !== activeModel || ref.cancelled || !refs.includes(ref)) {
+      if (ref) ref.status = 'ok';
       if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
       if (typeof syncFocusLockState === 'function') syncFocusLockState();
       return;
@@ -1343,7 +1381,8 @@ async function detectRef(ref, opts = {}) {
       setDescLoading(true, `Uploading reference image to ${info.name} & waiting for reply…`);
       try {
         const replyText = await window.VPAIBridge.runReferenceImageStep(ref, activeModel);
-        if (ref.cancelled || !refs.includes(ref)) {
+        if (myEpoch !== aiModelSessionEpoch || (S.aiModel || 'visionpilot') !== activeModel || ref.cancelled || !refs.includes(ref)) {
+          if (ref) ref.status = 'ok';
           if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
           if (typeof syncFocusLockState === 'function') syncFocusLockState();
           return;
@@ -1356,7 +1395,8 @@ async function detectRef(ref, opts = {}) {
         if ($('subjDesc')) $('subjDesc').value = replyText;
         toast(`${info.name} reference description pasted`);
       } catch (aiErr) {
-        if (aiErr?.cancelled || ref.cancelled || !refs.includes(ref)) {
+        if (aiErr?.cancelled || myEpoch !== aiModelSessionEpoch || (S.aiModel || 'visionpilot') !== activeModel || ref.cancelled || !refs.includes(ref)) {
+          if (ref) ref.status = 'ok';
           if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
           if (typeof syncFocusLockState === 'function') syncFocusLockState();
           return;
@@ -1366,34 +1406,40 @@ async function detectRef(ref, opts = {}) {
         lastAIError = errMsg;
         toast(`${info.name} Error: ${errMsg}`);
       }
-    } else if (activeModel === 'visionpilot' && (!opts.skipRefStep || !ref.clipRefDesc) && window.VPClipWriter?.writeReferenceDescription) {
+    } else if (activeModel === 'visionpilot' && (!opts.skipRefStep || !ref.vpRefDesc) && window.VPLocalWriter?.writeReferenceDescription) {
       ref.status = 'busy';
       renderRefs();
-      setDescLoading(true, 'VisionPilot AI analyzing reference image with local CLIP…');
+      setDescLoading(true, 'Vision Pilot AI analyzing reference image…');
       try {
-        const clipText = await ensureClipRefDesc(ref, {
+        const vpText = await ensureVpRefDesc(ref, {
           forceRegen: Boolean(opts.forceDesc && !opts.skipRefStep),
-          onProgress: (msg) => setDescLoading(true, msg)
+          onProgress: (msg) => {
+            if (myEpoch === aiModelSessionEpoch && (S.aiModel || 'visionpilot') === 'visionpilot') {
+              setDescLoading(true, msg);
+            }
+          }
         });
-        if (ref.cancelled || !refs.includes(ref)) {
+        if (myEpoch !== aiModelSessionEpoch || (S.aiModel || 'visionpilot') !== 'visionpilot' || ref.cancelled || !refs.includes(ref)) {
+          if (ref) ref.status = 'ok';
           if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
           if (typeof syncFocusLockState === 'function') syncFocusLockState();
           return;
         }
         ref.status = 'ok';
-        if (clipText && (!S.descUserEdited || opts.forceDesc)) {
-          S.subjDesc = clipText;
-          if ($('subjDesc')) $('subjDesc').value = clipText;
+        if (vpText && (!S.descUserEdited || opts.forceDesc)) {
+          S.subjDesc = vpText;
+          if ($('subjDesc')) $('subjDesc').value = vpText;
         }
-      } catch (clipErr) {
-        console.warn('[VP CLIP Stage 1] Error:', clipErr);
+      } catch (vpErr) {
+        if (!vpErr?.cancelled) console.warn('[Vision Pilot AI Stage 1] Error:', vpErr);
         ref.status = 'ok';
       }
     } else {
       ref.status = 'ok';
     }
   } catch (e) {
-    if (ref.cancelled || !refs.includes(ref)) {
+    if (myEpoch !== aiModelSessionEpoch || (S.aiModel || 'visionpilot') !== activeModel || ref.cancelled || !refs.includes(ref)) {
+      if (ref) ref.status = 'ok';
       if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
       if (typeof syncFocusLockState === 'function') syncFocusLockState();
       return;
@@ -1404,7 +1450,8 @@ async function detectRef(ref, opts = {}) {
     ref.subjects = [];
     detectFailMsg = 'Could not run the detector. Set the subject type below.';
   }
-  if (ref.cancelled || !refs.includes(ref)) {
+  if (myEpoch !== aiModelSessionEpoch || (S.aiModel || 'visionpilot') !== activeModel || ref.cancelled || !refs.includes(ref)) {
+    if (ref) ref.status = 'ok';
     if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
     if (typeof syncFocusLockState === 'function') syncFocusLockState();
     return;
@@ -1418,8 +1465,8 @@ async function detectRef(ref, opts = {}) {
   else if (!S.descUserEdited && refs.every(x => x.status === 'fail')) { S.subjDesc = ''; setIfIdle($('subjDesc'), ''); }
   focusKey = ''; renderRefs(); hooks.refsChanged?.(); changed();
 
-  // If Multiple Mode is selected for this image, run Step 3 automatically (external AI or local CLIP writer)
-  if (willRunFollowupMulti) {
+  // If Multiple Mode is selected for this image, run Step 3 automatically (external AI or local Vision Pilot AI writer)
+  if (willRunFollowupMulti && myEpoch === aiModelSessionEpoch && (S.aiModel || 'visionpilot') === activeModel) {
     await runMultiModeAIStep(ref);
   }
   if (typeof syncFocusLockState === 'function') syncFocusLockState();
@@ -2054,21 +2101,22 @@ function syncActiveSingleItem() {
     S.focus.multiMarkerText = cleanText;
   }
 }
-// STEP THREE: Multiple Mode — runs external AI (Claude / GPT / Gemini) or local CLIP writer (VisionPilot AI)
+// STEP THREE: Multiple Mode — runs external AI (Claude / GPT / Gemini) or local Vision Pilot AI writer
 // and fills each subject's hidden text box with a 30-to-40-word description.
 async function runMultiModeAIStep(ref) {
+  const myEpoch = aiModelSessionEpoch;
   const activeModel = S.aiModel || 'visionpilot';
   if (!ref || ref.cancelled || !refs.includes(ref)) return;
 
   if (activeModel === 'visionpilot') {
-    if (!window.VPClipWriter?.writeMultipleModeDetails || !ref.img) return;
+    if (!window.VPLocalWriter?.writeMultipleModeDetails || !ref.img) return;
     await ref.ready;
-    if (ref.cancelled || !refs.includes(ref)) return;
+    if (myEpoch !== aiModelSessionEpoch || (S.aiModel || 'visionpilot') !== 'visionpilot' || ref.cancelled || !refs.includes(ref)) return;
 
     if ((!ref.subjects || !ref.subjects.length) && window.VPDetect) {
       try {
         const det = await window.VPDetect.analyze(ref.img);
-        if (ref.cancelled || !refs.includes(ref)) return;
+        if (myEpoch !== aiModelSessionEpoch || (S.aiModel || 'visionpilot') !== 'visionpilot' || ref.cancelled || !refs.includes(ref)) return;
         ref.det = det;
         ref.subjects = mapDetSubjects(det);
       } catch (e) {}
@@ -2079,14 +2127,19 @@ async function runMultiModeAIStep(ref) {
     ref.status = 'busy';
     renderRefs();
     setFocusDetailLoading(true);
-    setDescLoading(true, 'VisionPilot AI scoring subject boxes with local CLIP…');
+    setDescLoading(true, 'Vision Pilot AI scoring subject boxes…');
     try {
-      const res = await window.VPClipWriter.writeMultipleModeDetails(ref.img, subs, {
+      const res = await window.VPLocalWriter.writeMultipleModeDetails(ref.img, subs, {
         det: ref.det,
         imgIdx: S.focus.img,
-        onProgress: (msg) => setDescLoading(true, msg)
+        onProgress: (msg) => {
+          if (myEpoch === aiModelSessionEpoch && (S.aiModel || 'visionpilot') === 'visionpilot') {
+            setDescLoading(true, msg);
+          }
+        }
       });
-      if (ref.cancelled || !refs.includes(ref)) {
+      if (myEpoch !== aiModelSessionEpoch || (S.aiModel || 'visionpilot') !== 'visionpilot' || ref.cancelled || !refs.includes(ref)) {
+        if (ref) ref.status = 'ok';
         if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
         return;
       }
@@ -2104,13 +2157,13 @@ async function runMultiModeAIStep(ref) {
 
       ref.status = 'ok';
       S.focus.multiEdits = S.focus.multiEdits || {};
-      ref.clipMultiEdits = ref.clipMultiEdits || {};
+      ref.vpMultiEdits = ref.vpMultiEdits || {};
 
       subs.forEach((s) => {
         const desc = res.byKey?.[s.key] || res.byLabel?.[s.label] || '';
         if (desc) {
           S.focus.multiEdits[s.key] = desc;
-          ref.clipMultiEdits[s.key] = desc;
+          ref.vpMultiEdits[s.key] = desc;
           setHiddenSubjectBoxText(s, desc, s.color);
           if (ref.subjects && ref.subjects[s.idx]) {
             ref.subjects[s.idx].detail = desc;
@@ -2127,18 +2180,20 @@ async function runMultiModeAIStep(ref) {
       } else if (!S.focus.multiSel && $('focusMultiText')) {
         $('focusMultiText').value = '';
       }
-    } catch (clipErr) {
-      console.warn('[VP CLIP Stage 3] Error:', clipErr);
+    } catch (vpErr) {
+      if (!vpErr?.cancelled) console.warn('[Vision Pilot AI Stage 3] Error:', vpErr);
       ref.status = 'ok';
     } finally {
-      setFocusDetailLoading(false);
-      if (refs.includes(ref) && ref.status === 'busy') ref.status = 'ok';
-      if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
-      focusKey = '';
-      renderRefs();
-      syncFocus();
-      placeBoxes();
-      changed();
+      if (myEpoch === aiModelSessionEpoch) {
+        setFocusDetailLoading(false);
+        if (refs.includes(ref) && ref.status === 'busy') ref.status = 'ok';
+        if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
+        focusKey = '';
+        renderRefs();
+        syncFocus();
+        placeBoxes();
+        changed();
+      }
     }
     return;
   }
@@ -2157,13 +2212,13 @@ async function runMultiModeAIStep(ref) {
   }
 
   await ref.ready;
-  if (ref.cancelled || !refs.includes(ref)) return;
+  if (myEpoch !== aiModelSessionEpoch || (S.aiModel || 'visionpilot') !== activeModel || ref.cancelled || !refs.includes(ref)) return;
 
   // Ensure local subject bounding boxes exist before building the colored boxes screenshot
   if ((!ref.subjects || !ref.subjects.length) && window.VPDetect) {
     try {
       const det = await window.VPDetect.analyze(ref.img);
-      if (ref.cancelled || !refs.includes(ref)) return;
+      if (myEpoch !== aiModelSessionEpoch || (S.aiModel || 'visionpilot') !== activeModel || ref.cancelled || !refs.includes(ref)) return;
       ref.det = det;
       ref.subjects = mapDetSubjects(det);
     } catch (e) {}
@@ -2187,7 +2242,8 @@ async function runMultiModeAIStep(ref) {
   setDescLoading(true, `Sending original image + labeled boxes screenshot to ${info.name}…`);
   try {
     const res = await window.VPAIBridge.runMultiFocusStep(ref, subs, activeModel);
-    if (ref.cancelled || !refs.includes(ref)) {
+    if (myEpoch !== aiModelSessionEpoch || (S.aiModel || 'visionpilot') !== activeModel || ref.cancelled || !refs.includes(ref)) {
+      if (ref) ref.status = 'ok';
       if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
       return;
     }
@@ -2233,7 +2289,8 @@ async function runMultiModeAIStep(ref) {
     }
     toast(`${info.name} filled descriptions for ${filledCount} labeled subject(s)`);
   } catch (err) {
-    if (err?.cancelled || ref.cancelled || !refs.includes(ref)) {
+    if (err?.cancelled || myEpoch !== aiModelSessionEpoch || (S.aiModel || 'visionpilot') !== activeModel || ref.cancelled || !refs.includes(ref)) {
+      if (ref) ref.status = 'ok';
       if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
       return;
     }
@@ -2243,19 +2300,22 @@ async function runMultiModeAIStep(ref) {
     console.error('[VP Core MultiMode] Error:', errMsg);
     toast(`${info.name} Error: ${errMsg}`);
   } finally {
-    setFocusDetailLoading(false);
-    if (refs.includes(ref) && ref.status === 'busy') ref.status = 'ok';
-    if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
-    focusKey = '';
-    renderRefs();
-    syncFocus();
-    changed();
+    if (myEpoch === aiModelSessionEpoch) {
+      setFocusDetailLoading(false);
+      if (refs.includes(ref) && ref.status === 'busy') ref.status = 'ok';
+      if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
+      focusKey = '';
+      renderRefs();
+      syncFocus();
+      changed();
+    }
   }
 }
 
 // image mode: what is under the focus point? (VisionPilot built-in AI or connected Claude / GPT / Gemini AI)
 async function identifyAt(ref, x, y) {
   if (!ref || ref.cancelled || !refs.includes(ref)) return;
+  const myEpoch = aiModelSessionEpoch;
   const subs = currentImgSubjects();
   const isMulti = S.focus.mode === 'multi';
   const activeModel = S.aiModel || 'visionpilot';
@@ -2294,7 +2354,8 @@ async function identifyAt(ref, x, y) {
     setDescLoading(true, `Sending original image + marker screenshot to ${infoModel.name}…`);
     try {
       const replyText = await window.VPAIBridge.runSingleFocusStep(ref, x, y, '', activeModel);
-      if (ref.cancelled || !refs.includes(ref)) {
+      if (myEpoch !== aiModelSessionEpoch || (S.aiModel || 'visionpilot') !== activeModel || ref.cancelled || !refs.includes(ref)) {
+        if (ref) ref.status = 'ok';
         if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
         return;
       }
@@ -2335,7 +2396,8 @@ async function identifyAt(ref, x, y) {
         toast(`${infoModel.name} focus point detail pasted`);
       }
     } catch (err) {
-      if (err?.cancelled || ref.cancelled || !refs.includes(ref)) {
+      if (err?.cancelled || myEpoch !== aiModelSessionEpoch || (S.aiModel || 'visionpilot') !== activeModel || ref.cancelled || !refs.includes(ref)) {
+        if (ref) ref.status = 'ok';
         if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
         return;
       }
@@ -2344,22 +2406,24 @@ async function identifyAt(ref, x, y) {
       lastAIError = errMsg;
       toast(`${infoModel.name} Error: ${errMsg}`);
     } finally {
-      setFocusDetailLoading(false);
-      if (refs.includes(ref) && ref.status === 'busy') ref.status = 'ok';
-      if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
-      focusKey = '';
-      renderRefs();
-      syncFocus();
-      changed();
+      if (myEpoch === aiModelSessionEpoch) {
+        setFocusDetailLoading(false);
+        if (refs.includes(ref) && ref.status === 'busy') ref.status = 'ok';
+        if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
+        focusKey = '';
+        renderRefs();
+        syncFocus();
+        changed();
+      }
     }
     return;
   }
 
-  // Built-in VisionPilot AI local CLIP writer (Stage 2: Single Mode Focus Detail & Multiple Mode Marker Detail, 30 to 40 words)
+  // Built-in Vision Pilot AI writer (Stage 2: Single Mode Focus Detail & Multiple Mode Marker Detail, 30 to 40 words)
   if (isMulti && !S.focus.showMark) {
     return;
   }
-  if (window.VPClipWriter?.writeSingleFocusDetail && ref?.img) {
+  if (window.VPLocalWriter?.writeSingleFocusDetail && ref?.img) {
     if (!isMulti) {
       S.focus.target = 'Marker';
       S.focus.lastPointKey = '__marker';
@@ -2375,62 +2439,73 @@ async function identifyAt(ref, x, y) {
     ref.status = 'busy';
     renderRefs();
     setFocusDetailLoading(true);
-    setDescLoading(true, 'VisionPilot AI scoring focus region with local CLIP…');
+    setDescLoading(true, 'Vision Pilot AI scoring focus region…');
     try {
       await ref.ready;
-      const clipDetail = await window.VPClipWriter.writeSingleFocusDetail(ref.img, x, y, {
+      if (myEpoch !== aiModelSessionEpoch || (S.aiModel || 'visionpilot') !== 'visionpilot' || ref.cancelled || !refs.includes(ref)) {
+        if (ref) ref.status = 'ok';
+        return;
+      }
+      const vpDetail = await window.VPLocalWriter.writeSingleFocusDetail(ref.img, x, y, {
         det: ref.det,
-        onProgress: (msg) => setDescLoading(true, msg)
+        onProgress: (msg) => {
+          if (myEpoch === aiModelSessionEpoch && (S.aiModel || 'visionpilot') === 'visionpilot') {
+            setDescLoading(true, msg);
+          }
+        }
       });
-      if (ref.cancelled || !refs.includes(ref)) {
+      if (myEpoch !== aiModelSessionEpoch || (S.aiModel || 'visionpilot') !== 'visionpilot' || ref.cancelled || !refs.includes(ref)) {
+        if (ref) ref.status = 'ok';
         if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
         return;
       }
       ref.status = 'ok';
       if (isMulti) {
         S.focus.multiEdits = S.focus.multiEdits || {};
-        S.focus.multiEdits['__marker'] = clipDetail;
-        S.focus.multiMarkerText = clipDetail;
-        ref.clipMultiMarkerDesc = clipDetail;
-        setHiddenSubjectBoxText({ key: '__marker', label: 'Marker', color: '#3fb950' }, clipDetail, '#3fb950');
+        S.focus.multiEdits['__marker'] = vpDetail;
+        S.focus.multiMarkerText = vpDetail;
+        ref.vpMultiMarkerDesc = vpDetail;
+        setHiddenSubjectBoxText({ key: '__marker', label: 'Marker', color: '#3fb950' }, vpDetail, '#3fb950');
         if (Array.isArray(S.focus.subjectItems)) {
           const mIt = S.focus.subjectItems.find(it => it.key === '__marker' || it.isMarker);
           if (mIt) {
-            mIt.detail = clipDetail;
-            mIt.desc = clipDetail;
+            mIt.detail = vpDetail;
+            mIt.desc = vpDetail;
             mIt.x = x;
             mIt.y = y;
           }
         }
         if (S.focus.multiSel === '__marker' && $('focusMultiText')) {
-          $('focusMultiText').value = clipDetail;
+          $('focusMultiText').value = vpDetail;
         }
       } else {
-        ref.clipSingleFocusDesc = clipDetail;
-        S.focus.desc = clipDetail;
+        ref.vpSingleFocusDesc = vpDetail;
+        S.focus.desc = vpDetail;
         S.focus.multiEdits = S.focus.multiEdits || {};
-        S.focus.multiEdits['__marker'] = clipDetail;
-        S.focus.multiMarkerText = clipDetail;
-        if ($('focusDesc')) $('focusDesc').value = clipDetail;
+        S.focus.multiEdits['__marker'] = vpDetail;
+        S.focus.multiMarkerText = vpDetail;
+        if ($('focusDesc')) $('focusDesc').value = vpDetail;
         if (S.focus.zoomLocked && S.focus.detail) zoomToDetail();
         syncActiveSingleItem();
       }
-    } catch (clipErr) {
-      console.warn('[VP CLIP Stage 2] Error:', clipErr);
+    } catch (vpErr) {
+      if (!vpErr?.cancelled) console.warn('[Vision Pilot AI Stage 2] Error:', vpErr);
       ref.status = 'ok';
     } finally {
-      setFocusDetailLoading(false);
-      if (refs.includes(ref) && ref.status === 'busy') ref.status = 'ok';
-      if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
-      focusKey = '';
-      renderRefs();
-      syncFocus();
-      changed();
+      if (myEpoch === aiModelSessionEpoch) {
+        setFocusDetailLoading(false);
+        if (refs.includes(ref) && ref.status === 'busy') ref.status = 'ok';
+        if (!refs.some(r => r.status === 'busy')) setDescLoading(false);
+        focusKey = '';
+        renderRefs();
+        syncFocus();
+        changed();
+      }
     }
     return;
   }
 
-  // Fallback if VPClipWriter is unavailable
+  // Fallback if VPLocalWriter is unavailable
   if (!isMulti) {
     S.focus.target = 'Marker';
     S.focus.lastPointKey = '__marker';
@@ -2978,15 +3053,15 @@ $('resetCustom').addEventListener('click', async () => {
     r.aiSingleFocusDesc = '';
     r.aiMultiEdits = {};
     r.aiMultiMarkerDesc = '';
-    r.clipRefDesc = '';
-    r.clipSingleFocusDesc = '';
-    r.clipMultiEdits = {};
-    r.clipMultiMarkerDesc = '';
-    r._clipRefPromise = null;
+    r.vpRefDesc = '';
+    r.vpSingleFocusDesc = '';
+    r.vpMultiEdits = {};
+    r.vpMultiMarkerDesc = '';
+    r._vpRefPromise = null;
     if (Array.isArray(r.subjects)) {
       r.subjects.forEach(s => {
         delete s.aiDesc;
-        delete s.clipDesc;
+        delete s.vpDesc;
       });
     }
   });
@@ -3221,9 +3296,9 @@ function handleFocusToggleClick(e) {
   changed();
   const curRef = refs[S.focus.img] || refs[0];
   if (S.focus.on && curRef && (S.aiModel || 'visionpilot') === 'visionpilot') {
-    if (S.focus.mode === 'single' && !curRef.clipSingleFocusDesc) {
+    if (S.focus.mode === 'single' && !curRef.vpSingleFocusDesc) {
       identifyAt(curRef, S.focus.x, S.focus.y);
-    } else if (S.focus.mode === 'multi' && (!curRef.clipMultiEdits || !Object.keys(curRef.clipMultiEdits).length)) {
+    } else if (S.focus.mode === 'multi' && (!curRef.vpMultiEdits || !Object.keys(curRef.vpMultiEdits).length)) {
       runMultiModeAIStep(curRef);
     }
   }
@@ -3302,7 +3377,7 @@ $('focusModeBar').addEventListener('click', async e => {
     }
   } else if (!wantMulti && refs[S.focus.img] && (S.aiModel || 'visionpilot') === 'visionpilot') {
     const curRef = refs[S.focus.img];
-    if (!curRef.clipSingleFocusDesc) {
+    if (!curRef.vpSingleFocusDesc) {
       await identifyAt(curRef, S.focus.x, S.focus.y);
     }
   }
@@ -3387,7 +3462,7 @@ $('focusMultiReset')?.addEventListener('click', async () => {
       ref.aiSingleFocusDesc = '';
       ref.aiMultiEdits = {};
       ref.aiMultiMarkerDesc = '';
-      ref.clipMultiEdits = {};
+      ref.vpMultiEdits = {};
     }
     focusKey = ''; syncFocus(); placeBoxes(); changed();
     toast('Focus details reset');
@@ -3400,7 +3475,7 @@ $('focusMultiReset')?.addEventListener('click', async () => {
   ref.subjects = [];
   ref.aiMultiEdits = {};
   ref.aiMultiMarkerDesc = '';
-  ref.clipMultiEdits = {};
+  ref.vpMultiEdits = {};
   ref.status = 'busy';
   focusKey = ''; renderRefs(); syncFocus(); placeBoxes();
   try {
@@ -6648,25 +6723,33 @@ let pendingAIModel = '';
 
 async function selectAIModel(modelId) {
   if (!['visionpilot', 'claude', 'gpt', 'gemini'].includes(modelId)) modelId = 'visionpilot';
+  // Immediately stop and cancel any running backend work from the previous AI model
+  cancelAllRunningAIWork();
+
+  const myEpoch = aiModelSessionEpoch;
   const extConn = window.VPAIBridge?.isExtensionConnected ? window.VPAIBridge.isExtensionConnected() : false;
   const info = window.VPAIBridge?.getModelInfo ? window.VPAIBridge.getModelInfo(modelId) : {name:modelId};
 
-  if (modelId !== 'visionpilot' && !extConn) {
-    pendingAIModel = modelId;
-    openAIExtModal(modelId);
-    const errMsg = `Chrome Extension not connected. Install & load the extension to use ${info.name}.`;
-    lastAIError = errMsg;
-    renderLiveAIStatus();
-    toast(errMsg);
-    return;
-  }
-
-  pendingAIModel = '';
   S.aiModel = modelId;
   lastAIError = '';
   aiConnectedOk = false;
   $('aiModelM')?.classList.remove('open');
   $('aiModelBtn')?.setAttribute('aria-expanded', 'false');
+
+  if (modelId !== 'visionpilot' && !extConn) {
+    pendingAIModel = modelId;
+    syncAIModelUI();
+    syncUI();
+    openAIExtModal(modelId);
+    const errMsg = `Chrome Extension not connected. Install & load the extension to use ${info.name}.`;
+    lastAIError = errMsg;
+    renderLiveAIStatus();
+    toast(errMsg);
+    changed();
+    return;
+  }
+
+  pendingAIModel = '';
 
   if (modelId === 'visionpilot') {
     setDescLoading(false);
@@ -6674,12 +6757,12 @@ async function selectAIModel(modelId) {
     syncUI();
     if (refs.length) {
       const fRef = refs.find(r => r.id === S.focus.img) || refs[0];
-      if (fRef && !fRef.clipRefDesc && window.VPClipWriter) {
+      if (fRef && !fRef.vpRefDesc && window.VPLocalWriter) {
         updateAutoDescription(true);
       } else {
         applySummary(true);
       }
-      if (S.focus.on && S.focus.mode === 'multi' && fRef && (!fRef.clipMultiEdits || !Object.keys(fRef.clipMultiEdits).length)) {
+      if (S.focus.on && S.focus.mode === 'multi' && fRef && (!fRef.vpMultiEdits || !Object.keys(fRef.vpMultiEdits).length)) {
         runMultiModeAIStep(fRef);
       }
     }
@@ -6707,6 +6790,7 @@ async function selectAIModel(modelId) {
   // Requirement 1: Open that site's tab if not already open, always starting a fresh new chat and never reusing an old conversation.
   setDescLoading(true, `Opening fresh ${info.name} chat tab & checking login…`);
   const connRes = await window.VPAIBridge.connectModel(modelId);
+  if (myEpoch !== aiModelSessionEpoch || S.aiModel !== modelId) return;
   setDescLoading(false);
 
   if (!connRes || !connRes.ok) {
@@ -6726,10 +6810,11 @@ async function selectAIModel(modelId) {
   S.descUserEdited = false;
   if (refs.length) {
     for (const ref of refs) {
+      if (myEpoch !== aiModelSessionEpoch || S.aiModel !== modelId) return;
       await detectRef(ref, {forceDesc:true, skipFollowup:true});
     }
     const curRef = refs[S.focus.img] || refs[0];
-    if (curRef && !lastAIError) {
+    if (curRef && !lastAIError && myEpoch === aiModelSessionEpoch && S.aiModel === modelId) {
       if (S.focus.mode === 'multi') {
         await runMultiModeAIStep(curRef);
       }
