@@ -386,7 +386,7 @@
   <section id="vCenter">
     <div class="view vp3d" id="pViewport">
       <div class="viewer">
-        <div class="vpwrap" id="vpWrap"><div class="vpframe" id="vpFrame"><div class="guides" id="vpGuides"></div><div class="vpfocus" id="vpFocus" hidden><span id="vpFocusLab"></span></div></div>
+        <div class="vpwrap" id="vpWrap"><div class="vpframe" id="vpFrame"><canvas class="vp-path-overlay" id="vpPathOverlay"></canvas><div class="guides" id="vpGuides"></div><div class="vpfocus" id="vpFocus" hidden><span id="vpFocusLab"></span></div></div>
           <span class="vpnote" id="vpNote"></span></div>
         <div class="vpside">
           <div class="vf-toggles" role="group" aria-label="Focus controls">
@@ -495,7 +495,11 @@
 </main>
 <div id="vHold" hidden>
   <div class="card" id="pObjects" data-name="Object"><button class="tag" type="button">Object</button>
-    <div class="cbody">
+      <div class="cbody">
+      <button type="button" class="btn free-cam-btn" id="freeCamBtn" aria-pressed="false" title="Cinema 4D Free Camera: view and move the scene camera like a 3D object, keyframe its position &amp; rotation, and orbit freely with the middle mouse button">
+        <svg viewBox="0 0 18 14" aria-hidden="true"><rect x="1.5" y="2.5" width="10.5" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M12 5.2 16.5 3v8L12 8.8Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><circle cx="6.7" cy="7" r="2" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>
+        <span>Free Camera</span>
+      </button>
       <div class="objlist" id="objList"></div>
       <div class="row">
         <div class="field"><select id="objAddModel" aria-label="Model for new object"></select></div>
@@ -780,11 +784,16 @@
   </div>
 </div>
 
+<div class="vp-drawer-backdrop" id="vpHistoryDrawerBackdrop" hidden></div>
 <aside class="vp-history-drawer" id="vpHistoryDrawer" aria-label="Account, Settings &amp; History Library" aria-hidden="true">
   <!-- 1. User / Account Section (Top) -->
   <div class="vpd-section vpd-user-sec" id="vpDrawerUserSec">
     <button type="button" class="vpd-sec-head vpd-user-head" id="vpDrawerUserHead" aria-expanded="false" title="Expand or minimize user account info">
       <div class="vpd-user-head-left">
+        <span class="vpd-user-avatar" id="vpDrawerUserAvatar">
+          <img id="vpDrawerUserPic" alt="" referrerpolicy="no-referrer" hidden>
+          <svg id="vpDrawerUserFallbackIco" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.2" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4.5 20c1.6-3.7 4.4-5.6 7.5-5.6s5.9 1.9 7.5 5.6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </span>
         <span class="vpd-user-name" id="vpDrawerUserName">Guest</span>
         <span class="vpd-mode-badge" id="vpDrawerUserMode">Normal</span>
       </div>
@@ -835,5 +844,13 @@
 <script src="core.js"></script>
 <script src="video.js"></script>
 <script src="auth.js"></script>
+<script>
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.protocol === 'http:') && !window.__vpSwRegistered) {
+    window.__vpSwRegistered = true;
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(() => {});
+    }, { once: true });
+  }
+</script>
 </body>
 </html>

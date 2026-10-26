@@ -680,7 +680,7 @@ function fpos() {
   }
   return fs.pos;
 }
-const COMPOSITE = {'cam.pos':['cam.az', 'cam.el', 'cam.dist'], 'focus.pos':['focus.x', 'focus.y', 'focus.z']};
+const COMPOSITE = {'cam.pos':['cam.az', 'cam.el', 'cam.dist'], 'cam.rot':['cam.az', 'cam.el', 'cam.roll'], 'focus.pos':['focus.x', 'focus.y', 'focus.z']};
 function compositeParts(path) {
   if (COMPOSITE[path]) return COMPOSITE[path];
   const mPos = /^obj\.([^.]+)\.pos$/.exec(path);
@@ -771,18 +771,15 @@ function apply(t) {
   const P = props();
   AC.applyQuiet(() => {
     P.forEach(p => { if (tracks()[p.path]?.length) p.set(valueAt(p.path, t, p.kind, p.get())); });
-    const dur = S.video.duration || 5;
     (V().objects || []).forEach(o => {
       if (!['person', 'cat', 'animal', 'car'].includes(o.model)) return;
       const kx = tracks()[`obj.${o.id}.x`], kz = tracks()[`obj.${o.id}.z`], kry = tracks()[`obj.${o.id}.ry`];
       if (!((kx && kx.length > 1) || (kz && kz.length > 1))) return;
-      if (kry && kry.length > 1) return;
-      const dtS = 0.04, t0 = Math.max(0, t - dtS), t1 = Math.min(dur, t + dtS);
-      if (t1 - t0 < 1e-4) return;
-      const dx = valueAt(`obj.${o.id}.x`, t1, 'num', o.x || 0) - valueAt(`obj.${o.id}.x`, t0, 'num', o.x || 0);
-      const dz = valueAt(`obj.${o.id}.z`, t1, 'num', o.z || 0) - valueAt(`obj.${o.id}.z`, t0, 'num', o.z || 0);
-      if (Math.hypot(dx, dz) > 0.002) {
-        o.ry = rnd(norm360(deg(Math.atan2(dx, dz))), 1);
+      const hasManualRot = kry && kry.length > 1 && kry.some(k => k.userRot) && (Math.max(...kry.map(k => k.v)) - Math.min(...kry.map(k => k.v)) > 1.5);
+      if (hasManualRot) return;
+      const pd = pathDist(o, t);
+      if (pd && typeof pd.ry === 'number' && isFinite(pd.ry)) {
+        o.ry = rnd(pd.ry, 1);
       }
     });
   });
@@ -802,7 +799,12 @@ function autoKey() {
     const cur = p.get(), prev = lastApplied[p.path];
     const same = p.kind === 'num' || p.kind === 'angle' ? Math.abs(cur - prev) < 1e-6 || (p.kind === 'angle' && Math.abs(norm360(cur) - norm360(prev)) < 1e-6) : cur === prev;
     if (same) return;
-    upsertKey(p.path, T, keyValue(p)); lastApplied[p.path] = cur; any = true;
+    const k = upsertKey(p.path, T, keyValue(p));
+    if (p.path.endsWith('.ry')) {
+      const oid = p.path.split('.')[1], o = objById(oid);
+      if (o?._manualRotDirty) { k.userRot = true; o._manualRotDirty = false; }
+    }
+    lastApplied[p.path] = cur; any = true;
   });
   if (any) buildTimeline();
 }
@@ -833,16 +835,25 @@ function keyToggle(path) {
       if (tracks().focus?.length) upsertKey('focus', T, '');
     }
     if (here.length) here.forEach(q => { const keys = tracks()[q], k = keyHere(q); keys.splice(keys.indexOf(k), 1); if (!keys.length) delete tracks()[q]; });
-    else parts.forEach(q => { const pp = props().find(x => x.path === q); if (pp) { upsertKey(q, T, keyValue(pp)); lastApplied[q] = pp.get(); } });
+    else parts.forEach(q => {
+      const pp = props().find(x => x.path === q);
+      if (pp) {
+        const k = upsertKey(q, T, keyValue(pp));
+        if (q.endsWith('.ry') && path.endsWith('.rot')) k.userRot = true;
+        lastApplied[q] = pp.get();
+      }
+    });
     const label = path === 'cam.pos'
       ? 'Camera position'
-      : path === 'focus.pos'
-        ? 'Focus position'
-        : path.endsWith('.pos')
-          ? 'Position (X, Y, Z)'
-          : path.endsWith('.rot')
-            ? 'Rotation (X, Y, Z)'
-            : 'Scale (X, Y, Z)';
+      : path === 'cam.rot'
+        ? 'Camera rotation'
+        : path === 'focus.pos'
+          ? 'Focus position'
+          : path.endsWith('.pos')
+            ? 'Position (X, Y, Z)'
+            : path.endsWith('.rot')
+              ? 'Rotation (X, Y, Z)'
+              : 'Scale (X, Y, Z)';
     AC.toast(`${label}: key ${here.length ? 'removed' : 'added'} at frame ${frameOf(T)}`);
     buildTimeline(); AC.save(); AC.changed(); return;
   }
@@ -855,7 +866,9 @@ function keyToggle(path) {
     AC.toast(`${p.name}: key removed at frame ${frameOf(T)}`);
   } else {
     if (path === 'focus' && !S.focus.on) S.focus.on = true;
-    upsertKey(path, T, keyValue(p)); lastApplied[path] = p.get();
+    const k = upsertKey(path, T, keyValue(p));
+    if (path.endsWith('.ry')) k.userRot = true;
+    lastApplied[path] = p.get();
     AC.toast(`${p.name}: key at frame ${frameOf(T)}`);
   }
   buildTimeline(); AC.save(); AC.changed();
@@ -875,17 +888,22 @@ function recordAll() {
   if (!isVideo()) return;
   const {objTargets, wantCam} = recordKeyTargets();
   const allProps = props();
-  const recPath = path => {
+  const recPath = (path, markManualRot = false) => {
     const p = allProps.find(x => x.path === path);
-    if (p) { upsertKey(path, T, keyValue(p)); lastApplied[path] = p.get(); }
+    if (p) {
+      const k = upsertKey(path, T, keyValue(p));
+      if (markManualRot) k.userRot = true;
+      lastApplied[path] = p.get();
+    }
   };
   const labels = [];
   if (wantCam) {
-    ['cam.az', 'cam.el', 'cam.dist', 'cam.roll', 'cam.focal'].concat(S.focus.on ? ['focus'] : []).forEach(recPath);
+    ['cam.az', 'cam.el', 'cam.dist', 'cam.roll', 'cam.focal'].concat(S.focus.on ? ['focus'] : []).forEach(p => recPath(p, false));
     labels.push('Camera');
   }
   objTargets.forEach(o => {
-    ['x', 'z', 'y', 'ry', 'rx', 'rz', 'sx', 'sy', 'sz'].forEach(k => recPath(`obj.${o.id}.${k}`));
+    ['x', 'z', 'y', 'ry', 'rx', 'rz', 'sx', 'sy', 'sz'].forEach(k => recPath(`obj.${o.id}.${k}`, k === 'ry' && !!o._manualRotDirty));
+    o._manualRotDirty = false;
     labels.push(o.label);
   });
   buildTimeline(); AC.save(); AC.changed();
@@ -1154,6 +1172,19 @@ function camWorld(t) {
   const c = camAt(t), tg = targetAt(t), a = rad(c.az), e = rad(clamp(c.el, -89.5, 89.5));
   return {x:tg.x + Math.sin(a) * Math.cos(e) * c.dist, y:tg.y + Math.sin(e) * c.dist, z:tg.z + Math.cos(a) * Math.cos(e) * c.dist};
 }
+function setCamFromWorldPos(wx, wy, wz) {
+  const tg = targetAt(T);
+  const dx = wx - tg.x, dy = wy - tg.y, dz = wz - tg.z;
+  const dist = clamp(Math.hypot(dx, dy, dz), .25, 60);
+  const el = clamp(deg(Math.asin(clamp(dy / dist, -.995, .995))), -89, 89);
+  const az = Math.hypot(dx, dz) > 1e-4 ? norm360(deg(Math.atan2(dx, dz))) : S.az;
+  AC.setAz(rnd(az, 1));
+  AC.setEl(rnd(el, 1));
+  AC.setDist(rnd(dist, 2));
+}
+let freeCamMode = false;
+const freeCam = {az:38, el:24, dist:5.8, target:{x:0, y:.85, z:0}};
+let vpOverlayView = null;
 hooks.target = () => is3D() ? targetAt(T) : null;
 hooks.sceneExtent = view => {
   if (!is3D() || !V().objects.length) return null;
@@ -1182,13 +1213,27 @@ function smoothTurnRiggedOnDrag(o, prevX, prevZ, newX, newZ) {
   const stepDx = (newX || 0) - (prevX || 0);
   const stepDz = (newZ || 0) - (prevZ || 0);
   const stepDist = Math.hypot(stepDx, stepDz);
-  if (stepDist < 0.0025) return;
-  o._dragDirX = (typeof o._dragDirX === 'number' ? o._dragDirX : stepDx) * 0.62 + stepDx * 0.38;
-  o._dragDirZ = (typeof o._dragDirZ === 'number' ? o._dragDirZ : stepDz) * 0.62 + stepDz * 0.38;
-  if (Math.hypot(o._dragDirX, o._dragDirZ) < 0.001) return;
+  if (stepDist < 0.002) return;
+  o._dragDirX = (typeof o._dragDirX === 'number' ? o._dragDirX : stepDx) * 0.65 + stepDx * 0.35;
+  o._dragDirZ = (typeof o._dragDirZ === 'number' ? o._dragDirZ : stepDz) * 0.65 + stepDz * 0.35;
+  const dirLen = Math.hypot(o._dragDirX, o._dragDirZ);
+  if (dirLen < 0.001) return;
+  if (o.model === 'car') {
+    const curRad = rad(o.ry || 0);
+    const fwdDot = (o._dragDirX * Math.sin(curRad) + o._dragDirZ * Math.cos(curRad)) / dirLen;
+    if (fwdDot < -0.22) {
+      o._reverseDrag = true;
+      const revTargetRy = deg(Math.atan2(-o._dragDirX, -o._dragDirZ));
+      const diff = signed(revTargetRy - (o.ry || 0));
+      const turnRate = clamp(stepDist * 4.8, 0.06, 0.24);
+      o.ry = rnd(norm360((o.ry || 0) + diff * turnRate), 1);
+      return;
+    }
+    o._reverseDrag = false;
+  }
   const targetRy = deg(Math.atan2(o._dragDirX, o._dragDirZ));
   const diff = signed(targetRy - (o.ry || 0));
-  const turnRate = clamp(stepDist * (o.model === 'car' ? 6.2 : 9.5), 0.10, 0.34);
+  const turnRate = clamp(stepDist * (o.model === 'car' ? 5.8 : 9.5), 0.10, 0.34);
   o.ry = rnd(norm360((o.ry || 0) + diff * turnRate), 1);
 }
 
@@ -1271,9 +1316,70 @@ function projectObjPathPt(p, o, v, kind) {
   if (kind === 'top') {
     return [v.cx + (p.x - tg.x) * v.s, v.cy + (p.z - tg.z) * v.s];
   }
-  const a = rad(S.az), ux = Math.sin(a), uz = Math.cos(a), groundY = v.cy + tg.y * v.s;
-  const d = (p.x - tg.x) * ux + (p.z - tg.z) * uz;
-  return [v.cx - d * v.s, groundY - (p.y + (o.h || 1) * 0.5) * v.s];
+  if (v.lookY !== undefined) {
+    return [v.cx - (p.z - tg.z) * v.s, v.cy - ((p.y + (o.h || 1) * 0.35) - v.lookY) * v.s];
+  }
+  const groundY = v.cy + tg.y * v.s;
+  return [v.cx - (p.z - tg.z) * v.s, groundY - (p.y + (o.h || 1) * 0.5) * v.s];
+}
+
+function dragPathKnotOrHandleInView(name, v, hit, x, y) {
+  if (!hit || !v?.s) return false;
+  const o = objById(hit.objId);
+  if (!o) return false;
+  const tg = v.T || targetAt(T);
+  const kt = hit.t;
+  const {kx, ky, kz, pos} = ensureObjPathKnotKeys(o, kt);
+  if (hit.kind === 'pathHandle') {
+    const sideProp = hit.side === 'in' ? 'cIn' : 'cOut';
+    const oppProp = hit.side === 'in' ? 'cOut' : 'cIn';
+    if (name === 'top') {
+      // Top View edits ONLY X and Z (never Y)
+      const wx = tg.x + (x - v.cx) / v.s;
+      const wz = tg.z + (y - v.cy) / v.s;
+      const dx = rnd(wx - pos.x, 3), dz = rnd(wz - pos.z, 3);
+      kx[sideProp] = dx; kz[sideProp] = dz;
+      kx[oppProp] = rnd(-dx, 3); kz[oppProp] = rnd(-dz, 3);
+    } else if (name === 'side') {
+      // Side View edits ONLY Y and Z (never X)
+      const wz = tg.z - (x - v.cx) / v.s;
+      const wy = v.lookY !== undefined
+        ? (v.lookY - (y - v.cy) / v.s - (o.h || 1) * 0.35)
+        : ((v.cy + tg.y * v.s - y) / v.s - (o.h || 1) * 0.5);
+      const dz = rnd(wz - pos.z, 3);
+      const dy = rnd(wy - pos.y, 3);
+      kz[sideProp] = dz; ky[sideProp] = dy;
+      kz[oppProp] = rnd(-dz, 3); ky[oppProp] = rnd(-dy, 3);
+    }
+    pathCache.delete(o.id);
+    apply(T);
+    syncObjProps();
+    renderVP();
+    AC.drawAll();
+    return true;
+  }
+  if (hit.kind === 'pathKf') {
+    if (name === 'top') {
+      // Top View edits ONLY X and Z (never Y)
+      kx.v = rnd(tg.x + (x - v.cx) / v.s, 3);
+      kz.v = rnd(tg.z + (y - v.cy) / v.s, 3);
+    } else if (name === 'side') {
+      // Side View edits ONLY Y and Z (never X)
+      const wz = tg.z - (x - v.cx) / v.s;
+      const wy = v.lookY !== undefined
+        ? (v.lookY - (y - v.cy) / v.s - (o.h || 1) * 0.35)
+        : ((v.cy + tg.y * v.s - y) / v.s - (o.h || 1) * 0.5);
+      kz.v = rnd(wz, 3);
+      ky.v = rnd(Math.max(0, wy), 3);
+    }
+    pathCache.delete(o.id);
+    apply(T);
+    syncObjProps();
+    renderVP();
+    AC.drawAll();
+    return true;
+  }
+  return false;
 }
 
 function drawObjMotionPaths(ctx, v, kind) {
@@ -1287,7 +1393,7 @@ function drawObjMotionPaths(ctx, v, kind) {
     ctx.save();
     if (kTimes.length >= 2) {
       ctx.strokeStyle = selected ? '#3b82f6' : 'rgba(180, 186, 198, 0.42)';
-      ctx.lineWidth = selected ? 2.2 : 1.6;
+      ctx.lineWidth = selected ? 2.4 : 1.6;
       ctx.beginPath();
       for (let i = 0; i <= n; i++) {
         const pt = objPosAt(o, dur * i / n);
@@ -1308,7 +1414,7 @@ function drawObjMotionPaths(ctx, v, kind) {
         const [ix, iy] = projectObjPathPt(inWorld, o, v, kind);
         const [ox, oy] = projectObjPathPt(outWorld, o, v, kind);
         ctx.strokeStyle = '#60a5fa';
-        ctx.lineWidth = 1.4;
+        ctx.lineWidth = 1.5;
         ctx.beginPath();
         ctx.moveTo(ix, iy); ctx.lineTo(kx, ky); ctx.lineTo(ox, oy);
         ctx.stroke();
@@ -1317,7 +1423,7 @@ function drawObjMotionPaths(ctx, v, kind) {
           ctx.strokeStyle = '#2563eb';
           ctx.lineWidth = 1.6;
           ctx.beginPath();
-          ctx.arc(hx, hy, 4.5, 0, Math.PI * 2);
+          ctx.arc(hx, hy, 4.8, 0, Math.PI * 2);
           ctx.fill();
           ctx.stroke();
         });
@@ -1325,23 +1431,23 @@ function drawObjMotionPaths(ctx, v, kind) {
       if (selected) {
         ctx.fillStyle = curveOn ? '#60a5fa' : '#3b82f6';
         ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 1.4;
+        ctx.lineWidth = 1.5;
         ctx.beginPath();
         if (curveOn) {
-          ctx.arc(kx, ky, 5.2, 0, Math.PI * 2);
+          ctx.arc(kx, ky, 5.5, 0, Math.PI * 2);
         } else {
-          ctx.moveTo(kx, ky - 5.8);
-          ctx.lineTo(kx + 5.8, ky);
-          ctx.lineTo(kx, ky + 5.8);
-          ctx.lineTo(kx - 5.8, ky);
+          ctx.moveTo(kx, ky - 6);
+          ctx.lineTo(kx + 6, ky);
+          ctx.lineTo(kx, ky + 6);
+          ctx.lineTo(kx - 6, ky);
           ctx.closePath();
         }
         ctx.fill();
         ctx.stroke();
       } else {
-        ctx.fillStyle = 'rgba(180, 186, 198, 0.52)';
+        ctx.fillStyle = 'rgba(180, 186, 198, 0.55)';
         ctx.beginPath();
-        ctx.arc(kx, ky, 3.2, 0, Math.PI * 2);
+        ctx.arc(kx, ky, 3.4, 0, Math.PI * 2);
         ctx.fill();
       }
     });
@@ -1353,7 +1459,6 @@ hooks.drawTopScene = (ctx, v) => {
   if (!is3D()) return false;
   lastViewTransform.top = v;
   const C = AC.C, tg = v.T, label = labelPainter(ctx), objs = [...V().objects].sort((a, b) => isObjSelected(a.id) - isObjSelected(b.id));
-  if (isVideo()) drawObjMotionPaths(ctx, v, 'top');
   objs.forEach(o => {
     const px = v.cx + (o.x - tg.x) * v.s, py = v.cy + (o.z - tg.z) * v.s;
     const w = Math.max(6, (o.model === 'car' ? o.w * .42 : o.w) * v.s), d = Math.max(4, (o.model === 'car' ? o.w : depthFor(o)) * v.s);
@@ -1373,7 +1478,6 @@ hooks.drawSideScene = (ctx, v) => {
   lastViewTransform.side = v;
   const C = AC.C, tg = v.T, a = rad(S.az), ux = Math.sin(a), uz = Math.cos(a), groundY = v.cy + tg.y * v.s, label = labelPainter(ctx);
   const objs = [...V().objects].sort((p, q) => isObjSelected(p.id) - isObjSelected(q.id)), tops = [];
-  if (isVideo()) drawObjMotionPaths(ctx, v, 'side');
   objs.forEach(o => {
     const d = (o.x - tg.x) * ux + (o.z - tg.z) * uz;
     const px = v.cx - d * v.s, w = Math.max(6, o.w * v.s * .8), h = Math.max(6, o.h * v.s), top = groundY - (o.y + o.h) * v.s;
@@ -1400,9 +1504,9 @@ function hitTestPathInView(name, v, x, y) {
       const inWorld = {x: pos.x + (kX?.cIn || 0), y: pos.y + (kY?.cIn || 0), z: pos.z + (kZ?.cIn || 0)};
       const outWorld = {x: pos.x + (kX?.cOut || 0), y: pos.y + (kY?.cOut || 0), z: pos.z + (kZ?.cOut || 0)};
       const [ix, iy] = projectObjPathPt(inWorld, o, v, name);
-      if (Math.hypot(x - ix, y - iy) <= 9) return {kind:'pathHandle', objId:o.id, t:kt, side:'in'};
+      if (Math.hypot(x - ix, y - iy) <= 10) return {kind:'pathHandle', objId:o.id, t:kt, side:'in'};
       const [ox, oy] = projectObjPathPt(outWorld, o, v, name);
-      if (Math.hypot(x - ox, y - oy) <= 9) return {kind:'pathHandle', objId:o.id, t:kt, side:'out'};
+      if (Math.hypot(x - ox, y - oy) <= 10) return {kind:'pathHandle', objId:o.id, t:kt, side:'out'};
     }
   }
   // 2) Check keyframe knots on any object path
@@ -1410,7 +1514,7 @@ function hitTestPathInView(name, v, x, y) {
     for (const kt of objPathKeyTimes(o)) {
       const pos = objPosAt(o, kt);
       const [kx, ky] = projectObjPathPt(pos, o, v, name);
-      if (Math.hypot(x - kx, y - ky) <= 9) return {kind:'pathKf', objId:o.id, t:kt};
+      if (Math.hypot(x - kx, y - ky) <= 10) return {kind:'pathKf', objId:o.id, t:kt};
     }
   }
   // 3) Check clicking on an unselected/selected path curve line
@@ -1429,11 +1533,6 @@ function hitTestPathInView(name, v, x, y) {
 hooks.hitViewObj = (name, v, x, y) => {
   if (!is3D() || !v.s) return null;
   activePathDrag = null;
-  const pathHit = hitTestPathInView(name, v, x, y);
-  if (pathHit && (pathHit.kind === 'pathHandle' || pathHit.kind === 'pathKf')) {
-    activePathDrag = pathHit;
-    return pathHit;
-  }
   const tg = v.T || targetAt(T);
   const objs = [...(V().objects || [])].reverse();
   if (name === 'top') {
@@ -1449,10 +1548,6 @@ hooks.hitViewObj = (name, v, x, y) => {
       const px = v.cx - d * v.s, w = Math.max(14, o.w * v.s * .8), h = Math.max(14, o.h * v.s), top = groundY - (o.y + o.h) * v.s;
       if (Math.abs(x - px) <= w / 2 + 4 && y >= top - 4 && y <= top + h + 4) return {kind:'obj', objId:o.id};
     }
-  }
-  if (pathHit) {
-    activePathDrag = pathHit;
-    return pathHit;
   }
   return null;
 };
@@ -1480,6 +1575,7 @@ hooks.dragViewObj = (name, v, objId, x, y, isEnd) => {
     }
     delete o._dragDirX;
     delete o._dragDirZ;
+    delete o._reverseDrag;
     if (o.model === 'person') checkAutoSitOnChair(o, true);
     autoKey();
     AC.save();
@@ -1488,56 +1584,8 @@ hooks.dragViewObj = (name, v, objId, x, y, isEnd) => {
   const tg = v.T || targetAt(T);
   if (activePathDrag && activePathDrag.objId === o.id) {
     if (activePathDrag.kind === 'pathLine') return;
-    const kt = activePathDrag.t;
-    const {kx, ky, kz, pos} = ensureObjPathKnotKeys(o, kt);
-    if (activePathDrag.kind === 'pathHandle') {
-      const sideProp = activePathDrag.side === 'in' ? 'cIn' : 'cOut';
-      const oppProp = activePathDrag.side === 'in' ? 'cOut' : 'cIn';
-      if (name === 'top') {
-        const wx = tg.x + (x - v.cx) / v.s;
-        const wz = tg.z + (y - v.cy) / v.s;
-        const dx = rnd(wx - pos.x, 3), dz = rnd(wz - pos.z, 3);
-        kx[sideProp] = dx; kz[sideProp] = dz;
-        kx[oppProp] = rnd(-dx, 3); kz[oppProp] = rnd(-dz, 3);
-      } else if (name === 'side') {
-        const a = rad(S.az), ux = Math.sin(a), uz = Math.cos(a), groundY = v.cy + tg.y * v.s;
-        const dTarget = (v.cx - x) / v.s;
-        const dCur = (pos.x - tg.x) * ux + (pos.z - tg.z) * uz;
-        const dd = dTarget - dCur;
-        const wy = (groundY - y) / v.s - (o.h || 1) * 0.5;
-        const dy = rnd(wy - pos.y, 3);
-        kx[sideProp] = rnd(dd * ux, 3);
-        kz[sideProp] = rnd(dd * uz, 3);
-        ky[sideProp] = dy;
-        kx[oppProp] = rnd(-dd * ux, 3);
-        kz[oppProp] = rnd(-dd * uz, 3);
-        ky[oppProp] = rnd(-dy, 3);
-      }
-      pathCache.delete(o.id);
-      apply(T);
-      syncObjProps();
-      renderVP();
-      return;
-    }
-    if (activePathDrag.kind === 'pathKf') {
-      if (name === 'top') {
-        kx.v = rnd(tg.x + (x - v.cx) / v.s, 3);
-        kz.v = rnd(tg.z + (y - v.cy) / v.s, 3);
-      } else if (name === 'side') {
-        const a = rad(S.az), ux = Math.sin(a), uz = Math.cos(a), groundY = v.cy + tg.y * v.s;
-        const dTarget = (v.cx - x) / v.s;
-        const dCur = (pos.x - tg.x) * ux + (pos.z - tg.z) * uz;
-        const dd = dTarget - dCur;
-        kx.v = rnd(pos.x + dd * ux, 3);
-        kz.v = rnd(pos.z + dd * uz, 3);
-        ky.v = rnd(Math.max(0, (groundY - y) / v.s - (o.h || 1) * 0.5), 3);
-      }
-      pathCache.delete(o.id);
-      apply(T);
-      syncObjProps();
-      renderVP();
-      return;
-    }
+    dragPathKnotOrHandleInView(name, v, activePathDrag, x, y);
+    return;
   }
   if (name === 'top') {
     const prevX = o.x || 0, prevZ = o.z || 0;
@@ -1581,6 +1629,53 @@ function aspectRatio() {
   const r = m ? +m[1] / +m[2] : 4 / 5;
   return isFinite(r) && r > .2 && r < 5 ? r : 4 / 5;
 }
+function buildCamProxy(THREE) {
+  const g = new THREE.Group();
+  g.visible = false;
+  const bodyM = new THREE.MeshStandardMaterial({color:0x22c55e, roughness:.32, metalness:.35});
+  const darkM = new THREE.MeshStandardMaterial({color:0x181b20, roughness:.4, metalness:.5});
+  const glassM = new THREE.MeshStandardMaterial({color:0x38bdf8, roughness:.12, metalness:.85, emissive:0x0c4a6e});
+  const body = new THREE.Mesh(new THREE.BoxGeometry(.26, .20, .36), bodyM);
+  body.castShadow = true;
+  g.add(body);
+  // Dual cinema film reels on top
+  [-0.08, 0.08].forEach(dz => {
+    const reel = new THREE.Mesh(new THREE.CylinderGeometry(.085, .085, .06, 20), darkM);
+    reel.rotation.z = Math.PI / 2;
+    reel.position.set(0, .155, dz);
+    g.add(reel);
+  });
+  // Lens barrel & matte box pointing along -Z (forward camera view direction)
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(.075, .085, .14, 20), darkM);
+  barrel.rotation.x = Math.PI / 2;
+  barrel.position.set(0, 0, -.23);
+  g.add(barrel);
+  const hood = new THREE.Mesh(new THREE.ConeGeometry(.125, .11, 4), bodyM);
+  hood.rotation.x = -Math.PI / 2;
+  hood.rotation.y = Math.PI / 4;
+  hood.position.set(0, 0, -.32);
+  g.add(hood);
+  const lensGlass = new THREE.Mesh(new THREE.CylinderGeometry(.065, .065, .02, 18), glassM);
+  lensGlass.rotation.x = Math.PI / 2;
+  lensGlass.position.set(0, 0, -.295);
+  g.add(lensGlass);
+  // Subtle camera frustum guide lines extending along -Z
+  const frustumPts = [
+    new THREE.Vector3(0, 0, -.32), new THREE.Vector3(-.42, .28, -1.25),
+    new THREE.Vector3(0, 0, -.32), new THREE.Vector3(.42, .28, -1.25),
+    new THREE.Vector3(0, 0, -.32), new THREE.Vector3(.42, -.28, -1.25),
+    new THREE.Vector3(0, 0, -.32), new THREE.Vector3(-.42, -.28, -1.25),
+    new THREE.Vector3(-.42, .28, -1.25), new THREE.Vector3(.42, .28, -1.25),
+    new THREE.Vector3(.42, .28, -1.25), new THREE.Vector3(.42, -.28, -1.25),
+    new THREE.Vector3(.42, -.28, -1.25), new THREE.Vector3(-.42, -.28, -1.25),
+    new THREE.Vector3(-.42, -.28, -1.25), new THREE.Vector3(-.42, .28, -1.25)
+  ];
+  const frustumGeo = new THREE.BufferGeometry().setFromPoints(frustumPts);
+  const frustumLine = new THREE.LineSegments(frustumGeo, new THREE.LineBasicMaterial({color:0x4ade80, transparent:true, opacity:.65}));
+  g.add(frustumLine);
+  g.traverse(n => { if (n.isMesh) n.userData.oid = 'camera'; });
+  return g;
+}
 function initThree() {
   if (R || !window.THREE) { if (!window.THREE) $('vpNote').textContent = '3D viewer could not load. Rig views and timeline still work.'; return; }
   const THREE = window.THREE;
@@ -1606,9 +1701,20 @@ function initThree() {
   const raycaster = new THREE.Raycaster();
   const gizmo = buildGizmo(THREE);
   scene.add(gizmo.group);
-  R = {THREE, renderer, scene, camera, lights, hemi, ground, grid, raycaster, gizmo, objs:new Map()};
+  const camProxy = buildCamProxy(THREE);
+  scene.add(camProxy);
+  R = {THREE, renderer, scene, camera, lights, hemi, ground, grid, raycaster, gizmo, camProxy, objs:new Map()};
   new ResizeObserver(() => renderVP()).observe($('vpWrap'));
-  $('vpWrap').addEventListener('wheel', e => { e.preventDefault(); AC.setDist(S.dist * Math.exp(e.deltaY * .0012)); AC.changed(); }, {passive:false});
+  $('vpWrap').addEventListener('wheel', e => {
+    e.preventDefault();
+    if (freeCamMode && vpViewMode === 'orbit') {
+      freeCam.dist = clamp(freeCam.dist * Math.exp(e.deltaY * .0012), .4, 80);
+      renderVP();
+      return;
+    }
+    AC.setDist(S.dist * Math.exp(e.deltaY * .0012));
+    AC.changed();
+  }, {passive:false});
   bindViewportPicking();
 }
 function buildGizmo(THREE) {
@@ -2266,25 +2372,108 @@ function pathDist(o, t) {
   const kx = tracks()[`obj.${o.id}.x`], kz = tracks()[`obj.${o.id}.z`];
   if (!((kx && kx.length > 1) || (kz && kz.length > 1))) return null;
   const kr = tracks()[`obj.${o.id}.ry`], dur = S.video.duration || 5;
-  const sig = dur + '|' + JSON.stringify([kx, kz, kr, o.x, o.z, o.ry]);
+  const hasManualRot = Boolean(kr && kr.length > 1 && kr.some(k => k.userRot) && (Math.max(...kr.map(k => k.v)) - Math.min(...kr.map(k => k.v)) > 1.5));
+  if (o._baseRy === undefined) o._baseRy = kr?.[0]?.v ?? o.ry ?? 0;
+  const initRyKey = kr?.[0]?.v ?? o._baseRy ?? 0;
+  const sig = dur + '|' + o.model + '|' + hasManualRot + '|' + JSON.stringify([kx, kz, hasManualRot ? kr : initRyKey, o.x, o.z]);
   let c = pathCache.get(o.id);
   if (!c || c.sig !== sig) {
-    const N = Math.max(4, Math.ceil(dur * 120)), dt = dur / N, u = new Float32Array(N + 1), s = new Float32Array(N + 1);
-    const at = (tt) => [valueAt(`obj.${o.id}.x`, tt, 'num', o.x), valueAt(`obj.${o.id}.z`, tt, 'num', o.z), valueAt(`obj.${o.id}.ry`, tt, 'num', o.ry)];
-    let [px, pz] = at(0);
+    const N = Math.max(8, Math.ceil(dur * 120)), dt = dur / N;
+    const u = new Float32Array(N + 1), s = new Float32Array(N + 1), ryArr = new Float32Array(N + 1), revArr = new Uint8Array(N + 1);
+    const xs = new Float32Array(N + 1), zs = new Float32Array(N + 1);
+    for (let i = 0; i <= N; i++) {
+      const tt = i * dt;
+      xs[i] = valueAt(`obj.${o.id}.x`, tt, 'num', o.x || 0);
+      zs[i] = valueAt(`obj.${o.id}.z`, tt, 'num', o.z || 0);
+    }
+    let curRy = hasManualRot ? valueAt(`obj.${o.id}.ry`, 0, 'num', initRyKey) : initRyKey;
+    let initRev = 0;
+    if (!hasManualRot) {
+      let iMove = -1;
+      for (let i = 1; i <= N; i++) {
+        if (Math.hypot(xs[i] - xs[0], zs[i] - zs[0]) > 0.012) { iMove = i; break; }
+      }
+      if (iMove > 0) {
+        const idxEnd = Math.min(N, iMove + Math.round(0.10 / dt));
+        const initDx = xs[idxEnd] - xs[0], initDz = zs[idxEnd] - zs[0];
+        const initDist = Math.hypot(initDx, initDz);
+        if (initDist > 1e-4) {
+          if (o.model === 'car') {
+            const r0 = rad(curRy);
+            const fwd0 = (initDx * Math.sin(r0) + initDz * Math.cos(r0)) / initDist;
+            if (fwd0 < -0.22) {
+              initRev = 1;
+              curRy = norm360(deg(Math.atan2(-initDx, -initDz)));
+            } else {
+              curRy = norm360(deg(Math.atan2(initDx, initDz)));
+            }
+          } else {
+            curRy = norm360(deg(Math.atan2(initDx, initDz)));
+          }
+        }
+      }
+    }
+    ryArr[0] = curRy;
+    revArr[0] = initRev;
+    const win = Math.max(2, Math.round(0.14 / dt));
+    let isRev = initRev;
     for (let i = 1; i <= N; i++) {
-      const [x, z, ry] = at(i * dt), dx = x - px, dz = z - pz, r = rad(ry);
+      const dx = xs[i] - xs[i - 1], dz = zs[i] - zs[i - 1];
       const stepDist = Math.hypot(dx, dz);
-      const fwdProj = dx * Math.sin(r) + dz * Math.cos(r);
-      const dirSign = fwdProj < -stepDist * .25 ? -1 : 1;
+      if (hasManualRot) {
+        curRy = valueAt(`obj.${o.id}.ry`, i * dt, 'num', curRy);
+        const r = rad(curRy);
+        const fwdProj = dx * Math.sin(r) + dz * Math.cos(r);
+        isRev = fwdProj < -stepDist * .22 ? 1 : 0;
+      } else {
+        const j0 = Math.max(0, i - win), j1 = Math.min(N, i + win);
+        const spanT = Math.max(dt, (j1 - j0) * dt);
+        const vx = (xs[j1] - xs[j0]) / spanT, vz = (zs[j1] - zs[j0]) / spanT;
+        const speed = Math.hypot(vx, vz);
+        if (speed > 0.008) {
+          if (o.model === 'car') {
+            const r = rad(curRy);
+            const fwdDot = (vx * Math.sin(r) + vz * Math.cos(r)) / speed;
+            if (fwdDot < -0.22) {
+              isRev = 1;
+              const targetRy = deg(Math.atan2(-vx, -vz));
+              const alpha = 1 - Math.exp(-dt * 9.5);
+              curRy = norm360(curRy + signed(targetRy - curRy) * alpha);
+            } else {
+              isRev = 0;
+              const targetRy = deg(Math.atan2(vx, vz));
+              const alpha = 1 - Math.exp(-dt * 12.5);
+              curRy = norm360(curRy + signed(targetRy - curRy) * alpha);
+            }
+          } else {
+            isRev = 0;
+            const targetRy = deg(Math.atan2(vx, vz));
+            const alpha = 1 - Math.exp(-dt * 14.0);
+            curRy = norm360(curRy + signed(targetRy - curRy) * alpha);
+          }
+        }
+      }
+      ryArr[i] = curRy;
+      revArr[i] = isRev;
+      const dirSign = isRev ? -1 : 1;
       u[i] = u[i - 1] + stepDist;
       s[i] = s[i - 1] + dirSign * stepDist;
-      px = x; pz = z;
     }
-    c = {sig, dt, N, u, s}; pathCache.set(o.id, c);
+    c = {sig, dt, N, u, s, ryArr, revArr}; pathCache.set(o.id, c);
   }
   const f = clamp(t / c.dt, 0, c.N), i0 = Math.floor(f), i1 = Math.min(c.N, i0 + 1), w = f - i0;
-  return {u:c.u[i0] + (c.u[i1] - c.u[i0]) * w, s:c.s[i0] + (c.s[i1] - c.s[i0]) * w, total:c.u[c.N]};
+  const ry0 = c.ryArr[i0], ry1 = c.ryArr[i1];
+  const interpRy = norm360(ry0 + signed(ry1 - ry0) * w);
+  const k0 = Math.max(0, i0 - 2), k1 = Math.min(c.N, i0 + 2);
+  const vRy = signed(c.ryArr[k1] - c.ryArr[k0]) / Math.max(c.dt, (k1 - k0) * c.dt);
+  return {
+    u:c.u[i0] + (c.u[i1] - c.u[i0]) * w,
+    s:c.s[i0] + (c.s[i1] - c.s[i0]) * w,
+    total:c.u[c.N],
+    ry:interpRy,
+    vRy,
+    rev:Boolean(c.revArr[i0])
+  };
 }
 
 // Compute velocity, walk/run phase, jump preparation crouch, tails and vehicle wheel/drift dynamics
@@ -2309,6 +2498,7 @@ function updateRigPoseAndMotion(o, g, t) {
     const yFuture = V1('y', Math.min(dur, t + .22));
     if ((o.y || 0) <= .04 && yFuture > .10) crouchPrep = clamp((yFuture - (o.y || 0)) / .32, 0, 1);
     pd = pathDist(o, t);
+    if (pd && typeof pd.vRy === 'number' && Math.abs(vRy) < 1e-3) vRy = pd.vRy;
   }
   // 2) Check automatic chair sitting for person before drag-walk so placing/aligning with a chair seats immediately
   if (rig.type === 'person' && timelineSpeed <= .05 && o.y <= .08 && o.pose !== 'walking_still' && o.pose !== 'running_still') {
@@ -2346,7 +2536,7 @@ function updateRigPoseAndMotion(o, g, t) {
     st.moveHold = now + 180;
     const stepAdvance = dragMoveDist + (dRyDrag * .018);
     st.phase += stepAdvance * strideFreq;
-    st.wheelSpin += dragMoveDist / wheelR;
+    st.wheelSpin += (o._reverseDrag ? -1 : 1) * (dragMoveDist / wheelR);
     clearTimeout(st.settleTimer);
     st.settleTimer = setTimeout(() => renderVP(), 190);
   }
@@ -2504,7 +2694,7 @@ function updateRigPoseAndMotion(o, g, t) {
   } else if (rig.type === 'cat' || rig.type === 'animal') {
     animateQuadruped(rig, o, st, {isRunning, isMoving, isActivelyMoving, posePhi, locoBlend, isPrep, isAirborne, airBlend, crouchPrep, t, vy});
   } else if (rig.type === 'car') {
-    animateCar(rig, o, st, {vx, vz, vy, vRy, timelineSpeed, isAirborne, dt});
+    animateCar(rig, o, st, {vx, vz, vy, vRy, timelineSpeed, isAirborne, dt, isReverse:Boolean(pd?.rev || o._reverseDrag)});
   }
 }
 
@@ -2650,20 +2840,29 @@ function animateTail(rig, mode, st, t, dog, posePhi, isActivelyMoving) {
   segs.forEach((s, i) => s.rotation.set(rest[i], 0, amp * (.55 + i * .3) * Math.sin(ph - i * .85)));
 }
 
-// Car rig: rolling wheels (spin = distance / radius), counter-steer, body lean, suspension and jump attitude
+// Car rig: rolling wheels (spin = distance / radius), counter-steer, reverse-gear backing, body lean, suspension and jump attitude
 function animateCar(rig, o, st, c) {
   const {bodyGrp, wheels, frontSteer} = rig, h = rig.h;
   wheels.forEach(w => { w.rotation.x = st.wheelSpin; });
   let targetSteer = 0, targetRoll = 0, targetPitch = 0;
-  if (c.timelineSpeed > .08) {
+  const moveSpeed = Math.max(c.timelineSpeed || 0, Math.hypot(c.vx || 0, c.vz || 0));
+  if (moveSpeed > .06) {
     const moveHeading = Math.atan2(c.vx, c.vz) * 180 / Math.PI;
-    let slip = ((moveHeading - (o.ry || 0) + 540) % 360) - 180;
-    const absSlip = Math.abs(slip);
-    const slipFade = absSlip > 105 ? Math.max(0, Math.cos(clamp((absSlip - 105) / 60, 0, 1) * Math.PI / 2)) : 1;
-    slip *= slipFade;
-    targetSteer = clamp(rad(slip * .72 + c.vRy * .08), -.58, .58);
-    targetRoll = clamp(rad(-slip * .085 - c.vRy * .018), -.085, .085);
-    targetPitch = clamp(-c.timelineSpeed * .0025, -.018, .015);
+    if (c.isReverse) {
+      const rearHeading = norm360((o.ry || 0) + 180);
+      const rearSlip = signed(moveHeading - rearHeading);
+      targetSteer = clamp(rad(-rearSlip * .65 - (c.vRy || 0) * .06), -.52, .52);
+      targetRoll = clamp(rad(rearSlip * .055 + (c.vRy || 0) * .014), -.065, .065);
+      targetPitch = clamp(moveSpeed * .0024, -.012, .018);
+    } else {
+      let slip = ((moveHeading - (o.ry || 0) + 540) % 360) - 180;
+      const absSlip = Math.abs(slip);
+      const slipFade = absSlip > 105 ? Math.max(0, Math.cos(clamp((absSlip - 105) / 60, 0, 1) * Math.PI / 2)) : 1;
+      slip *= slipFade;
+      targetSteer = clamp(rad(slip * .72 + (c.vRy || 0) * .08), -.58, .58);
+      targetRoll = clamp(rad(-slip * .085 - (c.vRy || 0) * .018), -.085, .085);
+      targetPitch = clamp(-moveSpeed * .0025, -.018, .015);
+    }
   }
   const jumping = c.isAirborne || o.pose === 'jumping';
   let targetSus = 0;
@@ -2737,9 +2936,37 @@ function syncScene(showSelUI = true) {
     }
   });
   R.objs.forEach((e, id) => { if (!live.has(id)) { R.scene.remove(e.g); R.objs.delete(id); rigMotionState.delete(id); } });
+  const showCamProxy = showSelUI && (freeCamMode || vpViewMode === 'top' || vpViewMode === 'side');
+  if (R.camProxy) {
+    R.camProxy.visible = showCamProxy;
+    if (showCamProxy) {
+      const cw = camWorld(T), c = camAt(T);
+      R.camProxy.position.set(cw.x, cw.y, cw.z);
+      R.camProxy.rotation.order = 'YXZ';
+      R.camProxy.rotation.set(rad(-c.el), rad(c.az), rad(-c.roll));
+    }
+  }
   if (R.gizmo) {
     const activeObj = showSelUI && sel && sel !== 'camera' ? objById(sel) : null;
-    if (activeObj) {
+    const camGizmoActive = showSelUI && sel === 'camera' && showCamProxy;
+    if (camGizmoActive) {
+      const cw = camWorld(T), c = camAt(T);
+      R.gizmo.group.visible = true;
+      R.gizmo.group.position.set(cw.x, cw.y, cw.z);
+      R.gizmo.group.rotation.order = 'YXZ';
+      R.gizmo.group.rotation.set(rad(-c.el), rad(c.az), rad(-c.roll));
+      const camDir = new R.THREE.Vector3();
+      R.camera.getWorldDirection(camDir);
+      const depth = Math.max(.01, Math.abs(R.gizmo.group.position.clone().sub(R.camera.position).dot(camDir)) || R.camera.position.distanceTo(R.gizmo.group.position));
+      const vpH = Math.max(160, R.renderer.domElement.clientHeight || 360);
+      const worldH = 2 * depth * Math.tan(rad(R.camera.fov || 40) / 2);
+      const gScale = worldH * (92 / vpH);
+      R.gizmo.group.scale.set(gScale, gScale, gScale);
+      R.gizmo.moveGrp.visible = gizmoMode !== 'rotate';
+      R.gizmo.rotGrp.visible = gizmoMode === 'rotate';
+      if (R.gizmo.scaleGrp) R.gizmo.scaleGrp.visible = false;
+      R.gizmo.setHighlight(hoverGizmoAxis);
+    } else if (activeObj) {
       R.gizmo.group.visible = true;
       const gy = (activeObj.y || 0) + Math.min((activeObj.h || 1) * (activeObj.sy ?? 1) * .48, 1.0);
       R.gizmo.group.position.set(activeObj.x || 0, gy, activeObj.z || 0);
@@ -2781,10 +3008,13 @@ function renderVP(sizeOverride) {
   if (!sizeOverride && vpViewMode === 'top') {
     const ext = hooks.sceneExtent?.('top') || 1.6;
     const dTop = Math.max(2.2, S.dist * 1.15, ext * 2.2);
+    const camH = tg.y + dTop;
     R.camera.fov = 38; R.camera.aspect = w / h; R.camera.near = .01; R.camera.updateProjectionMatrix();
-    R.camera.position.set(tg.x, tg.y + dTop, tg.z);
+    R.camera.position.set(tg.x, camH, tg.z);
     R.camera.up.set(0, 0, -1);
     R.camera.lookAt(tg.x, 0, tg.z);
+    const s = h / (2 * Math.max(.2, camH) * Math.tan(rad(19)));
+    vpOverlayView = {kind:'top', cx:w / 2, cy:h / 2, s, T:tg, w, h};
   } else if (!sizeOverride && vpViewMode === 'side') {
     const ext = hooks.sceneExtent?.('side') || 1.6;
     const dSide = Math.max(2.2, S.dist * 1.15, ext * 2.2);
@@ -2793,7 +3023,18 @@ function renderVP(sizeOverride) {
     R.camera.position.set(tg.x + dSide, lookY, tg.z);
     R.camera.up.set(0, 1, 0);
     R.camera.lookAt(tg.x, lookY, tg.z);
+    const s = h / (2 * Math.max(.2, dSide) * Math.tan(rad(19)));
+    vpOverlayView = {kind:'side', cx:w / 2, cy:h / 2, s, T:tg, lookY, w, h};
+  } else if (!sizeOverride && freeCamMode && vpViewMode === 'orbit') {
+    vpOverlayView = null;
+    const fa = rad(freeCam.az), fe = rad(clamp(freeCam.el, -88, 88)), fDist = Math.max(.4, freeCam.dist || 5.5);
+    const ft = freeCam.target || tg;
+    R.camera.fov = 42; R.camera.aspect = w / h; R.camera.near = .01; R.camera.updateProjectionMatrix();
+    R.camera.position.set(ft.x + Math.sin(fa) * Math.cos(fe) * fDist, ft.y + Math.sin(fe) * fDist, ft.z + Math.cos(fa) * Math.cos(fe) * fDist);
+    R.camera.up.set(0, 1, 0);
+    R.camera.lookAt(ft.x, ft.y, ft.z);
   } else {
+    vpOverlayView = null;
     let effDist = S.dist;
     const fObjs = getSelectedFocusObjects();
     if (fObjs.length > 1) {
@@ -2825,6 +3066,23 @@ function renderVP(sizeOverride) {
   });
   R.hemi.intensity = S.lightOn ? .2 + (1 - (S.lights.key?.hard ?? 40) / 100) * .3 : .45;
   R.renderer.render(R.scene, R.camera);
+  const pathOv = $('vpPathOverlay');
+  if (pathOv) {
+    if (!sizeOverride && isVideo() && (vpViewMode === 'top' || vpViewMode === 'side') && vpOverlayView) {
+      pathOv.hidden = false;
+      const pr = wantPR || 1;
+      const pw = Math.max(1, Math.round(w * pr)), ph = Math.max(1, Math.round(h * pr));
+      if (pathOv.width !== pw || pathOv.height !== ph) { pathOv.width = pw; pathOv.height = ph; }
+      pathOv.style.width = Math.round(w) + 'px';
+      pathOv.style.height = Math.round(h) + 'px';
+      const octx = pathOv.getContext('2d');
+      octx.setTransform(pr, 0, 0, pr, 0, 0);
+      octx.clearRect(0, 0, w, h);
+      drawObjMotionPaths(octx, vpOverlayView, vpViewMode);
+    } else {
+      pathOv.hidden = true;
+    }
+  }
   $('vpGuides').hidden = !V().guides;
   const f = $('vpFocus'), fs = focusSt();
   if (fs.showMark && !sizeOverride) {
@@ -2896,9 +3154,45 @@ function setVpViewMode(m) {
   $('vtagTop')?.setAttribute('aria-pressed', String(vpViewMode === 'top'));
   $('vtagSide')?.setAttribute('aria-pressed', String(vpViewMode === 'side'));
   const titleEl = $('vpTitle');
-  if (titleEl) titleEl.textContent = vpViewMode === 'top' ? 'Top View (3D)' : vpViewMode === 'side' ? 'Side View (3D)' : '3D Camera View';
+  if (titleEl) {
+    titleEl.textContent = vpViewMode === 'top'
+      ? 'Top View (3D)'
+      : vpViewMode === 'side'
+        ? 'Side View (3D)'
+        : freeCamMode
+          ? 'Free Camera View (C4D)'
+          : '3D Camera View';
+  }
   renderVP();
 }
+function toggleFreeCamMode(forceState) {
+  freeCamMode = typeof forceState === 'boolean' ? forceState : !freeCamMode;
+  $('freeCamBtn')?.setAttribute('aria-pressed', String(freeCamMode));
+  if (freeCamMode) {
+    const cw = camWorld(T), tg = targetAt(T);
+    freeCam.target = {
+      x:rnd((tg.x + cw.x) * .35, 3),
+      y:rnd(Math.max(.55, (tg.y + cw.y) * .45), 3),
+      z:rnd((tg.z + cw.z) * .35, 3)
+    };
+    freeCam.az = norm360(S.az + 36);
+    freeCam.el = clamp(Math.max(22, S.el + 12), 14, 68);
+    freeCam.dist = Math.max(4.4, S.dist * 1.45);
+    selectObj('camera', false);
+    if (vpViewMode !== 'orbit') setVpViewMode('orbit');
+    else setVpViewMode('orbit');
+    AC.toast('Free Camera ON — Middle-mouse drag to orbit/pan view, move or rotate the 3D Camera object');
+  } else {
+    setVpViewMode(vpViewMode);
+    AC.toast('Free Camera OFF — Returned to Camera View');
+  }
+  objPropsKey = '';
+  renderObjects();
+  buildTimeline();
+  renderVP();
+  AC.drawAll();
+}
+$('freeCamBtn')?.addEventListener('click', () => toggleFreeCamMode());
 $('vtagOrbit')?.addEventListener('click', () => setVpViewMode('orbit'));
 $('vtagTop')?.addEventListener('click', () => setVpViewMode('top'));
 $('vtagSide')?.addEventListener('click', () => setVpViewMode('side'));
@@ -2910,7 +3204,7 @@ function raycastGizmoAt(clientX, clientY) {
   if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) return null;
   const ndc = new R.THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
   R.raycaster.setFromCamera(ndc, R.camera);
-  const activeMode = gizmoMode === 'rotate' ? 'rotate' : gizmoMode === 'scale' ? 'scale' : 'move';
+  const activeMode = gizmoMode === 'rotate' ? 'rotate' : gizmoMode === 'scale' && sel !== 'camera' ? 'scale' : 'move';
   const candidates = R.gizmo.hitMeshes.filter(m => m.userData.gizmoMode === activeMode);
   const hits = R.raycaster.intersectObjects(candidates, false);
   return hits.length ? hits[0].object.userData.gizmoAxis : null;
@@ -2922,10 +3216,14 @@ function raycastObjectAt(clientX, clientY) {
   const ndc = new R.THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
   R.raycaster.setFromCamera(ndc, R.camera);
   const meshes = [];
+  if (R.camProxy?.visible) {
+    R.camProxy.traverse(n => { if (n.isMesh) meshes.push(n); });
+  }
   R.objs.forEach(e => e.g.traverse(n => { if (n.isMesh && !n.userData.isOutline) meshes.push(n); }));
   const hits = R.raycaster.intersectObjects(meshes, false);
   if (!hits.length) return null;
   const oidHit = hits[0].object?.userData?.oid;
+  if (oidHit === 'camera') return {id:'camera', isCameraProxy:true};
   return oidHit ? objById(oidHit) : null;
 }
 function projectWorldDeltaToAxis(originVec, axisVec, dxPx, dyPx) {
@@ -2942,8 +3240,26 @@ function projectWorldDeltaToAxis(originVec, axisVec, dxPx, dyPx) {
 function bindViewportPicking() {
   const wrap = $('vpWrap'); if (!wrap) return;
   let vpDrag = null;
+  wrap.addEventListener('mousedown', e => { if (e.button === 1) e.preventDefault(); });
+  wrap.addEventListener('auxclick', e => { if (e.button === 1) e.preventDefault(); });
   wrap.addEventListener('pointerdown', e => {
-    if (e.button !== 0 || e.target.closest('button, input, select')) return;
+    if (e.target.closest('button, input, select')) return;
+    // Middle mouse button (or Alt+Left-click in Free Camera mode) orbits/pans Free Camera C4D-style
+    if (freeCamMode && (e.button === 1 || (e.button === 0 && e.altKey && !raycastGizmoAt(e.clientX, e.clientY)))) {
+      e.preventDefault(); e.stopPropagation();
+      try { wrap.setPointerCapture(e.pointerId); } catch (err) {}
+      activeVpDrag = true;
+      vpDrag = {
+        mode:e.shiftKey ? 'freeCamPan' : 'freeCamOrbit',
+        x0:e.clientX, y0:e.clientY,
+        az0:freeCam.az, el0:freeCam.el,
+        tx0:freeCam.target.x, ty0:freeCam.target.y, tz0:freeCam.target.z,
+        moved:false
+      };
+      wrap.style.cursor = 'grabbing';
+      return;
+    }
+    if (e.button !== 0) return;
     if (e.target.closest('#vpFocus')) {
       e.preventDefault(); e.stopPropagation();
       try { wrap.setPointerCapture(e.pointerId); } catch (err) {}
@@ -2957,7 +3273,48 @@ function bindViewportPicking() {
       };
       return;
     }
+    // Check object animation path knots & Bezier handles in Main Viewport when Top or Side view is active
+    if (isVideo() && (vpViewMode === 'top' || vpViewMode === 'side') && vpOverlayView && R?.renderer?.domElement) {
+      const rect = R.renderer.domElement.getBoundingClientRect();
+      const lx = e.clientX - rect.left, ly = e.clientY - rect.top;
+      const pathHit = hitTestPathInView(vpViewMode, vpOverlayView, lx, ly);
+      if (pathHit && (pathHit.kind === 'pathHandle' || pathHit.kind === 'pathKf')) {
+        e.preventDefault(); e.stopPropagation();
+        selectObj(pathHit.objId, false);
+        renderObjects(); buildTimeline(); renderVP();
+        try { wrap.setPointerCapture(e.pointerId); } catch (err) {}
+        activeVpDrag = true;
+        vpDrag = {
+          mode:'vpPathEdit',
+          viewKind:vpViewMode,
+          view:vpOverlayView,
+          hit:pathHit,
+          objId:pathHit.objId,
+          x0:e.clientX, y0:e.clientY,
+          moved:false
+        };
+        wrap.style.cursor = 'grabbing';
+        return;
+      }
+    }
     const gAxis = raycastGizmoAt(e.clientX, e.clientY);
+    if (gAxis && sel === 'camera' && R?.camProxy?.visible) {
+      hoverGizmoAxis = gAxis;
+      try { wrap.setPointerCapture(e.pointerId); } catch (err) {}
+      activeVpDrag = true;
+      const cw = camWorld(T);
+      vpDrag = {
+        mode:'camProxy',
+        axis:gAxis,
+        tool:gizmoMode === 'rotate' ? 'rotate' : 'move',
+        x0:e.clientX, y0:e.clientY,
+        cx0:cw.x, cy0:cw.y, cz0:cw.z,
+        az0:S.az, el0:S.el, roll0:S.roll,
+        moved:false
+      };
+      renderVP();
+      return;
+    }
     if (gAxis && sel && sel !== 'camera') {
       const cur = objById(sel);
       if (cur) {
@@ -2986,6 +3343,23 @@ function bindViewportPicking() {
       }
       return;
     }
+    if (hit.id === 'camera') {
+      selectObj('camera', false);
+      renderObjects(); buildTimeline(); renderVP(); AC.changed();
+      try { wrap.setPointerCapture(e.pointerId); } catch (err) {}
+      activeVpDrag = true;
+      const cw = camWorld(T);
+      vpDrag = {
+        mode:'camProxy',
+        axis:'free',
+        tool:gizmoMode === 'rotate' ? 'rotate' : 'move',
+        x0:e.clientX, y0:e.clientY,
+        cx0:cw.x, cy0:cw.y, cz0:cw.z,
+        az0:S.az, el0:S.el, roll0:S.roll,
+        moved:false
+      };
+      return;
+    }
     selectObj(hit.id, e.shiftKey);
     renderObjects(); buildTimeline(); renderVP(); AC.changed();
     wrap.setPointerCapture(e.pointerId);
@@ -3003,8 +3377,82 @@ function bindViewportPicking() {
     if (!vpDrag) {
       const gAx = raycastGizmoAt(e.clientX, e.clientY);
       if (gAx !== hoverGizmoAxis) { hoverGizmoAxis = gAx; renderVP(); }
-      const hObj = gAx ? true : !!raycastObjectAt(e.clientX, e.clientY);
+      let hPath = false;
+      if (isVideo() && (vpViewMode === 'top' || vpViewMode === 'side') && vpOverlayView && R?.renderer?.domElement) {
+        const rect = R.renderer.domElement.getBoundingClientRect();
+        const ph = hitTestPathInView(vpViewMode, vpOverlayView, e.clientX - rect.left, e.clientY - rect.top);
+        hPath = Boolean(ph && (ph.kind === 'pathHandle' || ph.kind === 'pathKf'));
+      }
+      const hObj = gAx || hPath ? true : !!raycastObjectAt(e.clientX, e.clientY);
       wrap.style.cursor = hObj ? 'grab' : '';
+      return;
+    }
+    if (vpDrag.mode === 'freeCamOrbit' || vpDrag.mode === 'freeCamPan') {
+      const dx = e.clientX - vpDrag.x0, dy = e.clientY - vpDrag.y0;
+      if (Math.hypot(dx, dy) > 1) vpDrag.moved = true;
+      wrap.style.cursor = 'grabbing';
+      if (vpDrag.mode === 'freeCamPan' || e.shiftKey) {
+        const panScale = Math.max(.002, freeCam.dist * .0018);
+        const fa = rad(freeCam.az);
+        const rx = Math.cos(fa), rz = -Math.sin(fa);
+        freeCam.target.x = rnd(vpDrag.tx0 - dx * panScale * rx, 3);
+        freeCam.target.z = rnd(vpDrag.tz0 - dx * panScale * rz, 3);
+        freeCam.target.y = rnd(Math.max(0, vpDrag.ty0 + dy * panScale), 3);
+      } else {
+        freeCam.az = rnd(norm360(vpDrag.az0 - dx * .45), 1);
+        freeCam.el = rnd(clamp(vpDrag.el0 + dy * .38, -85, 85), 1);
+      }
+      renderVP();
+      return;
+    }
+    if (vpDrag.mode === 'vpPathEdit') {
+      const dx = e.clientX - vpDrag.x0, dy = e.clientY - vpDrag.y0;
+      if (Math.hypot(dx, dy) > 1) vpDrag.moved = true;
+      if (!vpDrag.moved || !R?.renderer?.domElement) return;
+      wrap.style.cursor = 'grabbing';
+      const rect = R.renderer.domElement.getBoundingClientRect();
+      dragPathKnotOrHandleInView(vpDrag.viewKind, vpDrag.view, vpDrag.hit, e.clientX - rect.left, e.clientY - rect.top);
+      return;
+    }
+    if (vpDrag.mode === 'camProxy') {
+      const dx = e.clientX - vpDrag.x0, dy = e.clientY - vpDrag.y0;
+      if (Math.hypot(dx, dy) > 2) vpDrag.moved = true;
+      if (!vpDrag.moved) return;
+      wrap.style.cursor = 'grabbing';
+      if (vpDrag.tool === 'rotate' && vpDrag.axis !== 'free') {
+        if (vpDrag.axis === 'x') AC.setEl(rnd(clamp(vpDrag.el0 - dy * .45, -89, 89), 1));
+        else if (vpDrag.axis === 'z') S.roll = rnd(clamp(vpDrag.roll0 - dx * .45, -45, 45), 1);
+        else AC.setAz(rnd(norm360(vpDrag.az0 + dx * .55), 1));
+      } else {
+        const origin = new R.THREE.Vector3(vpDrag.cx0, vpDrag.cy0, vpDrag.cz0);
+        const camEuler = new R.THREE.Euler(rad(-vpDrag.el0), rad(vpDrag.az0), rad(-vpDrag.roll0), 'YXZ');
+        const axX = new R.THREE.Vector3(1, 0, 0).applyEuler(camEuler).normalize();
+        const axY = new R.THREE.Vector3(0, 1, 0).applyEuler(camEuler).normalize();
+        const axZ = new R.THREE.Vector3(0, 0, 1).applyEuler(camEuler).normalize();
+        let nx = vpDrag.cx0, ny = vpDrag.cy0, nz = vpDrag.cz0;
+        const scale = Math.max(.002, (freeCamMode ? freeCam.dist : S.dist) * .0022);
+        if (vpDrag.axis === 'x') {
+          const d = projectWorldDeltaToAxis(origin, axX, dx, dy);
+          nx += axX.x * d; ny += axX.y * d; nz += axX.z * d;
+        } else if (vpDrag.axis === 'y') {
+          const d = projectWorldDeltaToAxis(origin, axY, dx, dy);
+          nx += axY.x * d; ny += axY.y * d; nz += axY.z * d;
+        } else if (vpDrag.axis === 'z') {
+          const d = projectWorldDeltaToAxis(origin, axZ, dx, dy);
+          nx += axZ.x * d; ny += axZ.y * d; nz += axZ.z * d;
+        } else if (vpViewMode === 'top') {
+          nx += dx * scale; nz += dy * scale;
+        } else if (vpViewMode === 'side') {
+          nz -= dx * scale; ny -= dy * scale;
+        } else {
+          const va = rad(freeCamMode ? freeCam.az : S.az);
+          const rx = Math.cos(va), rz = -Math.sin(va), fx = -Math.sin(va), fz = -Math.cos(va);
+          nx += dx * scale * rx - dy * scale * fx;
+          nz += dx * scale * rz - dy * scale * fz;
+        }
+        setCamFromWorldPos(nx, Math.max(.05, ny), nz);
+      }
+      syncObjProps(); renderVP(); AC.drawAll();
       return;
     }
     if (vpDrag.mode === 'focusMarker') {
@@ -3029,7 +3477,7 @@ function bindViewportPicking() {
     if (Math.hypot(dx, dy) > 2) vpDrag.moved = true;
     if (!vpDrag.moved) return;
     wrap.style.cursor = 'grabbing';
-    const scale = Math.max(.002, S.dist * .0022);
+    const scale = Math.max(.002, (freeCamMode ? freeCam.dist : S.dist) * .0022);
     const origin = new R.THREE.Vector3(vpDrag.ox, vpDrag.oy + Math.min((o.h || 1) * (o.sy ?? 1) * .48, 1.0), vpDrag.oz);
     const objEuler = new R.THREE.Euler(rad(vpDrag.orx || 0), rad(vpDrag.ory || 0), rad(vpDrag.orz || 0), 'YXZ');
     const axX = new R.THREE.Vector3(1, 0, 0).applyEuler(objEuler).normalize();
@@ -3058,12 +3506,16 @@ function bindViewportPicking() {
         o.rz = rnd(clamp(vpDrag.orz - dx * .6, -180, 180), 1);
       } else {
         o.ry = rnd(vpDrag.ory + dx * .75, 1);
+        o._manualRotDirty = true;
+        o._baseRy = o.ry;
       }
     } else if (vpDrag.axis === 'x') {
+      const prevX = o.x || 0, prevZ = o.z || 0;
       const d = projectWorldDeltaToAxis(origin, axX, dx, dy);
       o.x = rnd(vpDrag.ox + axX.x * d, 3);
       o.y = rnd(Math.max(0, vpDrag.oy + axX.y * d), 3);
       o.z = rnd(vpDrag.oz + axX.z * d, 3);
+      smoothTurnRiggedOnDrag(o, prevX, prevZ, o.x, o.z);
     } else if (vpDrag.axis === 'y' || e.altKey) {
       const d = vpDrag.axis === 'y'
         ? projectWorldDeltaToAxis(origin, axY, dx, dy)
@@ -3076,10 +3528,12 @@ function bindViewportPicking() {
         o.y = rnd(Math.max(0, vpDrag.oy + d), 3);
       }
     } else if (vpDrag.axis === 'z') {
+      const prevX = o.x || 0, prevZ = o.z || 0;
       const d = projectWorldDeltaToAxis(origin, axZ, dx, dy);
       o.x = rnd(vpDrag.ox + axZ.x * d, 3);
       o.y = rnd(Math.max(0, vpDrag.oy + axZ.y * d), 3);
       o.z = rnd(vpDrag.oz + axZ.z * d, 3);
+      smoothTurnRiggedOnDrag(o, prevX, prevZ, o.x, o.z);
     } else if (vpViewMode === 'top') {
       const prevX = o.x || 0, prevZ = o.z || 0;
       o.x = rnd(vpDrag.ox + dx * scale, 3);
@@ -3090,7 +3544,8 @@ function bindViewportPicking() {
       o.y = rnd(Math.max(0, vpDrag.oy - dy * scale), 3);
     } else {
       const prevX = o.x || 0, prevZ = o.z || 0;
-      const a = rad(S.az), rx = Math.cos(a), rz = -Math.sin(a), fx = -Math.sin(a), fz = -Math.cos(a);
+      const va = rad(freeCamMode ? freeCam.az : S.az);
+      const rx = Math.cos(va), rz = -Math.sin(va), fx = -Math.sin(va), fz = -Math.cos(va);
       o.x = rnd(vpDrag.ox + dx * scale * rx - dy * scale * fx, 3);
       o.z = rnd(vpDrag.oz + dx * scale * rz - dy * scale * fz, 3);
       smoothTurnRiggedOnDrag(o, prevX, prevZ, o.x, o.z);
@@ -3100,6 +3555,27 @@ function bindViewportPicking() {
   });
   const endVpDrag = () => {
     if (!vpDrag) return;
+    if (vpDrag.mode === 'freeCamOrbit' || vpDrag.mode === 'freeCamPan') {
+      vpDrag = null; activeVpDrag = false; wrap.style.cursor = '';
+      renderVP();
+      return;
+    }
+    if (vpDrag.mode === 'vpPathEdit') {
+      const moved = vpDrag.moved, oid = vpDrag.objId;
+      vpDrag = null; activeVpDrag = false; wrap.style.cursor = '';
+      if (moved && oid) {
+        pathCache.delete(oid);
+        buildTimeline(); apply(T); syncObjProps(); renderVP(); AC.drawAll(); AC.save(); AC.changed();
+      }
+      return;
+    }
+    if (vpDrag.mode === 'camProxy') {
+      const moved = vpDrag.moved;
+      vpDrag = null; activeVpDrag = false; hoverGizmoAxis = null; wrap.style.cursor = '';
+      renderVP(); AC.drawAll();
+      if (moved) { autoKey(); AC.save(); AC.changed(); }
+      return;
+    }
     if (vpDrag.mode === 'focusMarker') {
       const moved = vpDrag.moved;
       vpDrag = null; activeVpDrag = false; wrap.style.cursor = '';
@@ -3110,7 +3586,7 @@ function bindViewportPicking() {
       return;
     }
     const o = objById(vpDrag.id);
-    if (o) { delete o._dragDirX; delete o._dragDirZ; }
+    if (o) { delete o._dragDirX; delete o._dragDirZ; delete o._reverseDrag; }
     const moved = vpDrag.moved; vpDrag = null; activeVpDrag = false; hoverGizmoAxis = null; wrap.style.cursor = '';
     if (moved && o && o.model === 'person') {
       if (checkAutoSitOnChair(o, true)) { objPropsKey = ''; syncObjProps(); }
@@ -3123,7 +3599,7 @@ function bindViewportPicking() {
   wrap.addEventListener('dblclick', e => {
     if (e.target.closest('button, input, select')) return;
     const hit = raycastObjectAt(e.clientX, e.clientY);
-    if (!hit) return;
+    if (!hit || hit.id === 'camera') return;
     selectObj(hit.id, false);
     renderObjects(); buildTimeline(); renderVP();
     openObjEditBar(hit.id);
@@ -3226,16 +3702,23 @@ function colorSlotsForObject(o) {
 
 function renderObjects() {
   if (!$('objList')) return;
+  if ($('freeCamBtn')) $('freeCamBtn').setAttribute('aria-pressed', String(freeCamMode));
   $('objList').innerHTML = V().objects.map(o => `<button class="objrow${selSet.has(o.id) && selSet.size > 1 ? ' multi-sel' : ''}" draggable="true" data-oid="${o.id}" aria-pressed="${isObjSelected(o.id)}" title="Click to select, double-click to edit name &amp; subject detail"><span class="sw" style="background:${escAttr(o.color)}"></span>${esc(o.label)}<span class="m">${MODELS[o.model] || o.model}${o.model === 'group' && o.children ? ` (${o.children.length})` : ''}</span></button>`).join('');
   bindDragToGroup($('objList'), 'data-oid');
   if ($('objMatchImg')) $('objMatchImg').hidden = !(AC.refs.length && AC.refs.some(r => r.subjects?.length));
   const o = objById(sel);
-  const key = ['vid', o ? o.id + o.model + (o.pose || '') : sel === 'camera' ? 'cam' : 'none', selSet.size, AC.refs.length].join(':');
+  const key = ['vid', o ? o.id + o.model + (o.pose || '') : sel === 'camera' ? 'cam' : 'none', selSet.size, AC.refs.length, freeCamMode ? 'fc1' : 'fc0'].join(':');
   if (key !== objPropsKey) {
     objPropsKey = key;
     if (sel === 'camera') {
+      const camPosHtml = `<div class="field"><div class="labrow"><label for="cam_op_x">${kb('cam.pos', 'Camera Position')}Position (X · Y · Z)</label></div><div class="grid3" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px"><input type="number" id="cam_op_x" data-cam-xyz="x" step="0.05" min="-100" max="100" title="Camera Position X" aria-label="Camera Position X"><input type="number" id="cam_op_y" data-cam-xyz="y" step="0.05" min="0" max="50" title="Camera Position Y" aria-label="Camera Position Y"><input type="number" id="cam_op_z" data-cam-xyz="z" step="0.05" min="-100" max="100" title="Camera Position Z" aria-label="Camera Position Z"></div></div>`;
+      const camRotHtml = `<div class="field"><div class="labrow"><label for="cam_op_el">${kb('cam.rot', 'Camera Rotation')}Rotation (Pitch · Yaw · Roll)</label></div><div class="grid3" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px"><input type="number" id="cam_op_el" data-cp="el" step="1" min="-89" max="89" title="Camera Pitch / Tilt (°)" aria-label="Camera Pitch"><input type="number" id="cam_op_az" data-cp="az" step="1" min="-720" max="720" title="Camera Yaw / Orbit (°)" aria-label="Camera Yaw"><input type="number" id="cam_op_roll" data-cp="roll" step="1" min="-45" max="45" title="Camera Roll (°)" aria-label="Camera Roll"></div></div>`;
+      const camLensHtml = `<div class="grid2"><div class="field"><div class="labrow"><label for="cam_op_dist">${kb('cam.dist', 'Distance')}Distance m</label></div><input type="number" id="cam_op_dist" data-cp="dist" step="0.05" min="0.25" max="60"></div><div class="field"><div class="labrow"><label for="cam_op_focal">${kb('cam.focal', 'Focal length')}Focal mm</label></div><input type="number" id="cam_op_focal" data-cp="focal" step="1" min="12" max="200"></div></div>`;
       $('objProps').innerHTML = `<div class="sep"></div>
-        <p class="hint">The camera's orbit, tilt, distance, roll and X / Y / Z position are in the Camera angle panel; focal length and sensor are in Camera &amp; lens. The camera can't be deleted.</p>
+        ${camPosHtml}
+        ${camRotHtml}
+        ${camLensHtml}
+        <p class="hint">${freeCamMode ? 'Free Camera active: middle-mouse drag in viewport to orbit (Shift+middle-drag to pan), or drag the 3D Camera object gizmo.' : 'Tip: Click Free Camera above to inspect and move the 3D Camera object freely like Cinema 4D.'}</p>
         <div class="row"><button class="btn ghost sm" id="openCamAngle" style="flex:none">Open Camera angle</button><button class="btn ghost sm" id="openCamLens" style="flex:none">Open Camera &amp; lens</button></div>`;
     } else if (!o) { $('objProps').innerHTML = ''; }
     else {
@@ -3279,6 +3762,18 @@ function renderObjects() {
 }
 function syncObjProps() {
   const set = (id, v) => { const el = $(id); if (el && document.activeElement !== el && !el.classList.contains('scrubbing')) el.value = v; };
+  if (sel === 'camera') {
+    const cw = camWorld(T), c = camAt(T);
+    set('cam_op_x', rnd(cw.x, 2));
+    set('cam_op_y', rnd(cw.y, 2));
+    set('cam_op_z', rnd(cw.z, 2));
+    set('cam_op_el', Math.round(c.el));
+    set('cam_op_az', Math.round(signed(c.az)));
+    set('cam_op_roll', Math.round(c.roll));
+    set('cam_op_dist', rnd(c.dist, 2));
+    set('cam_op_focal', Math.round(c.focal));
+    return;
+  }
   if (sel !== 'camera') {
     const o = objById(sel); if (!o || !$('op_label')) return;
     set('op_label', o.label); set('op_h', rnd(o.h, 3)); set('op_w', rnd(o.w, 3)); set('op_x', rnd(o.x, 3)); set('op_z', rnd(o.z, 3));
@@ -3348,12 +3843,24 @@ $('objList').addEventListener('dblclick', e => {
   openObjEditBar(b.dataset.oid);
 });
 $('objProps').addEventListener('input', e => {
+  const camXyz = e.target.dataset.camXyz;
+  if (camXyz) {
+    const cw = camWorld(T);
+    const nx = camXyz === 'x' ? parseFloat(e.target.value) : cw.x;
+    const ny = camXyz === 'y' ? parseFloat(e.target.value) : cw.y;
+    const nz = camXyz === 'z' ? parseFloat(e.target.value) : cw.z;
+    if (isFinite(nx) && isFinite(ny) && isFinite(nz)) {
+      setCamFromWorldPos(nx, Math.max(.05, ny), nz);
+      autoKey(); syncObjProps(); renderVP(); AC.drawAll(); AC.changed();
+    }
+    return;
+  }
   const cp = e.target.dataset.cp;
   if (cp) {
     const v = parseFloat(e.target.value); if (!isFinite(v)) return;
     if (cp === 'az') AC.setAz(v); else if (cp === 'el') AC.setEl(v); else if (cp === 'dist') AC.setDist(v);
     else if (cp === 'roll') S.roll = clamp(v, -45, 45); else if (cp === 'focal') AC.setFocal(v); else if (cp === 'sensor') S.sensorW = clamp(v, 1, 100);
-    AC.changed(); return;
+    autoKey(); syncObjProps(); renderVP(); AC.drawAll(); AC.changed(); return;
   }
   const k = e.target.dataset.ok, o = objById(sel); if (!k || !o) return;
   if (k === 'label') {
@@ -3379,6 +3886,7 @@ $('objProps').addEventListener('input', e => {
     if (isFinite(v)) {
       o[k] = k === 'h' || k === 'w' ? Math.max(.01, v) : k === 'sx' || k === 'sy' || k === 'sz' ? clamp(v, .05, 20) : k === 'y' ? Math.max(0, v) : v;
       o.userMoved = true;
+      if (k === 'ry') { o._manualRotDirty = true; o._baseRy = o.ry; }
       if ((k === 'x' || k === 'z') && o.model === 'person') checkAutoSitOnChair(o, false);
     }
   }
@@ -3696,14 +4204,16 @@ function buildTimeline() {
   cleanTracks();
   renderKeyGroups();
   const dur = V().duration, times = fKeyTimes();
+  const isPtSel = t => !!(selKey && ((selKey.t !== undefined && Math.abs(selKey.t - t) < 1e-4) || (Array.isArray(selKey.times) && selKey.times.some(st => Math.abs(st - t) < 1e-4))));
+  const isKfSel = k => !!(selKey && (selKey.k === k || (Array.isArray(selKey.keys) && selKey.keys.includes(k)) || isPtSel(k.t)));
   $('powerKeys').innerHTML = times.map(t => {
     const ks = fKeysAt(t), e = ks[0]?.e || 'easeInOut';
-    return `<button class="pkey ${easeClass(e)}${selKey && selKey.t !== undefined && Math.abs(selKey.t - t) < 1e-4 ? ' sel' : ''}" data-pt="${t}" style="left:${t / dur * 100}%" title="Frame ${frameOf(t)} · ${ks.length} key${ks.length > 1 ? 's' : ''} · ${escAttr(EASES[e]?.name || '')}"><i></i></button>`;
+    return `<button class="pkey ${easeClass(e)}${isPtSel(t) ? ' sel' : ''}" data-pt="${t}" style="left:${t / dur * 100}%" title="Frame ${frameOf(t)} · ${ks.length} key${ks.length > 1 ? 's' : ''} · ${escAttr(EASES[e]?.name || '')} (Shift+Click to multi-select)"><i></i></button>`;
   }).join('');
   if (V().showTracks) {
     const P = props().filter(p => tracks()[p.path]?.length && inFilter(p.path));
     $('tracks').innerHTML = P.length ? P.map(p => `<div class="trow"><div class="tn">${kb(p.path, p.name)}<span class="g">${esc(groupName(p.group))}</span>${esc(p.name)}</div>`
-      + `<div class="tt" data-tpath="${p.path}">${tracks()[p.path].map((k, i) => `<button class="kf ${easeClass(k.e)}${selKey && (selKey.k === k || selKey.keys?.includes(k)) ? ' sel' : ''}" data-kpath="${p.path}" data-ki="${i}" style="left:${k.t / dur * 100}%" title="Frame ${frameOf(k.t)} · ${escAttr(EASES[k.e]?.name || '')}"><i></i></button>`).join('')}<span class="ph2" style="left:${T / dur * 100}%"></span></div></div>`).join('')
+      + `<div class="tt" data-tpath="${p.path}">${tracks()[p.path].map((k, i) => `<button class="kf ${easeClass(k.e)}${isKfSel(k) ? ' sel' : ''}" data-kpath="${p.path}" data-ki="${i}" style="left:${k.t / dur * 100}%" title="Frame ${frameOf(k.t)} · ${escAttr(EASES[k.e]?.name || '')} (Shift+Click to multi-select)"><i></i></button>`).join('')}<span class="ph2" style="left:${T / dur * 100}%"></span></div></div>`).join('')
       : '<p class="hint" style="padding:10px 14px">No animated values yet. Click a ○ key button next to any value, or the red record button.</p>';
   }
   $('tracks').hidden = !V().showTracks; $('tlTracksBtn').setAttribute('aria-pressed', !!V().showTracks);
@@ -3747,12 +4257,36 @@ const timeFromX = (el, clientX) => { const r = el.getBoundingClientRect(); retur
 let pd = null;
 $('power').addEventListener('pointerdown', e => {
   const pk = e.target.closest('[data-pt]');
-  $('power').setPointerCapture(e.pointerId);
+  try { $('power').setPointerCapture(e.pointerId); } catch (_) {}
   if (pk && (e.ctrlKey || e.metaKey)) { setEase(fKeysAt(+pk.dataset.pt), 'linear'); return; }
   if (pk) {
     const t = +pk.dataset.pt;
-    selKey = {t}; pd = {mode:'key', t0:t, x0:e.clientX, moved:false, keys:fKeysAt(t)};
-    document.querySelectorAll('.pkey.sel, .kf.sel').forEach(x => x.classList.remove('sel')); pk.classList.add('sel');
+    if (e.shiftKey) {
+      const prevTimes = selKey
+        ? (Array.isArray(selKey.times) ? [...selKey.times] : selKey.t !== undefined ? [selKey.t] : (Array.isArray(selKey.keys) ? [...new Set(selKey.keys.map(k => k.t))] : []))
+        : [];
+      const idx = prevTimes.findIndex(st => Math.abs(st - t) < 1e-4);
+      if (idx >= 0 && prevTimes.length > 1) prevTimes.splice(idx, 1);
+      else if (idx < 0) prevTimes.push(t);
+      prevTimes.sort((a, b) => a - b);
+      const allKeys = prevTimes.flatMap(st => fKeysAt(st));
+      selKey = {t: prevTimes[prevTimes.length - 1] ?? t, times: prevTimes, keys: allKeys};
+    } else if (!(selKey && Array.isArray(selKey.times) && selKey.times.length > 1 && selKey.times.some(st => Math.abs(st - t) < 1e-4))) {
+      selKey = {t, times: [t], keys: fKeysAt(t)};
+    } else {
+      selKey.t = t;
+    }
+    const selTimes = selKey.times || [t];
+    const selKeysList = selKey.keys || fKeysAt(t);
+    pd = {mode:'key', t0:t, x0:e.clientX, moved:false, keys:selKeysList, keyT0:new Map(selKeysList.map(k => [k, k.t])), times0:[...selTimes]};
+    document.querySelectorAll('.pkey').forEach(x => {
+      const pt = +x.dataset.pt;
+      x.classList.toggle('sel', selTimes.some(st => Math.abs(st - pt) < 1e-4));
+    });
+    document.querySelectorAll('.kf').forEach(x => {
+      const k = tracks()[x.dataset.kpath]?.[+x.dataset.ki];
+      x.classList.toggle('sel', !!(k && selKeysList.includes(k)));
+    });
     $('kfEdit').hidden = false; $('kfEase').value = pd.keys[0]?.e || 'easeInOut'; AC.refreshDD($('kfEase'));
     return;
   }
@@ -3764,9 +4298,18 @@ $('power').addEventListener('pointermove', e => {
   if (Math.abs(e.clientX - pd.x0) > 3) pd.moved = true;
   if (!pd.moved) return;
   const r = $('power').getBoundingClientRect();
-  const t = snap(clamp(pd.t0 + (e.clientX - pd.x0) / r.width * V().duration, 0, V().duration));
-  pd.keys.forEach(k => { k.t = t; }); selKey = {t};
-  const el = document.querySelector('.pkey.sel'); if (el) el.style.left = (t / V().duration * 100) + '%';
+  const dt = snap(clamp(pd.t0 + (e.clientX - pd.x0) / r.width * V().duration, 0, V().duration)) - pd.t0;
+  pd.keys.forEach(k => {
+    const baseT = pd.keyT0 ? (pd.keyT0.get(k) ?? pd.t0) : pd.t0;
+    k.t = snap(clamp(baseT + dt, 0, V().duration));
+  });
+  const nextTimes = (pd.times0 || [pd.t0]).map(st => snap(clamp(st + dt, 0, V().duration)));
+  selKey = {t: snap(clamp(pd.t0 + dt, 0, V().duration)), times: nextTimes, keys: pd.keys};
+  const selEls = [...document.querySelectorAll('.pkey.sel')];
+  selEls.forEach((el, idx) => {
+    const nt = nextTimes[idx] ?? selKey.t;
+    el.style.left = (nt / V().duration * 100) + '%';
+  });
 });
 const pEnd = () => {
   if (!pd) return;
@@ -3783,12 +4326,28 @@ let td = null;
 $('tracks').addEventListener('pointerdown', e => {
   const kfb = e.target.closest('[data-kpath]'), tt = e.target.closest('.tt');
   if (!tt) return;
-  $('tracks').setPointerCapture(e.pointerId);
+  try { $('tracks').setPointerCapture(e.pointerId); } catch (_) {}
   if (kfb && (e.ctrlKey || e.metaKey)) { const k = tracks()[kfb.dataset.kpath]?.[+kfb.dataset.ki]; if (k) setEase([k], 'linear'); return; }
   if (kfb) {
     const keys = tracks()[kfb.dataset.kpath], k = keys?.[+kfb.dataset.ki]; if (!k) return;
-    selKey = {path:kfb.dataset.kpath, k}; td = {mode:'key', k, keys, el:tt, x0:e.clientX, t0:k.t, moved:false};
-    document.querySelectorAll('.pkey.sel, .kf.sel').forEach(x => x.classList.remove('sel')); kfb.classList.add('sel');
+    if (e.shiftKey) {
+      const prevKeys = selKey ? [...selectedKeys()] : [];
+      const idx = prevKeys.indexOf(k);
+      if (idx >= 0 && prevKeys.length > 1) prevKeys.splice(idx, 1);
+      else if (idx < 0) prevKeys.push(k);
+      selKey = {path:kfb.dataset.kpath, k, keys:prevKeys};
+    } else if (!(selKey && Array.isArray(selKey.keys) && selKey.keys.length > 1 && selKey.keys.includes(k))) {
+      selKey = {path:kfb.dataset.kpath, k, keys:[k]};
+    } else {
+      selKey.k = k; selKey.path = kfb.dataset.kpath;
+    }
+    const selKeysList = selKey.keys || [k];
+    td = {mode:'key', k, keys, selKeys:selKeysList, keyT0:new Map(selKeysList.map(xk => [xk, xk.t])), el:tt, x0:e.clientX, t0:k.t, moved:false};
+    document.querySelectorAll('.pkey.sel, .kf.sel').forEach(x => x.classList.remove('sel'));
+    document.querySelectorAll('.kf').forEach(x => {
+      const xk = tracks()[x.dataset.kpath]?.[+x.dataset.ki];
+      if (xk && selKeysList.includes(xk)) x.classList.add('sel');
+    });
     $('kfEdit').hidden = false; $('kfEase').value = k.e; AC.refreshDD($('kfEase'));
     return;
   }
@@ -3800,13 +4359,25 @@ $('tracks').addEventListener('pointermove', e => {
   if (Math.abs(e.clientX - td.x0) > 3) td.moved = true;
   if (!td.moved) return;
   const r = td.el.getBoundingClientRect();
-  const t = snap(clamp(td.t0 + (e.clientX - td.x0) / r.width * V().duration, 0, V().duration));
-  if (td.keys.some(k => k !== td.k && Math.abs(k.t - t) < frameDur() / 2)) return;
-  td.k.t = t; const el = document.querySelector('.kf.sel'); if (el) el.style.left = (t / V().duration * 100) + '%';
+  const dt = snap(clamp(td.t0 + (e.clientX - td.x0) / r.width * V().duration, 0, V().duration)) - td.t0;
+  const selKeysList = td.selKeys || [td.k];
+  if (selKeysList.length === 1 && td.keys.some(k => k !== td.k && Math.abs(k.t - (td.t0 + dt)) < frameDur() / 2)) return;
+  selKeysList.forEach(xk => {
+    const baseT = td.keyT0 ? (td.keyT0.get(xk) ?? td.t0) : td.t0;
+    xk.t = snap(clamp(baseT + dt, 0, V().duration));
+  });
+  document.querySelectorAll('.kf.sel').forEach(el => {
+    const xk = tracks()[el.dataset.kpath]?.[+el.dataset.ki];
+    if (xk) el.style.left = (xk.t / V().duration * 100) + '%';
+  });
 });
 const tEnd = () => {
   if (!td) return;
-  if (td.mode === 'key') { td.keys.sort((a, b) => a.t - b.t); if (!td.moved) { stop(); setTime(td.k.t); } buildTimeline(); apply(T); AC.save(); AC.changed(); }
+  if (td.mode === 'key') {
+    Object.values(tracks()).forEach(ks => ks.sort((a, b) => a.t - b.t));
+    if (!td.moved) { stop(); setTime(td.k.t); }
+    buildTimeline(); apply(T); AC.save(); AC.changed();
+  }
   td = null;
 };
 $('tracks').addEventListener('pointerup', tEnd); $('tracks').addEventListener('pointercancel', tEnd);
@@ -3872,32 +4443,6 @@ function openCtx(x, y, keys, opts = {}) {
   m.querySelector('button')?.focus();
 }
 
-['top', 'side'].forEach(viewName => {
-  const cvs = $(viewName);
-  if (!cvs) return;
-  cvs.addEventListener('contextmenu', e => {
-    if (!isVideo() || !is3D()) return;
-    const v = lastViewTransform[viewName];
-    if (!v || !v.s) return;
-    const rect = cvs.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    const hit = hitTestPathInView(viewName, v, x, y);
-    if (hit && (hit.kind === 'pathKf' || hit.kind === 'pathHandle')) {
-      e.preventDefault();
-      e.stopPropagation();
-      const o = objById(hit.objId);
-      if (!o) return;
-      selectObj(o.id, false);
-      ensureObjPathKnotKeys(o, hit.t);
-      const keysAtKnot = Object.entries(tracks())
-        .filter(([p]) => p.startsWith(`obj.${o.id}.`))
-        .flatMap(([, ks]) => ks.filter(k => Math.abs(k.t - hit.t) < frameDur() / 2 + 1e-4));
-      renderObjects(); buildTimeline(); AC.drawAll(); renderVP();
-      openCtx(e.clientX, e.clientY, keysAtKnot, {pathKnot:{objId:o.id, t:hit.t}});
-    }
-  });
-});
 function openObjCtx(x, y, targetObj) {
   closeCtx();
   const m = document.createElement('div'); m.className = 'ctx'; m.setAttribute('role', 'menu');
@@ -3991,8 +4536,23 @@ document.addEventListener('contextmenu', e => {
   if (pk || kf) {
     e.preventDefault();
     let keys;
-    if (pk) { const t = +pk.dataset.pt; keys = fKeysAt(t); selKey = {t}; }
-    else { const k = tracks()[kf.dataset.kpath]?.[+kf.dataset.ki]; keys = k ? [k] : []; selKey = k ? {path:kf.dataset.kpath, k} : null; }
+    if (pk) {
+      const t = +pk.dataset.pt;
+      if (selKey && Array.isArray(selKey.times) && selKey.times.length > 1 && selKey.times.some(st => Math.abs(st - t) < 1e-4)) {
+        keys = selectedKeys();
+      } else {
+        keys = fKeysAt(t);
+        selKey = {t, times:[t], keys};
+      }
+    } else {
+      const k = tracks()[kf.dataset.kpath]?.[+kf.dataset.ki];
+      if (k && selKey && Array.isArray(selKey.keys) && selKey.keys.length > 1 && selKey.keys.includes(k)) {
+        keys = selectedKeys();
+      } else {
+        keys = k ? [k] : [];
+        selKey = k ? {path:kf.dataset.kpath, k, keys} : null;
+      }
+    }
     buildTimeline();
     if (keys.length) openCtx(e.clientX, e.clientY, keys);
     return;
@@ -4012,6 +4572,29 @@ document.addEventListener('contextmenu', e => {
   }
   if (e.target.closest('#vpWrap') && !e.target.closest('button, input, select')) {
     e.preventDefault();
+    // In Main Viewport Top/Side view, check if right-clicking an Object Animation Path knot or Bezier handle
+    if (isVideo() && (vpViewMode === 'top' || vpViewMode === 'side') && vpOverlayView) {
+      const ov = $('vpPathOverlay');
+      if (ov && !ov.hidden) {
+        const rect = ov.getBoundingClientRect();
+        const ox = e.clientX - rect.left;
+        const oy = e.clientY - rect.top;
+        const pathHit = hitTestPathInView(vpViewMode, vpOverlayView, ox, oy);
+        if (pathHit && (pathHit.kind === 'pathKf' || pathHit.kind === 'pathHandle')) {
+          const o = objById(pathHit.objId);
+          if (o) {
+            selectObj(o.id, false);
+            ensureObjPathKnotKeys(o, pathHit.t);
+            const keysAtKnot = Object.entries(tracks())
+              .filter(([p]) => p.startsWith(`obj.${o.id}.`))
+              .flatMap(([, ks]) => ks.filter(k => Math.abs(k.t - pathHit.t) < frameDur() / 2 + 1e-4));
+            renderObjects(); buildTimeline(); AC.drawAll(); renderVP();
+            openCtx(e.clientX, e.clientY, keysAtKnot, {pathKnot:{objId:o.id, t:pathHit.t}});
+            return;
+          }
+        }
+      }
+    }
     const hit = raycastObjectAt(e.clientX, e.clientY);
     if (hit && !isObjSelected(hit.id)) { selectObj(hit.id, e.shiftKey); renderObjects(); buildTimeline(); }
     const activeObj = hit || (sel && sel !== 'camera' ? objById(sel) : null);
@@ -4022,8 +4605,10 @@ $('kfEase').innerHTML = Object.entries(EASES).map(([k, v]) => `<option value="${
 AC.refreshDD($('kfEase'));
 const selectedKeys = () => {
   if (!selKey) return [];
-  if (selKey.keys) { const live = new Set(Object.values(tracks()).flat()); return selKey.keys.filter(k => live.has(k)); }
-  return selKey.k ? [selKey.k] : fKeysAt(selKey.t);
+  const live = new Set(Object.values(tracks()).flat());
+  if (Array.isArray(selKey.keys) && selKey.keys.length) return selKey.keys.filter(k => live.has(k));
+  if (Array.isArray(selKey.times) && selKey.times.length) return selKey.times.flatMap(t => fKeysAt(t)).filter(k => live.has(k));
+  return selKey.k ? (live.has(selKey.k) ? [selKey.k] : []) : fKeysAt(selKey.t);
 };
 $('kfEase').addEventListener('change', e => { selectedKeys().forEach(k => setKeyEase(k, e.target.value)); buildTimeline(); apply(T); AC.save(); AC.changed(); });
 $('kfDel').addEventListener('click', () => {
@@ -5195,7 +5780,8 @@ function sampleAnimCurve(o, d, knotsOrSteps, fn) {
         v: rnd(pt[prop], prec),
         mIn: rnd(mIn, 4),
         mOut: rnd(mOut, 4),
-        e
+        e,
+        ...(prop === 'ry' ? {userRot: true} : {})
       });
     }
   }
@@ -6512,7 +7098,7 @@ hooks.handleDroppedVideos = async (videoFiles, folderName = '') => {
 
 /* ---------- boot ---------- */
 // small read-only inspection hook (used by the automated viewport tests)
-AC.vpTest = {R:() => R, setTime:t => setTime(t), time:() => T, objs:() => V().objects, stop:() => stop(), renderVP:sz => renderVP(sz), pathDist:(o, t) => pathDist(o, t), applyPreset:id => applyAnimPreset(id), preciseMinY, detect3DFocusPartAt, sampleFocusPartTimeline, focusMarkerAt, setFocusMarkerWorld, toggleObjPathCurveControl, isObjKnotCurveEnabled, objPathKeyTimes, objPosAt, hitTestPathInView, smoothTurnRiggedOnDrag, colorSlotsForObject, lastViewTransform:() => lastViewTransform, projectObjPathPt, ensureObjPathKnotKeys};
+AC.vpTest = {R:() => R, setTime:t => setTime(t), time:() => T, objs:() => V().objects, stop:() => stop(), renderVP:sz => renderVP(sz), pathDist:(o, t) => pathDist(o, t), applyPreset:id => applyAnimPreset(id), preciseMinY, detect3DFocusPartAt, sampleFocusPartTimeline, focusMarkerAt, setFocusMarkerWorld, toggleObjPathCurveControl, isObjKnotCurveEnabled, objPathKeyTimes, objPosAt, hitTestPathInView, smoothTurnRiggedOnDrag, colorSlotsForObject, lastViewTransform:() => lastViewTransform, projectObjPathPt, ensureObjPathKnotKeys, selKey:() => selKey, selectedKeys, freeCamMode:() => freeCamMode, freeCam:() => freeCam, toggleFreeCamMode, vpViewMode:() => vpViewMode, setVpViewMode, vpOverlayView:() => vpOverlayView, dragPathKnotOrHandleInView, setCamFromWorldPos};
 renderPresets();
 renderAnimPresets();
 updateTimeUI();

@@ -406,18 +406,35 @@ function spatialPosition(b) {
 }
 
 /* ---------- cross-class & same-class NMS deduplication ---------- */
-const HANDHELD_CLASSES = new Set(['cell phone','bottle','wine glass','cup','book','handbag','backpack','umbrella','laptop','sports ball','remote','clock','vase','scissors','toothbrush','tie']);
+const HANDHELD_CLASSES = new Set([
+  'cell phone','bottle','wine glass','cup','bowl','book','handbag','backpack','umbrella','laptop',
+  'sports ball','remote','clock','vase','scissors','toothbrush','tie','suitcase','frisbee','skis',
+  'snowboard','kite','baseball bat','baseball glove','skateboard','surfboard','tennis racket',
+  'fork','knife','spoon','banana','apple','sandwich','orange','broccoli','carrot','hot dog','pizza',
+  'donut','cake','mouse','keyboard','teddy bear','hair drier','potted plant'
+]);
+const CONTAINER_SURFACE_CLASSES = new Set([
+  'dining table','couch','bed','bench','chair','desk','table','refrigerator','oven','sink','tv'
+]);
 function sameCategoryGroup(a, b) {
+  if (a.cls && b.cls && a.cls === b.cls) return true;
+  // Never treat two different COCO classes (e.g. a cup on a dining table, or a laptop on a couch, or a bottle next to a bowl) as the same category group!
+  const aIsGeneric = !a.cls || a.cls === 'subject' || a.cls === 'product' || a.cls === 'object';
+  const bIsGeneric = !b.cls || b.cls === 'subject' || b.cls === 'product' || b.cls === 'object';
+  if (!aIsGeneric && !bIsGeneric && a.cls !== b.cls) {
+    if (['car', 'truck', 'bus'].includes(a.cls) && ['car', 'truck', 'bus'].includes(b.cls)) return true;
+    return false;
+  }
   if (a.type === b.type) return true;
   if (['car', 'vehicle'].includes(a.type) && ['car', 'vehicle'].includes(b.type)) return true;
-  if (['product', 'object', 'auto'].includes(a.type) && ['product', 'object', 'auto'].includes(b.type)) return true;
+  if (aIsGeneric && bIsGeneric && ['product', 'object', 'auto'].includes(a.type) && ['product', 'object', 'auto'].includes(b.type)) return true;
   return false;
 }
 function dedupeCandidates(candidates) {
   // Filter invalid or microscopic noise boxes
   const rawValid = candidates.filter(c => {
     const b = c.box;
-    if (!b || b.w < .032 || b.h < .035 || b.w * b.h < .004) return false;
+    if (!b || b.w < .024 || b.h < .026 || b.w * b.h < .0022) return false;
     if (b.w > .98 && b.h > .98 && (c.score || 0) < .52) return false;
     return true;
   });
@@ -431,7 +448,7 @@ function dedupeCandidates(candidates) {
       if (c === w || !sameCategoryGroup(w, c)) return false;
       const cArea = c.box.w * c.box.h;
       if (cArea >= wArea * .72 || c.box.w >= w.box.w * .72) return false;
-      return containment(w.box, c.box) > .68 && (c.score || 0) >= .18;
+      return containment(w.box, c.box) > .68 && (c.score || 0) >= .15;
     });
     if (inner.length < 2) return true;
     for (let i = 0; i < inner.length; i++) {
@@ -447,16 +464,20 @@ function dedupeCandidates(candidates) {
     return true;
   });
 
-  // Sort primarily by confidence score (avoid over-weighting huge boxes so tight subject boxes win)
+  // Sort primarily by confidence score (slightly favoring tight specific objects over huge background furniture)
   valid.sort((a, b) => {
-    const sa = (a.score || .5) * (1 + .06 * Math.sqrt(a.box.w * a.box.h));
-    const sb = (b.score || .5) * (1 + .06 * Math.sqrt(b.box.w * b.box.h));
+    const aSurf = CONTAINER_SURFACE_CLASSES.has(a.cls) ? .90 : 1.0;
+    const bSurf = CONTAINER_SURFACE_CLASSES.has(b.cls) ? .90 : 1.0;
+    const sa = (a.score || .5) * aSurf * (1 + .04 * Math.sqrt(a.box.w * a.box.h));
+    const sb = (b.score || .5) * bSurf * (1 + .04 * Math.sqrt(b.box.w * b.box.h));
     return sb - sa;
   });
   const kept = [];
   for (const cand of valid) {
     let dup = false;
+    const candArea = cand.box.w * cand.box.h;
     for (const k of kept) {
+      const kArea = k.box.w * k.box.h;
       const ov = iou(k.box, cand.box);
       const cont = containment(k.box, cand.box);
       const sameType = sameCategoryGroup(k, cand);
@@ -468,7 +489,7 @@ function dedupeCandidates(candidates) {
         const ccx = cand.box.x + cand.box.w / 2, ccy = cand.box.y + cand.box.h / 2;
         const centerDist = Math.hypot(kcx - ccx, kcy - ccy);
         const minSpan = Math.min(Math.max(k.box.w, k.box.h), Math.max(cand.box.w, cand.box.h));
-        const iouThr = k.type === 'animal' ? .42 : k.type === 'person' ? .44 : .40;
+        const iouThr = k.type === 'animal' ? .42 : k.type === 'person' ? .44 : .42;
         // Merge upper-half and lower-half detections of the exact same standing person
         const xOv = Math.max(0, Math.min(k.box.x + k.box.w, cand.box.x + cand.box.w) - Math.max(k.box.x, cand.box.x));
         const xOvRatio = xOv / Math.max(1e-5, Math.min(k.box.w, cand.box.w));
@@ -479,13 +500,13 @@ function dedupeCandidates(candidates) {
           k.box = {x:minX, y:minY, w:maxX - minX, h:maxY - minY};
           dup = true; break;
         }
-        if (!twoDistinctFaces && (ov > iouThr || (cont > .78 && (centerDist < minSpan * .55 || (cand.box.w * cand.box.h) < (k.box.w * k.box.h) * .85)))) {
+        if (!twoDistinctFaces && (ov > iouThr || (cont > .78 && (centerDist < minSpan * .52 || candArea < kArea * .85)))) {
           dup = true; break;
         }
       } else {
-      // Cross-class duplicate check:
-        const candIsGeneric = ['object', 'auto'].includes(cand.type) || cand.cls === 'subject' || cand.cls === 'product';
-        const kIsGeneric = ['object', 'auto'].includes(k.type) || k.cls === 'subject' || k.cls === 'product';
+        // Cross-class duplicate check:
+        const candIsGeneric = cand.cls === 'subject' || cand.cls === 'product';
+        const kIsGeneric = k.cls === 'subject' || k.cls === 'product';
         if (candIsGeneric && (cont > .68 || ov > .42)) { dup = true; break; }
         if (kIsGeneric && !candIsGeneric && (cont > .68 || ov > .42)) {
           Object.assign(k, cand);
@@ -506,12 +527,18 @@ function dedupeCandidates(candidates) {
           Object.assign(k, cand);
           dup = true; break;
         }
-        // If two non-person detections overlap heavily (e.g. cat & dog or phone & remote on the exact same subject), keep higher score
-        if (k.type !== 'person' && cand.type !== 'person' && (ov > .55 || cont > .82)) {
+        // Never allow a container/furniture surface (table, couch, bed, chair, bench) to suppress a smaller object on/in it, or vice versa!
+        const oneIsContainer = CONTAINER_SURFACE_CLASSES.has(k.cls) !== CONTAINER_SURFACE_CLASSES.has(cand.cls);
+        const areaRatio = Math.min(kArea, candArea) / Math.max(1e-5, Math.max(kArea, candArea));
+        if (oneIsContainer && areaRatio < .68) {
+          continue;
+        }
+        // If two non-person detections have nearly identical bounding boxes (ov > 0.65 and similar size) on the exact same item, keep higher score
+        if (k.type !== 'person' && cand.type !== 'person' && ov > .65 && areaRatio > .62) {
           dup = true; break;
         }
-        // If cand is inside a person box, keep it ONLY if it is a distinct handheld/accessory item or smaller than 50% of person
-        if (k.type === 'person' && cont > .80 && !HANDHELD_CLASSES.has(cand.cls) && (cand.box.w * cand.box.h) > (k.box.w * k.box.h) * .50) {
+        // If cand is inside a person box (or person overlaps cand), keep distinct handheld/accessory/furniture/smaller items
+        if (k.type === 'person' && cont > .85 && !HANDHELD_CLASSES.has(cand.cls) && !CONTAINER_SURFACE_CLASSES.has(cand.cls) && candArea > kArea * .65 && ov > .60) {
           dup = true; break;
         }
       }
@@ -531,10 +558,11 @@ async function analyze(img) {
   const ctx = c.getContext('2d');
   ctx.drawImage(img, 0, 0, w, h);
 
-  // 1) Full-image COCO-SSD pass with lowered threshold (0.14) so secondary/smaller objects aren't missed
-  const rawFull = await coco.detect(c, 40, .14).catch(() => []);
+  // 1) Full-image COCO-SSD pass with lowered threshold (0.10) so all foreground, background, and tabletop objects are caught
+  const rawFull = await coco.detect(c, 60, .10).catch(() => []);
+  await new Promise(r => setTimeout(r, 0));
 
-  // 2) Multi-scale overlapping sub-crop passes (halves, thirds, and quadrants) to reliably detect 3-4 people, 3-4 objects, or 1-3 cats
+  // 2) Multi-scale overlapping sub-crop passes (halves, thirds, quadrants, and center focus crops) with main-thread yields
   const crops = [
     {rx:0,    ry:0,   rw:.62, rh:1},
     {rx:.38,  ry:0,   rw:.62, rh:1},
@@ -544,23 +572,27 @@ async function analyze(img) {
     {rx:0,    ry:0,   rw:.58, rh:.58},
     {rx:.42,  ry:0,   rw:.58, rh:.58},
     {rx:0,    ry:.42, rw:.58, rh:.58},
-    {rx:.42,  ry:.42, rw:.58, rh:.58}
+    {rx:.42,  ry:.42, rw:.58, rh:.58},
+    {rx:.16,  ry:.14, rw:.68, rh:.72},
+    {rx:0,    ry:.22, rw:.54, rh:.68},
+    {rx:.46,  ry:.22, rw:.54, rh:.68}
   ];
   const rawCrops = [];
   const subC = document.createElement('canvas');
   const subG = subC.getContext('2d');
-  for (const cr of crops) {
+  for (let ci = 0; ci < crops.length; ci++) {
+    const cr = crops[ci];
     const cw = Math.max(64, Math.round(w * cr.rw)), ch = Math.max(64, Math.round(h * cr.rh));
     const sx = Math.round(w * cr.rx), sy = Math.round(h * cr.ry);
     subC.width = cw; subC.height = ch;
     subG.drawImage(c, sx, sy, cw, ch, 0, 0, cw, ch);
-    const dets = await coco.detect(subC, 20, .17).catch(() => []);
+    const dets = await coco.detect(subC, 30, .12).catch(() => []);
     for (const d of dets) {
       const bx = d.bbox[0] / cw, by = d.bbox[1] / ch, bw = d.bbox[2] / cw, bh = d.bbox[3] / ch;
-      const touchesInternalLeft = cr.rx > 0 && bx < .022;
-      const touchesInternalRight = (cr.rx + cr.rw) < .99 && (bx + bw) > .978;
-      const touchesInternalTop = cr.ry > 0 && by < .022;
-      const touchesInternalBot = (cr.ry + cr.rh) < .99 && (by + bh) > .978;
+      const touchesInternalLeft = cr.rx > 0 && bx < .016;
+      const touchesInternalRight = (cr.rx + cr.rw) < .99 && (bx + bw) > .984;
+      const touchesInternalTop = cr.ry > 0 && by < .016;
+      const touchesInternalBot = (cr.ry + cr.rh) < .99 && (by + bh) > .984;
       if (touchesInternalLeft || touchesInternalRight || touchesInternalTop || touchesInternalBot) continue;
       rawCrops.push({
         cls: d.class,
@@ -574,6 +606,7 @@ async function analyze(img) {
         }
       });
     }
+    if (ci % 3 === 2) await new Promise(r => setTimeout(r, 0));
   }
 
   // 3) Face detection + 68 landmarks (inputSize 416 catches smaller faces in 3-4 person group photos)
@@ -662,7 +695,7 @@ async function analyze(img) {
     });
   }
 
-  // Foreground island pass: catch distinct products/objects on studio/uniform backgrounds that COCO missed or merged
+  // Foreground island pass: catch distinct products/objects across all scenes that COCO missed or merged
   const islands = findForegroundIslands(px);
   const hasPeopleOrAnimalsOrCars = objs.some(o => ['person', 'animal', 'car', 'vehicle'].includes(o.type));
   // If a single generic product/object box covers 2+ separated foreground islands, split it into the individual islands
@@ -678,14 +711,12 @@ async function analyze(img) {
     }
     objs = splitObjs;
   }
-  const minIslandMass = hasPeopleOrAnimalsOrCars ? .032 : .009;
+  const minIslandMass = hasPeopleOrAnimalsOrCars ? .018 : .007;
   for (const isl of islands) {
-    const covered = objs.some(o => iou(o.box, isl) > .18 || containment(o.box, isl) > .50);
-    const touchesBottomCorner = isl.y > .65 && (isl.y + isl.h > .96) && (isl.x < .04 || isl.x + isl.w > .96);
-    if (!covered && !touchesBottomCorner && objs.length < 10 && isl.mass > minIslandMass) {
-      if (!hasPeopleOrAnimalsOrCars || objs.length === 0) {
-        objs.push({cls:'product', type:objs.length === 0 ? 'auto' : 'product', score:.54, box:{x:isl.x, y:isl.y, w:isl.w, h:isl.h}});
-      }
+    const covered = objs.some(o => iou(o.box, isl) > .22 || containment(o.box, isl) > .58);
+    const touchesBottomCorner = isl.y > .68 && (isl.y + isl.h > .97) && (isl.x < .03 || isl.x + isl.w > .97);
+    if (!covered && !touchesBottomCorner && objs.length < 14 && isl.mass > minIslandMass) {
+      objs.push({cls:'product', type:objs.length === 0 ? 'auto' : 'product', score:.52, box:{x:isl.x, y:isl.y, w:isl.w, h:isl.h}});
     }
   }
 
@@ -699,12 +730,12 @@ async function analyze(img) {
   // Sort left-to-right for natural numbering (Person 1, Person 2, Car 1, Product 1...)
   objs.sort((a, b) => (a.box.x + a.box.w / 2) - (b.box.x + b.box.w / 2));
 
-  // Optional per-subject fine-grained classification with MobileNetV2 only when subject class is generic/auto
+  // Per-subject fine-grained classification with MobileNetV2 for generic/auto/product/object boxes
   if (mobilenetModel) {
     const subC = document.createElement('canvas');
     const subG = subC.getContext('2d');
-    for (const o of objs.slice(0, 4)) {
-      if (o.type !== 'auto' && o.cls !== 'subject' && o.type !== 'object') continue;
+    for (const o of objs.slice(0, 10)) {
+      if (o.type !== 'auto' && o.cls !== 'subject' && o.cls !== 'product' && o.type !== 'object') continue;
       try {
         const sx = clamp(Math.floor(o.box.x * w), 0, w - 1), sy = clamp(Math.floor(o.box.y * h), 0, h - 1);
         const sw = clamp(Math.round(o.box.w * w), 16, w - sx), sh = clamp(Math.round(o.box.h * h), 16, h - sy);
@@ -712,13 +743,13 @@ async function analyze(img) {
         subG.drawImage(c, sx, sy, sw, sh, 0, 0, subC.width, subC.height);
         const preds = await mobilenetModel.classify(subC, 3).catch(() => []);
         if (preds && preds.length) {
-          o._mnTags = preds.filter(p => p.probability >= .12).map(p => p.className.split(',')[0].trim().toLowerCase());
-          // Refine 'auto' or generic 'object' if MobileNet strongly sees a specific vehicle/phone/product
+          o._mnTags = preds.filter(p => p.probability >= .10).map(p => p.className.split(',')[0].trim().toLowerCase());
           const topTag = o._mnTags[0] || '';
-          if (o.type === 'auto' || o.cls === 'subject') {
+          if (o.type === 'auto' || o.cls === 'subject' || o.cls === 'product') {
             if (/car|sedan|coupe|convertible|cabriolet|limousine|minivan|jeep|sports car|wagon|racer/i.test(topTag)) { o.type = 'car'; o.cls = topTag; }
             else if (/cellular telephone|cellphone|iPod|hand-held computer|modem/i.test(topTag)) { o.type = 'phone'; o.cls = 'smartphone'; }
-            else if (/bottle|perfume|lotion|mug|cup|watch|shoe|sneaker|sandal|sunglass|camera|bag|backpack/i.test(topTag)) { o.type = 'product'; o.cls = topTag; }
+            else if (/cat|tabby|tiger cat|persian cat|siamese cat|egyptian cat|dog|retriever|terrier|spaniel|shepherd|pug|poodle|hound|husky|bird|parrot|owl|horse|cow|sheep/i.test(topTag)) { o.type = 'animal'; o.cls = topTag; }
+            else if (/bottle|perfume|lotion|mug|cup|watch|shoe|sneaker|sandal|sunglass|camera|bag|backpack|lamp|vase|clock|pillow|cushion|book|headphones|speaker/i.test(topTag)) { o.type = 'product'; o.cls = topTag; }
             else if (topTag) { o.type = 'product'; o.cls = topTag; }
           }
         }

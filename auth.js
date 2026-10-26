@@ -18,25 +18,56 @@ if (m) { token = m[1]; store.set(KEY, token); history.replaceState(null, '', loc
 const menu = $('authMenu'), wrap = $('authM'), btn = $('authBtn');
 const configured = !API.includes('YOUR-SUBDOMAIN');
 const status = () => (me?.approved || AC.S?.mode === 'adv') ? 'Advanced mode' : me?.requested ? 'Normal mode · request sent' : 'Normal mode';
+function makeInitialAvatarSvg(nameStr) {
+  const clean = String(nameStr || 'U').trim();
+  const parts = clean.split(/\s+/).filter(Boolean);
+  const initials = parts.length >= 2
+    ? (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+    : clean.slice(0, 2).toUpperCase();
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#1a7431"/><stop offset="100%" stop-color="#3fb950"/></linearGradient></defs><rect width="64" height="64" rx="32" fill="url(#g)"/><text x="32" y="34" text-anchor="middle" dominant-baseline="central" font-family="Inter,Segoe UI,sans-serif" font-size="25" font-weight="800" fill="#ffffff">${esc(initials)}</text></svg>`;
+  return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+}
 function render() {
   const isAdv = Boolean(AC.S?.mode === 'adv' || me?.approved);
   if (btn) {
     btn.classList.toggle('pro', !!me?.approved);
     btn.innerHTML = me ? `${me.picture ? `<img src="${escAttr(me.picture)}" alt="" referrerpolicy="no-referrer">` : ''}<span>${esc(me.name.split(' ')[0])}</span>` : '<span>Sign in</span>';
   }
+  const userHead = $('vpDrawerUserHead');
+  if (userHead) {
+    userHead.classList.toggle('adv-active', isAdv);
+  }
+  const userPic = $('vpDrawerUserPic');
+  const fallbackIco = $('vpDrawerUserFallbackIco');
+  if (userPic) {
+    if (me && (me.picture || me.name || me.email)) {
+      const fallbackUrl = makeInitialAvatarSvg(me.name || me.email || 'User');
+      userPic.onerror = () => {
+        userPic.onerror = null;
+        userPic.src = fallbackUrl;
+      };
+      userPic.src = me.picture || fallbackUrl;
+      userPic.hidden = false;
+      if (fallbackIco) fallbackIco.style.display = 'none';
+    } else {
+      userPic.hidden = true;
+      userPic.removeAttribute('src');
+      if (fallbackIco) fallbackIco.style.display = '';
+    }
+  }
   if ($('vpDrawerUserName')) {
     $('vpDrawerUserName').textContent = me ? (me.name || me.email || 'Account') : 'Sign in';
   }
   if ($('vpDrawerUserMode')) {
-    $('vpDrawerUserMode').textContent = AC.S?.mode === 'adv' ? 'Advanced' : 'Normal';
+    $('vpDrawerUserMode').textContent = isAdv ? 'Advanced' : 'Normal';
   }
   if (menu) {
     menu.innerHTML = me
       ? `<div class="who"><strong>${esc(me.name)}</strong>${esc(me.email)}<br><span class="st${isAdv ? ' on' : ''}">${status()}</span></div>`
         + (isAdv ? '' : '<button type="button" data-act="adv">Get Advanced mode</button>') + '<button type="button" data-act="out">Sign out</button>'
-      : `<div class="who"><strong>Guest User</strong>Sign in to sync your account<br><span class="st${isAdv ? ' on' : ''}">${AC.S?.mode === 'adv' ? 'Advanced mode' : 'Normal mode'}</span></div>`
+      : `<div class="who"><strong>Guest User</strong>Sign in to sync your account<br><span class="st${isAdv ? ' on' : ''}">${isAdv ? 'Advanced mode' : 'Normal mode'}</span></div>`
         + `<button type="button" data-act="google">${ICON.google}Continue with Google</button><button type="button" data-act="github">${ICON.github}Continue with GitHub</button>`
-        + (AC.S?.mode === 'adv' ? '' : '<button type="button" data-act="adv">Get Advanced mode</button>');
+        + (isAdv ? '' : '<button type="button" data-act="adv">Get Advanced mode</button>');
   }
 }
 // the buttons inside the "Advanced mode needed" panel

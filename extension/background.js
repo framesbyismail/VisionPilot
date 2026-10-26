@@ -753,12 +753,7 @@ async function runProviderPrompt(model, payload, senderTabId = null) {
       expectedCount
     });
 
-    // If the provider tab was temporarily focused for clipboard reading, return focus to VisionPilot tab
-    if (senderTabId) {
-      try {
-        await chrome.tabs.update(senderTabId, { active: true });
-      } catch (e) {}
-    }
+    // Do NOT forcibly activate senderTabId so the user stays on whichever tab they are currently viewing
 
     if (isCancelledNow()) {
       console.log(`[VP Background] Discarding late reply from ${prov.name} because request was cancelled (refId=${refId})`);
@@ -797,11 +792,6 @@ async function runProviderPrompt(model, payload, senderTabId = null) {
       fullText: result.fullText || result.blocks.join('\n\n')
     };
   } catch (err) {
-    if (senderTabId) {
-      try {
-        await chrome.tabs.update(senderTabId, { active: true });
-      } catch (e) {}
-    }
     if (isCancelledNow()) {
       return { ok: false, cancelled: true, error: 'Request cancelled.' };
     }
@@ -911,12 +901,6 @@ async function runProviderImageGeneration(model, payload, senderTabId = null) {
       }
     });
 
-    if (senderTabId) {
-      try {
-        await chrome.tabs.update(senderTabId, { active: true });
-      } catch (e) {}
-    }
-
     if (isCancelledNow()) {
       return { ok: false, cancelled: true, error: 'Image generation cancelled.' };
     }
@@ -957,11 +941,6 @@ async function runProviderImageGeneration(model, payload, senderTabId = null) {
       imageDataUrl: finalDataUrl
     };
   } catch (err) {
-    if (senderTabId) {
-      try {
-        await chrome.tabs.update(senderTabId, { active: true });
-      } catch (e) {}
-    }
     if (isCancelledNow()) {
       return { ok: false, cancelled: true, error: 'Image generation cancelled.' };
     }

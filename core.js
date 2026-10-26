@@ -930,19 +930,36 @@ document.addEventListener('keydown', e => {
   if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
   else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); redo(); }
 });
-let rafId = 0, lastObj = null, bgImagePromptObj = null, quiet = false;
+let rafId = 0, bgPromptTimer = 0, saveTimer = 0, lastObj = null, bgImagePromptObj = null, quiet = false;
+function queueSave() {
+  if (saveTimer) return;
+  saveTimer = setTimeout(() => {
+    saveTimer = 0;
+    save();
+  }, 140);
+}
+window.addEventListener('beforeunload', () => {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = 0;
+    save();
+  }
+});
 function changed() {
   enforce();
   if (typeof syncScaleButtonsLockState === 'function') syncScaleButtonsLockState();
   if (!quiet) { hooks.onChange?.(); queueSnapshot(); }
-  save();
+  queueSave();
   if (!rafId) rafId = requestAnimationFrame(() => {
     rafId = 0;
     syncUI();
     drawAll();
     hooks.render?.();
     if (S.app !== 'video') {
-      try { bgImagePromptObj = buildImagePrompt(); } catch (e) {}
+      clearTimeout(bgPromptTimer);
+      bgPromptTimer = setTimeout(() => {
+        try { bgImagePromptObj = buildImagePrompt(); } catch (e) {}
+      }, 160);
     }
     if (typeof syncImageUpscalerUI === 'function') syncImageUpscalerUI();
   });
@@ -971,7 +988,7 @@ const FOCUS_PALETTE = ['#e85d2b', '#3fb950', '#3f7cf6', '#d4a72c', '#a371f7', '#
 // global numbering: Person 1, Person 2, Product 1 … across every reference image
 function allSubjects() {
   const counts = {}, out = [];
-  refs.forEach((r, ri) => (r.subjects.length ? r.subjects : [{type:S.subjType, desc:'', cm:S.subjCm}]).forEach((s, si) => {
+  refs.forEach((r, ri) => ((r.subjects && r.subjects.length) ? r.subjects : (r.det?.subjects?.length ? r.det.subjects : [{type:S.subjType, desc:'', cm:S.subjCm}])).forEach((s, si) => {
     const t = s.type || 'auto'; counts[t] = (counts[t] || 0) + 1;
     const label = `${TYPE_NAME[t]} ${counts[t]}`;
     const uiColor = s.uiColor || FOCUS_PALETTE[out.length % FOCUS_PALETTE.length];
@@ -2208,10 +2225,12 @@ async function runMultiModeAIStep(ref) {
         }
       });
 
-      if (S.focus.multiSel && S.focus.multiEdits[S.focus.multiSel] && $('focusMultiText')) {
-        $('focusMultiText').value = S.focus.multiEdits[S.focus.multiSel];
-      } else if (!S.focus.multiSel && $('focusMultiText')) {
-        $('focusMultiText').value = '';
+      if (S.focus.on) {
+        if (S.focus.multiSel && S.focus.multiEdits[S.focus.multiSel] && $('focusMultiText')) {
+          $('focusMultiText').value = S.focus.multiEdits[S.focus.multiSel];
+        } else if (!S.focus.multiSel && $('focusMultiText')) {
+          $('focusMultiText').value = '';
+        }
       }
     } catch (vpErr) {
       if (!vpErr?.cancelled) console.warn('[VisionPilot AI Stage 3] Error:', vpErr);
@@ -2313,14 +2332,16 @@ async function runMultiModeAIStep(ref) {
       }
     });
 
-    // CHANGE 1: If a subject is currently selected, show its text in the visible box below;
-    // if nothing is selected, leave the visible box empty with placeholder "Select a subject to see its detail".
-    if (S.focus.multiSel && S.focus.multiEdits[S.focus.multiSel] && $('focusMultiText')) {
-      $('focusMultiText').value = S.focus.multiEdits[S.focus.multiSel];
-    } else if (!S.focus.multiSel && $('focusMultiText')) {
-      $('focusMultiText').value = '';
+    // CHANGE 1: If Focus is ON and a subject is currently selected, show its text in the visible box below;
+    // if Focus was turned OFF while waiting, keep it stored in the backend without forcing the front UI.
+    if (S.focus.on) {
+      if (S.focus.multiSel && S.focus.multiEdits[S.focus.multiSel] && $('focusMultiText')) {
+        $('focusMultiText').value = S.focus.multiEdits[S.focus.multiSel];
+      } else if (!S.focus.multiSel && $('focusMultiText')) {
+        $('focusMultiText').value = '';
+      }
+      toast(`${info.name} filled descriptions for ${filledCount} labeled subject(s)`);
     }
-    toast(`${info.name} filled descriptions for ${filledCount} labeled subject(s)`);
   } catch (err) {
     if (err?.cancelled || myEpoch !== aiModelSessionEpoch || (S.aiModel || 'visionpilot') !== activeModel || ref.cancelled || !refs.includes(ref)) {
       if (ref) ref.status = 'ok';
@@ -2412,21 +2433,23 @@ async function identifyAt(ref, x, y) {
             mIt.y = y;
           }
         }
-        if (S.focus.multiSel === '__marker' && $('focusMultiText')) {
+        if (S.focus.on && S.focus.multiSel === '__marker' && $('focusMultiText')) {
           $('focusMultiText').value = replyText;
         }
-        toast(`${infoModel.name} marker detail pasted`);
+        if (S.focus.on) toast(`${infoModel.name} marker detail pasted`);
       } else {
-        // Single Mode: Focus Point Detail is the Marker's detail
+        // Single Mode: Focus Point Detail is the Marker's detail (always saved in backend; only shown on front UI if Focus is still ON)
         ref.aiSingleFocusDesc = replyText;
-        S.focus.desc = replyText;
         S.focus.multiEdits = S.focus.multiEdits || {};
         S.focus.multiEdits['__marker'] = replyText;
         S.focus.multiMarkerText = replyText;
-        if ($('focusDesc')) $('focusDesc').value = replyText;
-        if (S.focus.zoomLocked && S.focus.detail) zoomToDetail();
-        syncActiveSingleItem();
-        toast(`${infoModel.name} focus point detail pasted`);
+        if (S.focus.on) {
+          S.focus.desc = replyText;
+          if ($('focusDesc')) $('focusDesc').value = replyText;
+          if (S.focus.zoomLocked && S.focus.detail) zoomToDetail();
+          syncActiveSingleItem();
+          toast(`${infoModel.name} focus point detail pasted`);
+        }
       }
     } catch (err) {
       if (err?.cancelled || myEpoch !== aiModelSessionEpoch || (S.aiModel || 'visionpilot') !== activeModel || ref.cancelled || !refs.includes(ref)) {
@@ -2508,18 +2531,20 @@ async function identifyAt(ref, x, y) {
             mIt.y = y;
           }
         }
-        if (S.focus.multiSel === '__marker' && $('focusMultiText')) {
+        if (S.focus.on && S.focus.multiSel === '__marker' && $('focusMultiText')) {
           $('focusMultiText').value = vpDetail;
         }
       } else {
         ref.vpSingleFocusDesc = vpDetail;
-        S.focus.desc = vpDetail;
         S.focus.multiEdits = S.focus.multiEdits || {};
         S.focus.multiEdits['__marker'] = vpDetail;
         S.focus.multiMarkerText = vpDetail;
-        if ($('focusDesc')) $('focusDesc').value = vpDetail;
-        if (S.focus.zoomLocked && S.focus.detail) zoomToDetail();
-        syncActiveSingleItem();
+        if (S.focus.on) {
+          S.focus.desc = vpDetail;
+          if ($('focusDesc')) $('focusDesc').value = vpDetail;
+          if (S.focus.zoomLocked && S.focus.detail) zoomToDetail();
+          syncActiveSingleItem();
+        }
       }
     } catch (vpErr) {
       if (!vpErr?.cancelled) console.warn('[VisionPilot AI Stage 2] Error:', vpErr);
@@ -3323,11 +3348,34 @@ function handleFocusToggleClick(e) {
   }
   $('focusOn').setAttribute('aria-checked', String(!!S.focus.on));
   $('pFocus').classList.toggle('off', !S.focus.on);
+  const curRef = refs[S.focus.img] || refs[0];
+  if (!S.focus.on) {
+    // Immediately release focus waiting state so the user never has to wait for detection/prompt
+    setFocusDetailLoading(false);
+    placeMark();
+    updateAutoDescription(false);
+    focusKey = '';
+    changed();
+    return;
+  }
+  // When turned back ON, restore any backend-saved focus/multi descriptions immediately if available
+  if (curRef) {
+    const activeModel = S.aiModel || 'visionpilot';
+    const savedSingle = activeModel !== 'visionpilot' ? curRef.aiSingleFocusDesc : curRef.vpSingleFocusDesc;
+    const savedMulti = activeModel !== 'visionpilot' ? curRef.aiMultiEdits : curRef.vpMultiEdits;
+    if (savedMulti && typeof savedMulti === 'object') {
+      S.focus.multiEdits = { ...(S.focus.multiEdits || {}), ...savedMulti };
+    }
+    if (S.focus.mode === 'single' && savedSingle && !S.focus.desc) {
+      S.focus.desc = savedSingle;
+      if ($('focusDesc')) $('focusDesc').value = savedSingle;
+    }
+  }
   placeMark();
   updateAutoDescription(false);
   focusKey = '';
+  syncFocus();
   changed();
-  const curRef = refs[S.focus.img] || refs[0];
   if (S.focus.on && curRef && (S.aiModel || 'visionpilot') === 'visionpilot') {
     if (S.focus.mode === 'single' && !curRef.vpSingleFocusDesc) {
       identifyAt(curRef, S.focus.x, S.focus.y);
@@ -4780,14 +4828,17 @@ $('vpHistoryList')?.addEventListener('click', (e) => {
 
 function toggleHistoryDrawer(forceState) {
   const drawer = $('vpHistoryDrawer');
+  const backdrop = $('vpHistoryDrawerBackdrop');
   const moreBtn = $('vpMoreBtn');
   if (!drawer) return;
   const nextOpen = typeof forceState === 'boolean' ? forceState : !drawer.classList.contains('open');
   drawer.classList.toggle('open', nextOpen);
   drawer.setAttribute('aria-hidden', String(!nextOpen));
+  if (backdrop) backdrop.hidden = !nextOpen;
   if (moreBtn) moreBtn.setAttribute('aria-expanded', String(nextOpen));
 }
 window.toggleHistoryDrawer = toggleHistoryDrawer;
+$('vpHistoryDrawerBackdrop')?.addEventListener('click', () => toggleHistoryDrawer(false));
 
 $('vpMoreBtn')?.addEventListener('click', (e) => {
   e.stopPropagation();
@@ -5404,13 +5455,9 @@ let imgGenBusy = false;
 let focusDetailLoading = false;
 
 function isFocusSectionLocked() {
-  return Boolean(
-    imgGenBusy ||
-    focusDetailLoading ||
-    busyDetect ||
-    aiBusyMsg ||
-    refs.some(r => r && !r.cancelled && (r.status === 'busy' || r.status === 'wait'))
-  );
+  // Only lock the entire Focus box while an actual Image Generation / Upscale is actively running.
+  // Never lock the Focus toggle (#focusOn / #focusOnWrap) during detection or prompt generation!
+  return Boolean(imgGenBusy);
 }
 
 function syncFocusLockState() {
@@ -6992,8 +7039,9 @@ $('aiExtConnectNowBtn')?.addEventListener('click', async () => {
   }
 });
 
-// Align ONLY the Logo (img.vp-logo) horizontally centered above the "Input" box (#pRef / left column),
+// Align ONLY the Logo (img.vp-logo) horizontally centered above the fixed left column (#iLeft / #vLeft),
 // while keeping the maker name & tagline right beside the logo at the same 14px gap.
+// Using the fixed left column geometry ensures the logo & tagline NEVER shift when switching between Input, Object, and Upscale.
 function alignBrandWithInputBox() {
   const brand = document.querySelector('.nav .brand');
   const logo = brand?.querySelector('.vp-logo');
@@ -7004,19 +7052,21 @@ function alignBrandWithInputBox() {
     return;
   }
   const leftCol = $(S.app === 'video' ? 'vLeft' : 'iLeft');
-  const refBox = ($('pRef')?.offsetParent ? $('pRef') : null) || leftCol;
-  if (!refBox) return;
-  const refRect = refBox.getBoundingClientRect();
-  if (refRect.width < 40) return;
+  if (!leftCol) return;
+  const colRect = leftCol.getBoundingClientRect();
+  const colW = leftCol.offsetWidth || colRect.width;
+  if (colW < 40) return;
 
-  const targetCenterX = refRect.left + refRect.width / 2;
-  const brandRect = brand.getBoundingClientRect();
+  // Cards inside #iLeft / #vLeft have 2px left padding and 6px right padding (inner card width = colW - 8)
+  const targetCenterX = colRect.left + 2 + (colW - 8) / 2;
   const logoRect = logo.getBoundingClientRect();
   const curMarginLeft = parseFloat(brand.style.marginLeft || '0') || 0;
   const currentLogoCenterX = logoRect.left + logoRect.width / 2;
   const deltaX = targetCenterX - currentLogoCenterX;
   const nextMarginLeft = Math.round(curMarginLeft + deltaX);
-  brand.style.marginLeft = nextMarginLeft + 'px';
+  if (Math.abs(nextMarginLeft - curMarginLeft) >= 1) {
+    brand.style.marginLeft = nextMarginLeft + 'px';
+  }
 }
 window.alignBrandWithInputBox = alignBrandWithInputBox;
 
@@ -7274,4 +7324,34 @@ window.AC = {S, DEF, refs, $, rad, deg, clamp, norm360, signed, rnd, cap, joinLi
   isPro:() => PRO, setPro, needAdv, ensureAdvMode, hideAdv, GATED};
 window.ensureBackgroundImagePrompt = ensureBackgroundImagePrompt;
 document.dispatchEvent(new Event('ac-ready'));
+
+// Register VisionPilot Service Worker (sw.js) for asset caching & offline support
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.protocol === 'http:') && !window.__vpSwRegistered) {
+  window.__vpSwRegistered = true;
+  const registerVpServiceWorker = () => {
+    navigator.serviceWorker.register('./sw.js', { scope: './' })
+      .then(reg => {
+        if (reg.waiting) {
+          reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+        }
+        reg.addEventListener('updatefound', () => {
+          const newWorker = reg.installing;
+          if (!newWorker) return;
+          newWorker.addEventListener('statechange', () => {
+            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              newWorker.postMessage({ type: 'SKIP_WAITING' });
+            }
+          });
+        });
+      })
+      .catch(err => {
+        console.warn('VisionPilot Service Worker registration skipped:', err?.message || err);
+      });
+  };
+  if (document.readyState === 'complete') {
+    registerVpServiceWorker();
+  } else {
+    window.addEventListener('load', registerVpServiceWorker, { once: true });
+  }
+}
 })();
