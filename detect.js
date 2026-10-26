@@ -20,11 +20,16 @@ const COCO_IDB = 'indexeddb://vp-coco-lite-v1';
 let ready = null, coco = null, mobilenetModel = null, faceOK = false;
 
 function init() {
+  const yieldFrame = () => new Promise(r => requestAnimationFrame(r));
   return ready || (ready = (async () => {
+    await yieldFrame();
     if (!window.faceapi) await loadScript(FACE_URL);
+    await yieldFrame();
     if (!window.tf && window.faceapi?.tf) window.tf = window.faceapi.tf;
     if (!window.cocoSsd) await loadScript(COCO_URL);
+    await yieldFrame();
     await window.tf.ready?.();
+    await yieldFrame();
     const faces = Promise.all([
       faceapi.nets.tinyFaceDetector.loadFromUri(FACE_MODELS),
       faceapi.nets.faceLandmark68Net.loadFromUri(FACE_MODELS)
@@ -36,6 +41,7 @@ function init() {
       gm = await window.tf.loadGraphModel(COCO_MODEL);
       if (useIdb) gm.save(COCO_IDB).catch(() => {});
     }
+    await yieldFrame();
     const origLoad = window.tf.loadGraphModel;
     window.tf.loadGraphModel = url => url === COCO_MODEL ? Promise.resolve(gm) : origLoad.call(window.tf, url);
     try { coco = await window.cocoSsd.load({base:'lite_mobilenet_v2'}); }
@@ -51,8 +57,7 @@ function init() {
     await Promise.race([Promise.all([faces, mnLoad]), new Promise(r => setTimeout(r, 4500))]);
   })().catch(e => { ready = null; throw e; }));
 }
-// Pre-warm models on page load so detection is instant when user uploads an image
-setTimeout(() => { init().catch(() => {}); }, 40);
+// Lazy-loaded on demand when Multiple Mode detection is requested (never block initial page reload)
 
 /* ---------- COCO class -> VisionPilot subject type & category ---------- */
 const ANIMALS = new Set(['bird','cat','dog','horse','sheep','cow','elephant','bear','zebra','giraffe']);

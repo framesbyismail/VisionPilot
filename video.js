@@ -2,6 +2,7 @@
 (() => {
 const AC = window.AC; if (!AC) return;
 const {S, $, rad, clamp, norm360, signed, rnd, cap, joinList, esc, escAttr, hooks} = AC;
+const deg = a => a * 180 / Math.PI;
 const isVideo = () => S.app === 'video';
 const is3D = () => isVideo();
 const V = () => S.video;
@@ -682,6 +683,10 @@ function fpos() {
 const COMPOSITE = {'cam.pos':['cam.az', 'cam.el', 'cam.dist'], 'focus.pos':['focus.x', 'focus.y', 'focus.z']};
 function compositeParts(path) {
   if (COMPOSITE[path]) return COMPOSITE[path];
+  const mPos = /^obj\.([^.]+)\.pos$/.exec(path);
+  if (mPos) return ['x', 'y', 'z'].map(a => `obj.${mPos[1]}.${a}`);
+  const mRot = /^obj\.([^.]+)\.rot$/.exec(path);
+  if (mRot) return ['rx', 'ry', 'rz'].map(a => `obj.${mRot[1]}.${a}`);
   const m = /^obj\.([^.]+)\.scale$/.exec(path);
   if (m) return ['sx', 'sy', 'sz'].map(a => `obj.${m[1]}.${a}`);
   return null;
@@ -734,6 +739,13 @@ function valueAt(path, t, kind, base) {
   if (a === b) return a.v;
   if (kind === 'target') return e < .5 ? a.v : b.v;
   if (kind === 'color') { const x = hexToRgb(a.v), y = hexToRgb(b.v); return rgbToHex(x.map((v, j) => v + (y[j] - v) * e)); }
+  if (a.e !== 'hold' && (a.curve || b.curve || typeof a.cOut === 'number' || typeof b.cIn === 'number')) {
+    const p0 = a.v, p3 = b.v;
+    const p1 = a.v + (typeof a.cOut === 'number' ? a.cOut : (b.v - a.v) / 3);
+    const p2 = b.v + (typeof b.cIn === 'number' ? b.cIn : -(b.v - a.v) / 3);
+    const uu = clamp(u, 0, 1), inv = 1 - uu;
+    return inv * inv * inv * p0 + 3 * inv * inv * uu * p1 + 3 * inv * uu * uu * p2 + uu * uu * uu * p3;
+  }
   const hasExplicitM = typeof a.mOut === 'number' || typeof a.m === 'number' || typeof b.mIn === 'number' || typeof b.m === 'number';
   if (a.e !== 'hold' && a.e !== 'custom' && a.e !== 'bounce' && a.e !== 'elastic' && (hasExplicitM || (keys.length > 2 && (a.e === 'smooth' || b.e === 'smooth')))) {
     const h = Math.max(1e-5, b.t - a.t);
@@ -757,7 +769,23 @@ function apply(t) {
   if (!isVideo()) return;
   applying = true;
   const P = props();
-  AC.applyQuiet(() => { P.forEach(p => { if (tracks()[p.path]?.length) p.set(valueAt(p.path, t, p.kind, p.get())); }); });
+  AC.applyQuiet(() => {
+    P.forEach(p => { if (tracks()[p.path]?.length) p.set(valueAt(p.path, t, p.kind, p.get())); });
+    const dur = S.video.duration || 5;
+    (V().objects || []).forEach(o => {
+      if (!['person', 'cat', 'animal', 'car'].includes(o.model)) return;
+      const kx = tracks()[`obj.${o.id}.x`], kz = tracks()[`obj.${o.id}.z`], kry = tracks()[`obj.${o.id}.ry`];
+      if (!((kx && kx.length > 1) || (kz && kz.length > 1))) return;
+      if (kry && kry.length > 1) return;
+      const dtS = 0.04, t0 = Math.max(0, t - dtS), t1 = Math.min(dur, t + dtS);
+      if (t1 - t0 < 1e-4) return;
+      const dx = valueAt(`obj.${o.id}.x`, t1, 'num', o.x || 0) - valueAt(`obj.${o.id}.x`, t0, 'num', o.x || 0);
+      const dz = valueAt(`obj.${o.id}.z`, t1, 'num', o.z || 0) - valueAt(`obj.${o.id}.z`, t0, 'num', o.z || 0);
+      if (Math.hypot(dx, dz) > 0.002) {
+        o.ry = rnd(norm360(deg(Math.atan2(dx, dz))), 1);
+      }
+    });
+  });
   lastApplied = {};
   P.forEach(p => { if (tracks()[p.path]?.length) lastApplied[p.path] = p.get(); });
   applying = false;
@@ -806,7 +834,15 @@ function keyToggle(path) {
     }
     if (here.length) here.forEach(q => { const keys = tracks()[q], k = keyHere(q); keys.splice(keys.indexOf(k), 1); if (!keys.length) delete tracks()[q]; });
     else parts.forEach(q => { const pp = props().find(x => x.path === q); if (pp) { upsertKey(q, T, keyValue(pp)); lastApplied[q] = pp.get(); } });
-    const label = path === 'cam.pos' ? 'Camera position' : path === 'focus.pos' ? 'Focus position' : 'Scale (X, Y, Z)';
+    const label = path === 'cam.pos'
+      ? 'Camera position'
+      : path === 'focus.pos'
+        ? 'Focus position'
+        : path.endsWith('.pos')
+          ? 'Position (X, Y, Z)'
+          : path.endsWith('.rot')
+            ? 'Rotation (X, Y, Z)'
+            : 'Scale (X, Y, Z)';
     AC.toast(`${label}: key ${here.length ? 'removed' : 'added'} at frame ${frameOf(T)}`);
     buildTimeline(); AC.save(); AC.changed(); return;
   }
@@ -1137,9 +1173,187 @@ function labelPainter(ctx) {
     ctx.fillStyle = AC.C.fg; ctx.fillText(text, x, y);
   };
 }
+const lastViewTransform = {top:null, side:null};
+let activePathDrag = null;
+
+function smoothTurnRiggedOnDrag(o, prevX, prevZ, newX, newZ) {
+  if (!o || !['person', 'cat', 'animal', 'car'].includes(o.model)) return;
+  if (o.pose === 'sitting_chair') return;
+  const stepDx = (newX || 0) - (prevX || 0);
+  const stepDz = (newZ || 0) - (prevZ || 0);
+  const stepDist = Math.hypot(stepDx, stepDz);
+  if (stepDist < 0.0025) return;
+  o._dragDirX = (typeof o._dragDirX === 'number' ? o._dragDirX : stepDx) * 0.62 + stepDx * 0.38;
+  o._dragDirZ = (typeof o._dragDirZ === 'number' ? o._dragDirZ : stepDz) * 0.62 + stepDz * 0.38;
+  if (Math.hypot(o._dragDirX, o._dragDirZ) < 0.001) return;
+  const targetRy = deg(Math.atan2(o._dragDirX, o._dragDirZ));
+  const diff = signed(targetRy - (o.ry || 0));
+  const turnRate = clamp(stepDist * (o.model === 'car' ? 6.2 : 9.5), 0.10, 0.34);
+  o.ry = rnd(norm360((o.ry || 0) + diff * turnRate), 1);
+}
+
+function objPathKeyTimes(o) {
+  if (!isVideo() || !o) return [];
+  const tr = tracks();
+  const times = ['x', 'y', 'z'].flatMap(a => (tr[`obj.${o.id}.${a}`] || []).map(k => rnd(k.t, 4)));
+  return [...new Set(times)].sort((a, b) => a - b);
+}
+
+function hasObjMotionPath(o) {
+  return objPathKeyTimes(o).length >= 1;
+}
+
+function objPosAt(o, t) {
+  return {
+    x: valueAt(`obj.${o.id}.x`, t, 'num', o.x || 0),
+    y: valueAt(`obj.${o.id}.y`, t, 'num', o.y || 0),
+    z: valueAt(`obj.${o.id}.z`, t, 'num', o.z || 0)
+  };
+}
+
+function findObjAxisKey(o, axis, t) {
+  const ks = tracks()[`obj.${o.id}.${axis}`];
+  if (!ks) return null;
+  return ks.find(k => Math.abs(k.t - t) < frameDur() / 2 + 1e-4) || null;
+}
+
+function ensureObjPathKnotKeys(o, t) {
+  const isAtPlayhead = Math.abs(t - T) < frameDur() / 2 + 1e-4;
+  const exX = findObjAxisKey(o, 'x', t);
+  const exY = findObjAxisKey(o, 'y', t);
+  const exZ = findObjAxisKey(o, 'z', t);
+  const pos = objPosAt(o, t);
+  const vx = exX ? exX.v : (isAtPlayhead ? (o.x || 0) : pos.x);
+  const vy = exY ? exY.v : (isAtPlayhead ? Math.max(0, o.y || 0) : Math.max(0, pos.y));
+  const vz = exZ ? exZ.v : (isAtPlayhead ? (o.z || 0) : pos.z);
+  const kx = exX || upsertKey(`obj.${o.id}.x`, t, rnd(vx, 3));
+  const ky = exY || upsertKey(`obj.${o.id}.y`, t, rnd(vy, 3));
+  const kz = exZ || upsertKey(`obj.${o.id}.z`, t, rnd(vz, 3));
+  return {kx, ky, kz, pos:{x:kx.v, y:ky.v, z:kz.v}};
+}
+
+function isObjKnotCurveEnabled(o, t) {
+  const kx = findObjAxisKey(o, 'x', t), ky = findObjAxisKey(o, 'y', t), kz = findObjAxisKey(o, 'z', t);
+  return Boolean(kx?.curve || ky?.curve || kz?.curve);
+}
+
+function toggleObjPathCurveControl(o, t) {
+  if (!o || !isVideo()) return false;
+  const {kx, ky, kz, pos} = ensureObjPathKnotKeys(o, t);
+  const times = objPathKeyTimes(o);
+  const idx = times.findIndex(tt => Math.abs(tt - t) < frameDur() / 2 + 1e-4);
+  const nextState = !(kx.curve || ky.curve || kz.curve);
+  [kx, ky, kz].forEach(k => {
+    k.curve = nextState;
+    if (nextState) k.e = 'smooth';
+    else { delete k.cIn; delete k.cOut; }
+  });
+  if (nextState) {
+    const tPrev = times[Math.max(0, idx - 1)] ?? t;
+    const tNext = times[Math.min(times.length - 1, idx + 1)] ?? t;
+    const pPrev = objPosAt(o, tPrev);
+    const pNext = objPosAt(o, tNext);
+    let dx = (pNext.x - pPrev.x) * 0.30;
+    let dz = (pNext.z - pPrev.z) * 0.30;
+    let dy = (pNext.y - pPrev.y) * 0.30;
+    if (Math.hypot(dx, dz) < 0.08) { dx = 0.55; dz = -0.32; }
+    if (Math.abs(dy) < 0.05) dy = 0.28;
+    kx.cOut = rnd(dx, 3); kx.cIn = rnd(-dx, 3);
+    kz.cOut = rnd(dz, 3); kz.cIn = rnd(-dz, 3);
+    ky.cOut = rnd(dy, 3); ky.cIn = rnd(-dy, 3);
+  }
+  pathCache.delete(o.id);
+  return nextState;
+}
+
+function projectObjPathPt(p, o, v, kind) {
+  const tg = v.T || targetAt(T);
+  if (kind === 'top') {
+    return [v.cx + (p.x - tg.x) * v.s, v.cy + (p.z - tg.z) * v.s];
+  }
+  const a = rad(S.az), ux = Math.sin(a), uz = Math.cos(a), groundY = v.cy + tg.y * v.s;
+  const d = (p.x - tg.x) * ux + (p.z - tg.z) * uz;
+  return [v.cx - d * v.s, groundY - (p.y + (o.h || 1) * 0.5) * v.s];
+}
+
+function drawObjMotionPaths(ctx, v, kind) {
+  if (!isVideo()) return;
+  const dur = S.video.duration || 5, n = 84;
+  const objs = [...(V().objects || [])].sort((a, b) => isObjSelected(a.id) - isObjSelected(b.id));
+  objs.forEach(o => {
+    const kTimes = objPathKeyTimes(o);
+    if (!kTimes.length) return;
+    const selected = isObjSelected(o.id);
+    ctx.save();
+    if (kTimes.length >= 2) {
+      ctx.strokeStyle = selected ? '#3b82f6' : 'rgba(180, 186, 198, 0.42)';
+      ctx.lineWidth = selected ? 2.2 : 1.6;
+      ctx.beginPath();
+      for (let i = 0; i <= n; i++) {
+        const pt = objPosAt(o, dur * i / n);
+        const [sx, sy] = projectObjPathPt(pt, o, v, kind);
+        if (i === 0) ctx.moveTo(sx, sy);
+        else ctx.lineTo(sx, sy);
+      }
+      ctx.stroke();
+    }
+    kTimes.forEach(kt => {
+      const pos = objPosAt(o, kt);
+      const [kx, ky] = projectObjPathPt(pos, o, v, kind);
+      const curveOn = isObjKnotCurveEnabled(o, kt);
+      if (selected && curveOn) {
+        const kX = findObjAxisKey(o, 'x', kt), kY = findObjAxisKey(o, 'y', kt), kZ = findObjAxisKey(o, 'z', kt);
+        const inWorld = {x: pos.x + (kX?.cIn || 0), y: pos.y + (kY?.cIn || 0), z: pos.z + (kZ?.cIn || 0)};
+        const outWorld = {x: pos.x + (kX?.cOut || 0), y: pos.y + (kY?.cOut || 0), z: pos.z + (kZ?.cOut || 0)};
+        const [ix, iy] = projectObjPathPt(inWorld, o, v, kind);
+        const [ox, oy] = projectObjPathPt(outWorld, o, v, kind);
+        ctx.strokeStyle = '#60a5fa';
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.moveTo(ix, iy); ctx.lineTo(kx, ky); ctx.lineTo(ox, oy);
+        ctx.stroke();
+        [[ix, iy], [ox, oy]].forEach(([hx, hy]) => {
+          ctx.fillStyle = '#ffffff';
+          ctx.strokeStyle = '#2563eb';
+          ctx.lineWidth = 1.6;
+          ctx.beginPath();
+          ctx.arc(hx, hy, 4.5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+        });
+      }
+      if (selected) {
+        ctx.fillStyle = curveOn ? '#60a5fa' : '#3b82f6';
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        if (curveOn) {
+          ctx.arc(kx, ky, 5.2, 0, Math.PI * 2);
+        } else {
+          ctx.moveTo(kx, ky - 5.8);
+          ctx.lineTo(kx + 5.8, ky);
+          ctx.lineTo(kx, ky + 5.8);
+          ctx.lineTo(kx - 5.8, ky);
+          ctx.closePath();
+        }
+        ctx.fill();
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = 'rgba(180, 186, 198, 0.52)';
+        ctx.beginPath();
+        ctx.arc(kx, ky, 3.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    });
+    ctx.restore();
+  });
+}
+
 hooks.drawTopScene = (ctx, v) => {
   if (!is3D()) return false;
+  lastViewTransform.top = v;
   const C = AC.C, tg = v.T, label = labelPainter(ctx), objs = [...V().objects].sort((a, b) => isObjSelected(a.id) - isObjSelected(b.id));
+  if (isVideo()) drawObjMotionPaths(ctx, v, 'top');
   objs.forEach(o => {
     const px = v.cx + (o.x - tg.x) * v.s, py = v.cy + (o.z - tg.z) * v.s;
     const w = Math.max(6, (o.model === 'car' ? o.w * .42 : o.w) * v.s), d = Math.max(4, (o.model === 'car' ? o.w : depthFor(o)) * v.s);
@@ -1156,8 +1370,10 @@ hooks.drawTopScene = (ctx, v) => {
 };
 hooks.drawSideScene = (ctx, v) => {
   if (!is3D()) return false;
+  lastViewTransform.side = v;
   const C = AC.C, tg = v.T, a = rad(S.az), ux = Math.sin(a), uz = Math.cos(a), groundY = v.cy + tg.y * v.s, label = labelPainter(ctx);
   const objs = [...V().objects].sort((p, q) => isObjSelected(p.id) - isObjSelected(q.id)), tops = [];
+  if (isVideo()) drawObjMotionPaths(ctx, v, 'side');
   objs.forEach(o => {
     const d = (o.x - tg.x) * ux + (o.z - tg.z) * uz;
     const px = v.cx - d * v.s, w = Math.max(6, o.w * v.s * .8), h = Math.max(6, o.h * v.s), top = groundY - (o.y + o.h) * v.s;
@@ -1170,8 +1386,54 @@ hooks.drawSideScene = (ctx, v) => {
   if (isVideo() && V().path) drawPath(ctx, v, 'side');
   return true;
 };
+
+function hitTestPathInView(name, v, x, y) {
+  if (!isVideo() || !is3D() || !v?.s) return null;
+  const objs = [...(V().objects || [])].sort((a, b) => isObjSelected(b.id) - isObjSelected(a.id));
+  // 1) Check Bezier curve handles on selected object first
+  for (const o of objs) {
+    if (!isObjSelected(o.id)) continue;
+    for (const kt of objPathKeyTimes(o)) {
+      if (!isObjKnotCurveEnabled(o, kt)) continue;
+      const pos = objPosAt(o, kt);
+      const kX = findObjAxisKey(o, 'x', kt), kY = findObjAxisKey(o, 'y', kt), kZ = findObjAxisKey(o, 'z', kt);
+      const inWorld = {x: pos.x + (kX?.cIn || 0), y: pos.y + (kY?.cIn || 0), z: pos.z + (kZ?.cIn || 0)};
+      const outWorld = {x: pos.x + (kX?.cOut || 0), y: pos.y + (kY?.cOut || 0), z: pos.z + (kZ?.cOut || 0)};
+      const [ix, iy] = projectObjPathPt(inWorld, o, v, name);
+      if (Math.hypot(x - ix, y - iy) <= 9) return {kind:'pathHandle', objId:o.id, t:kt, side:'in'};
+      const [ox, oy] = projectObjPathPt(outWorld, o, v, name);
+      if (Math.hypot(x - ox, y - oy) <= 9) return {kind:'pathHandle', objId:o.id, t:kt, side:'out'};
+    }
+  }
+  // 2) Check keyframe knots on any object path
+  for (const o of objs) {
+    for (const kt of objPathKeyTimes(o)) {
+      const pos = objPosAt(o, kt);
+      const [kx, ky] = projectObjPathPt(pos, o, v, name);
+      if (Math.hypot(x - kx, y - ky) <= 9) return {kind:'pathKf', objId:o.id, t:kt};
+    }
+  }
+  // 3) Check clicking on an unselected/selected path curve line
+  const dur = S.video.duration || 5, n = 48;
+  for (const o of objs) {
+    if (objPathKeyTimes(o).length < 2) continue;
+    for (let i = 0; i <= n; i++) {
+      const pt = objPosAt(o, dur * i / n);
+      const [sx, sy] = projectObjPathPt(pt, o, v, name);
+      if (Math.hypot(x - sx, y - sy) <= 6) return {kind:'pathLine', objId:o.id};
+    }
+  }
+  return null;
+}
+
 hooks.hitViewObj = (name, v, x, y) => {
   if (!is3D() || !v.s) return null;
+  activePathDrag = null;
+  const pathHit = hitTestPathInView(name, v, x, y);
+  if (pathHit && (pathHit.kind === 'pathHandle' || pathHit.kind === 'pathKf')) {
+    activePathDrag = pathHit;
+    return pathHit;
+  }
   const tg = v.T || targetAt(T);
   const objs = [...(V().objects || [])].reverse();
   if (name === 'top') {
@@ -1188,6 +1450,10 @@ hooks.hitViewObj = (name, v, x, y) => {
       if (Math.abs(x - px) <= w / 2 + 4 && y >= top - 4 && y <= top + h + 4) return {kind:'obj', objId:o.id};
     }
   }
+  if (pathHit) {
+    activePathDrag = pathHit;
+    return pathHit;
+  }
   return null;
 };
 hooks.selectViewObj = objId => {
@@ -1201,15 +1467,83 @@ hooks.dragViewObj = (name, v, objId, x, y, isEnd) => {
   const o = objById(objId);
   if (!o || !v.s) return;
   if (isEnd) {
+    if (activePathDrag) {
+      activePathDrag = null;
+      pathCache.delete(o.id);
+      buildTimeline();
+      apply(T);
+      syncObjProps();
+      renderVP();
+      AC.save();
+      AC.changed();
+      return;
+    }
+    delete o._dragDirX;
+    delete o._dragDirZ;
     if (o.model === 'person') checkAutoSitOnChair(o, true);
     autoKey();
     AC.save();
     return;
   }
   const tg = v.T || targetAt(T);
+  if (activePathDrag && activePathDrag.objId === o.id) {
+    if (activePathDrag.kind === 'pathLine') return;
+    const kt = activePathDrag.t;
+    const {kx, ky, kz, pos} = ensureObjPathKnotKeys(o, kt);
+    if (activePathDrag.kind === 'pathHandle') {
+      const sideProp = activePathDrag.side === 'in' ? 'cIn' : 'cOut';
+      const oppProp = activePathDrag.side === 'in' ? 'cOut' : 'cIn';
+      if (name === 'top') {
+        const wx = tg.x + (x - v.cx) / v.s;
+        const wz = tg.z + (y - v.cy) / v.s;
+        const dx = rnd(wx - pos.x, 3), dz = rnd(wz - pos.z, 3);
+        kx[sideProp] = dx; kz[sideProp] = dz;
+        kx[oppProp] = rnd(-dx, 3); kz[oppProp] = rnd(-dz, 3);
+      } else if (name === 'side') {
+        const a = rad(S.az), ux = Math.sin(a), uz = Math.cos(a), groundY = v.cy + tg.y * v.s;
+        const dTarget = (v.cx - x) / v.s;
+        const dCur = (pos.x - tg.x) * ux + (pos.z - tg.z) * uz;
+        const dd = dTarget - dCur;
+        const wy = (groundY - y) / v.s - (o.h || 1) * 0.5;
+        const dy = rnd(wy - pos.y, 3);
+        kx[sideProp] = rnd(dd * ux, 3);
+        kz[sideProp] = rnd(dd * uz, 3);
+        ky[sideProp] = dy;
+        kx[oppProp] = rnd(-dd * ux, 3);
+        kz[oppProp] = rnd(-dd * uz, 3);
+        ky[oppProp] = rnd(-dy, 3);
+      }
+      pathCache.delete(o.id);
+      apply(T);
+      syncObjProps();
+      renderVP();
+      return;
+    }
+    if (activePathDrag.kind === 'pathKf') {
+      if (name === 'top') {
+        kx.v = rnd(tg.x + (x - v.cx) / v.s, 3);
+        kz.v = rnd(tg.z + (y - v.cy) / v.s, 3);
+      } else if (name === 'side') {
+        const a = rad(S.az), ux = Math.sin(a), uz = Math.cos(a), groundY = v.cy + tg.y * v.s;
+        const dTarget = (v.cx - x) / v.s;
+        const dCur = (pos.x - tg.x) * ux + (pos.z - tg.z) * uz;
+        const dd = dTarget - dCur;
+        kx.v = rnd(pos.x + dd * ux, 3);
+        kz.v = rnd(pos.z + dd * uz, 3);
+        ky.v = rnd(Math.max(0, (groundY - y) / v.s - (o.h || 1) * 0.5), 3);
+      }
+      pathCache.delete(o.id);
+      apply(T);
+      syncObjProps();
+      renderVP();
+      return;
+    }
+  }
   if (name === 'top') {
+    const prevX = o.x || 0, prevZ = o.z || 0;
     o.x = rnd(tg.x + (x - v.cx) / v.s, 3);
     o.z = rnd(tg.z + (y - v.cy) / v.s, 3);
+    smoothTurnRiggedOnDrag(o, prevX, prevZ, o.x, o.z);
   } else if (name === 'side') {
     const groundY = v.cy + tg.y * v.s;
     o.y = rnd(Math.max(0, (groundY - y) / v.s - (o.h || 1) * .5), 3);
@@ -1442,8 +1776,9 @@ function buildSingleModel(o) {
     }
     case 'cat': {
       const L = Math.max(.26, w), root = new THREE.Group(); g.add(root);
-      const furM = mat(c, {roughness:.62}), bellyM = mat(new THREE.Color(c).lerp(new THREE.Color(0xffffff), .28), {roughness:.68});
-      const earM = mat(0xe89ca5, {roughness:.55}), eyeM = mat(0x22c55e, {roughness:.18, emissive:0x0a2e16}), pupilM = mat(0x111214, {roughness:.2});
+      const P = o.parts || {};
+      const furM = mat(c, {roughness:.62}), bellyM = mat(P.belly || new THREE.Color(c).lerp(new THREE.Color(0xffffff), .28), {roughness:.68});
+      const earM = mat(P.accent || 0xe89ca5, {roughness:.55}), eyeM = mat(0x22c55e, {roughness:.18, emissive:0x0a2e16}), pupilM = mat(0x111214, {roughness:.2});
       const torsoGrp = new THREE.Group(); torsoGrp.position.set(0, h * .52, 0); root.add(torsoGrp);
       const torso = addMesh(torsoGrp, new THREE.CylinderGeometry(h * .21, h * .23, L * .54, 18), furM, 0, 0, 0);
       torso.rotation.x = Math.PI / 2; torso.scale.x = .88;
@@ -1491,12 +1826,13 @@ function buildSingleModel(o) {
     }
     case 'animal': {
       const L = Math.max(.42, w), root = new THREE.Group(); g.add(root);
+      const P = o.parts || {};
       const coatM = mat(c, {roughness:.58});
       const darkCoatM = mat(new THREE.Color(c).multiplyScalar(.62), {roughness:.65});
-      const chestCoatM = mat(new THREE.Color(c).lerp(new THREE.Color(0xfff8eb), .35), {roughness:.62});
+      const chestCoatM = mat(P.belly || new THREE.Color(c).lerp(new THREE.Color(0xfff8eb), .35), {roughness:.62});
       const noseM = mat(0x16171a, {roughness:.25, metalness:.15});
       const eyeM = mat(0x1b1917, {roughness:.15});
-      const collarM = mat(0xd93a40, {roughness:.4, metalness:.2});
+      const collarM = mat(P.accent || 0xd93a40, {roughness:.4, metalness:.2});
       const torsoGrp = new THREE.Group(); torsoGrp.position.set(0, h * .54, 0); root.add(torsoGrp);
       // Ribcage, deep chest & tucked waist
       const ribcage = addMesh(torsoGrp, new THREE.CylinderGeometry(h * .195, h * .165, L * .48, 20), coatM, 0, h * .01, 0);
@@ -1553,11 +1889,12 @@ function buildSingleModel(o) {
     }
     case 'car': {
       const L = w, W = w * .46, wheelR = h * .235;
+      const P = o.parts || {};
       const paintM = mat(c, {metalness:.62, roughness:.18});
       const darkPaintM = mat(new THREE.Color(c).multiplyScalar(.72), {metalness:.55, roughness:.24});
       const glassM = mat(0x111923, {metalness:.85, roughness:.07});
-      const carbonM = mat(0x15171c, {metalness:.3, roughness:.42});
-      const chromeM = mat(0xdbe0e8, {metalness:.88, roughness:.14});
+      const carbonM = mat(P.trim || 0x15171c, {metalness:.3, roughness:.42});
+      const chromeM = mat(P.wheels || 0xdbe0e8, {metalness:.88, roughness:.14});
       const tireM = mat(0x121316, {roughness:.82, metalness:.05});
       const caliperM = mat(0xe53935, {metalness:.4, roughness:.3});
       const hlM = mat(0xf8fbff, {emissive:0xcfe2ff, roughness:.1});
@@ -1738,14 +2075,15 @@ function buildSingleModel(o) {
       break;
     }
     case 'phone': {
-      const d = Math.max(.008, w * .1);
+      const d = Math.max(.008, w * .1), P = o.parts || {};
       addMesh(g, new THREE.BoxGeometry(w, h, d), mat(c, {metalness:.5, roughness:.25}), 0, h / 2, 0);
-      addMesh(g, new THREE.PlaneGeometry(w * .91, h * .94), mat(0x0b0d13, {roughness:.12, metalness:.5}), 0, h / 2, d / 2 + .0006);
-      addMesh(g, new THREE.BoxGeometry(w * .4, w * .4, d * .55), mat(0x1c1e24, {metalness:.4, roughness:.3}), -w * .21, h * .81, -d / 2 - d * .25);
+      addMesh(g, new THREE.PlaneGeometry(w * .91, h * .94), mat(P.sec || 0x0b0d13, {roughness:.12, metalness:.5}), 0, h / 2, d / 2 + .0006);
+      addMesh(g, new THREE.BoxGeometry(w * .4, w * .4, d * .55), mat(P.sec || 0x1c1e24, {metalness:.4, roughness:.3}), -w * .21, h * .81, -d / 2 - d * .25);
       break;
     }
     case 'tree': {
-      const trunkM = mat(0x6b472a, {roughness:.85}), leafM = mat(c === '#e85d2b' ? 0x3b8c47 : c, {roughness:.7});
+      const P = o.parts || {};
+      const trunkM = mat(P.sec || 0x6b472a, {roughness:.85}), leafM = mat(c === '#e85d2b' ? 0x3b8c47 : c, {roughness:.7});
       addMesh(g, new THREE.CylinderGeometry(w * .1, w * .15, h * .42, 14), trunkM, 0, h * .21, 0);
       addMesh(g, new THREE.SphereGeometry(w * .44, 18, 14), leafM, 0, h * .58, 0);
       addMesh(g, new THREE.SphereGeometry(w * .34, 16, 12), leafM, -w * .18, h * .52, w * .12);
@@ -1755,20 +2093,22 @@ function buildSingleModel(o) {
     }
     case 'table': {
       const D = depthFor(o), topH = Math.max(.03, h * .06), legW = Math.max(.035, Math.min(w, D) * .07);
-      const woodM = mat(c, {roughness:.55});
+      const P = o.parts || {};
+      const woodM = mat(c, {roughness:.55}), legM = mat(P.sec || c, {roughness:.6});
       addMesh(g, new THREE.BoxGeometry(w, topH, D), woodM, 0, h - topH / 2, 0);
       [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(([sx, sz]) => {
-        addMesh(g, new THREE.BoxGeometry(legW, h - topH, legW), woodM, sx * (w / 2 - legW * 1.1), (h - topH) / 2, sz * (D / 2 - legW * 1.1));
+        addMesh(g, new THREE.BoxGeometry(legW, h - topH, legW), legM, sx * (w / 2 - legW * 1.1), (h - topH) / 2, sz * (D / 2 - legW * 1.1));
       });
       break;
     }
     case 'chair': {
       const D = depthFor(o), seatY = h * .48, seatT = Math.max(.03, h * .05), legW = Math.max(.028, w * .075);
-      const chM = mat(c, {roughness:.55});
+      const P = o.parts || {};
+      const chM = mat(c, {roughness:.55}), legM = mat(P.sec || c, {roughness:.6});
       addMesh(g, new THREE.BoxGeometry(w, seatT, D), chM, 0, seatY, 0);
       addMesh(g, new THREE.BoxGeometry(w, h - seatY, seatT), chM, 0, seatY + (h - seatY) / 2, -D / 2 + seatT / 2);
       [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(([sx, sz]) => {
-        addMesh(g, new THREE.CylinderGeometry(legW * .5, legW * .42, seatY, 10), chM, sx * (w / 2 - legW), seatY / 2, sz * (D / 2 - legW));
+        addMesh(g, new THREE.CylinderGeometry(legW * .5, legW * .42, seatY, 10), legM, sx * (w / 2 - legW), seatY / 2, sz * (D / 2 - legW));
       });
       break;
     }
@@ -2403,6 +2743,8 @@ function syncScene(showSelUI = true) {
       R.gizmo.group.visible = true;
       const gy = (activeObj.y || 0) + Math.min((activeObj.h || 1) * (activeObj.sy ?? 1) * .48, 1.0);
       R.gizmo.group.position.set(activeObj.x || 0, gy, activeObj.z || 0);
+      R.gizmo.group.rotation.order = 'YXZ';
+      R.gizmo.group.rotation.set(rad(activeObj.rx || 0), rad(activeObj.ry || 0), rad(activeObj.rz || 0));
       // Fixed screen-space pixel size in the viewport (2x larger Cinema 4D constant screen-scale controller)
       const camDir = new R.THREE.Vector3();
       R.camera.getWorldDirection(camDir);
@@ -2689,15 +3031,19 @@ function bindViewportPicking() {
     wrap.style.cursor = 'grabbing';
     const scale = Math.max(.002, S.dist * .0022);
     const origin = new R.THREE.Vector3(vpDrag.ox, vpDrag.oy + Math.min((o.h || 1) * (o.sy ?? 1) * .48, 1.0), vpDrag.oz);
+    const objEuler = new R.THREE.Euler(rad(vpDrag.orx || 0), rad(vpDrag.ory || 0), rad(vpDrag.orz || 0), 'YXZ');
+    const axX = new R.THREE.Vector3(1, 0, 0).applyEuler(objEuler).normalize();
+    const axY = new R.THREE.Vector3(0, 1, 0).applyEuler(objEuler).normalize();
+    const axZ = new R.THREE.Vector3(0, 0, 1).applyEuler(objEuler).normalize();
     if (vpDrag.mode === 'scale' && vpDrag.axis !== 'free') {
       if (vpDrag.axis === 'x') {
-        const d = projectWorldDeltaToAxis(origin, new R.THREE.Vector3(1, 0, 0), dx, dy);
+        const d = projectWorldDeltaToAxis(origin, axX, dx, dy);
         o.sx = rnd(clamp(vpDrag.osx + d * 1.25, .05, 20), 2);
       } else if (vpDrag.axis === 'y') {
-        const d = projectWorldDeltaToAxis(origin, new R.THREE.Vector3(0, 1, 0), dx, dy);
+        const d = projectWorldDeltaToAxis(origin, axY, dx, dy);
         o.sy = rnd(clamp(vpDrag.osy + d * 1.25, .05, 20), 2);
       } else if (vpDrag.axis === 'z') {
-        const d = projectWorldDeltaToAxis(origin, new R.THREE.Vector3(0, 0, 1), dx, dy);
+        const d = projectWorldDeltaToAxis(origin, axZ, dx, dy);
         o.sz = rnd(clamp(vpDrag.osz + d * 1.25, .05, 20), 2);
       } else {
         const f = clamp(1 + (dx - dy) * .005, .1, 10);
@@ -2714,26 +3060,40 @@ function bindViewportPicking() {
         o.ry = rnd(vpDrag.ory + dx * .75, 1);
       }
     } else if (vpDrag.axis === 'x') {
-      const d = projectWorldDeltaToAxis(origin, new R.THREE.Vector3(1, 0, 0), dx, dy);
-      o.x = rnd(vpDrag.ox + d, 3);
+      const d = projectWorldDeltaToAxis(origin, axX, dx, dy);
+      o.x = rnd(vpDrag.ox + axX.x * d, 3);
+      o.y = rnd(Math.max(0, vpDrag.oy + axX.y * d), 3);
+      o.z = rnd(vpDrag.oz + axX.z * d, 3);
     } else if (vpDrag.axis === 'y' || e.altKey) {
       const d = vpDrag.axis === 'y'
-        ? projectWorldDeltaToAxis(origin, new R.THREE.Vector3(0, 1, 0), dx, dy)
+        ? projectWorldDeltaToAxis(origin, axY, dx, dy)
         : -dy * scale;
-      o.y = rnd(Math.max(0, vpDrag.oy + d), 3);
+      if (vpDrag.axis === 'y') {
+        o.x = rnd(vpDrag.ox + axY.x * d, 3);
+        o.y = rnd(Math.max(0, vpDrag.oy + axY.y * d), 3);
+        o.z = rnd(vpDrag.oz + axY.z * d, 3);
+      } else {
+        o.y = rnd(Math.max(0, vpDrag.oy + d), 3);
+      }
     } else if (vpDrag.axis === 'z') {
-      const d = projectWorldDeltaToAxis(origin, new R.THREE.Vector3(0, 0, 1), dx, dy);
-      o.z = rnd(vpDrag.oz + d, 3);
+      const d = projectWorldDeltaToAxis(origin, axZ, dx, dy);
+      o.x = rnd(vpDrag.ox + axZ.x * d, 3);
+      o.y = rnd(Math.max(0, vpDrag.oy + axZ.y * d), 3);
+      o.z = rnd(vpDrag.oz + axZ.z * d, 3);
     } else if (vpViewMode === 'top') {
+      const prevX = o.x || 0, prevZ = o.z || 0;
       o.x = rnd(vpDrag.ox + dx * scale, 3);
       o.z = rnd(vpDrag.oz + dy * scale, 3);
+      smoothTurnRiggedOnDrag(o, prevX, prevZ, o.x, o.z);
     } else if (vpViewMode === 'side') {
       o.z = rnd(vpDrag.oz - dx * scale, 3);
       o.y = rnd(Math.max(0, vpDrag.oy - dy * scale), 3);
     } else {
+      const prevX = o.x || 0, prevZ = o.z || 0;
       const a = rad(S.az), rx = Math.cos(a), rz = -Math.sin(a), fx = -Math.sin(a), fz = -Math.cos(a);
       o.x = rnd(vpDrag.ox + dx * scale * rx - dy * scale * fx, 3);
       o.z = rnd(vpDrag.oz + dx * scale * rz - dy * scale * fz, 3);
+      smoothTurnRiggedOnDrag(o, prevX, prevZ, o.x, o.z);
     }
     o.placed = true; o.userMoved = true;
     syncObjProps(); renderVP(); AC.drawAll();
@@ -2750,6 +3110,7 @@ function bindViewportPicking() {
       return;
     }
     const o = objById(vpDrag.id);
+    if (o) { delete o._dragDirX; delete o._dragDirZ; }
     const moved = vpDrag.moved; vpDrag = null; activeVpDrag = false; hoverGizmoAxis = null; wrap.style.cursor = '';
     if (moved && o && o.model === 'person') {
       if (checkAutoSitOnChair(o, true)) { objPropsKey = ''; syncObjProps(); }
@@ -2814,6 +3175,55 @@ function bindDragToGroup(container, attrName) {
   });
 }
 
+function colorSlotsForObject(o) {
+  const P = o?.parts || {};
+  const c = o?.color || '#e85d2b';
+  switch (o?.model) {
+    case 'person':
+      return [
+        {key:'color', label:'Clothes', val:P.shirt || c},
+        {key:'part:skin', label:'Skin', val:P.skin || '#e2b897'},
+        {key:'part:hair', label:'Hair', val:P.hair || '#2a211b'}
+      ];
+    case 'car':
+      return [
+        {key:'color', label:'Body', val:c},
+        {key:'part:trim', label:'Trim', val:P.trim || '#15171c'},
+        {key:'part:wheels', label:'Wheels', val:P.wheels || '#dbe0e8'}
+      ];
+    case 'cat':
+      return [
+        {key:'color', label:'Coat', val:c},
+        {key:'part:belly', label:'Belly', val:P.belly || '#f5ede4'},
+        {key:'part:accent', label:'Ears', val:P.accent || '#e89ca5'}
+      ];
+    case 'animal':
+      return [
+        {key:'color', label:'Coat', val:c},
+        {key:'part:belly', label:'Chest', val:P.belly || '#f5eee0'},
+        {key:'part:accent', label:'Collar', val:P.accent || '#d93a40'}
+      ];
+    case 'tree':
+      return [
+        {key:'color', label:'Foliage', val:c === '#e85d2b' ? '#3b8c47' : c},
+        {key:'part:sec', label:'Trunk', val:P.sec || '#6b472a'}
+      ];
+    case 'phone':
+      return [
+        {key:'color', label:'Body', val:c},
+        {key:'part:sec', label:'Screen', val:P.sec || '#1c1e24'}
+      ];
+    case 'table':
+    case 'chair':
+      return [
+        {key:'color', label:o.model === 'table' ? 'Top' : 'Seat', val:c},
+        {key:'part:sec', label:'Legs', val:P.sec || '#4a3219'}
+      ];
+    default:
+      return [{key:'color', label:'Color', val:c}];
+  }
+}
+
 function renderObjects() {
   if (!$('objList')) return;
   $('objList').innerHTML = V().objects.map(o => `<button class="objrow${selSet.has(o.id) && selSet.size > 1 ? ' multi-sel' : ''}" draggable="true" data-oid="${o.id}" aria-pressed="${isObjSelected(o.id)}" title="Click to select, double-click to edit name &amp; subject detail"><span class="sw" style="background:${escAttr(o.color)}"></span>${esc(o.label)}<span class="m">${MODELS[o.model] || o.model}${o.model === 'group' && o.children ? ` (${o.children.length})` : ''}</span></button>`).join('');
@@ -2832,7 +3242,11 @@ function renderObjects() {
       const n = (k, label, step, min, max) => numField('op_' + k, label, `obj.${o.id}.${k}`, step, min, max, `data-ok="${k}"`);
       const poseMap = poseMapFor(o.model);
       const poseHtml = poseMap ? `<div class="field"><label for="op_pose">Pose (or right-click object)</label><select id="op_pose" data-ok="pose">${Object.entries(poseMap).map(([pk, pv]) => `<option value="${pk}">${pv.name}</option>`).join('')}</select></div>` : '';
+      const posHtml = `<div class="field"><div class="labrow"><label for="op_x">${kb(`obj.${o.id}.pos`, 'Position')}Position (X · Y · Z)</label></div><div class="grid3" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px"><input type="number" id="op_x" data-ok="x" step="0.05" min="-100" max="100" title="Position X" aria-label="Position X"><input type="number" id="op_y" data-ok="y" step="0.05" min="0" max="50" title="Position Y (Lift)" aria-label="Position Y"><input type="number" id="op_z" data-ok="z" step="0.05" min="-100" max="100" title="Position Z" aria-label="Position Z"></div></div>`;
+      const rotHtml = `<div class="field"><div class="labrow"><label for="op_rx">${kb(`obj.${o.id}.rot`, 'Rotation')}Rotation (X · Y · Z)</label></div><div class="grid3" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px"><input type="number" id="op_rx" data-ok="rx" step="1" min="-180" max="180" title="Rotation X (Pitch)" aria-label="Rotation X"><input type="number" id="op_ry" data-ok="ry" step="1" min="-720" max="720" title="Rotation Y (Heading)" aria-label="Rotation Y"><input type="number" id="op_rz" data-ok="rz" step="1" min="-180" max="180" title="Rotation Z (Roll)" aria-label="Rotation Z"></div></div>`;
       const scaleHtml = `<div class="field"><div class="labrow"><label for="op_sx">${kb(`obj.${o.id}.scale`, 'Scale')}Scale (X · Y · Z)</label></div><div class="grid3" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px"><input type="number" id="op_sx" data-ok="sx" step="0.05" min="0.05" max="20" title="Scale X" aria-label="Scale X"><input type="number" id="op_sy" data-ok="sy" step="0.05" min="0.05" max="20" title="Scale Y" aria-label="Scale Y"><input type="number" id="op_sz" data-ok="sz" step="0.05" min="0.05" max="20" title="Scale Z" aria-label="Scale Z"></div></div>`;
+      const colorSlots = colorSlotsForObject(o).slice(0, 3);
+      const colorHtml = `<div class="field"><div class="labrow"><label for="op_color">${kb(`obj.${o.id}.color`, 'Color')}Color</label></div><div class="obj-color-row">${colorSlots.map((cs, ci) => `<div class="obj-color-item"><input type="color" id="${ci === 0 ? 'op_color' : `op_color_${ci}`}" data-ok="${cs.key}" value="${escAttr(cs.val)}" title="${escAttr(cs.label)}" aria-label="${escAttr(cs.label)}"><span class="obj-color-lbl">${esc(cs.label)}</span></div>`).join('')}</div></div>`;
       const grpBtns = `<div class="row" style="gap:6px;flex-wrap:wrap">
         ${selSet.size >= 2 ? `<button class="btn ghost sm" id="objGroupBtn" style="flex:none">Group selected (${selSet.size})</button>` : ''}
         ${o.model === 'group' ? `<button class="btn ghost sm" id="objUngroupBtn" style="flex:none">Ungroup</button>` : ''}
@@ -2852,12 +3266,11 @@ function renderObjects() {
           <div class="field"><label for="op_img">Image</label><select id="op_img" data-ok="img"><option value="-1">None</option>${AC.refs.map((r, i) => `<option value="${i}">Image ${i + 1}${r.alpha ? ' (PNG)' : ''}</option>`).join('')}</select></div></div>
         ${poseHtml}
         <div class="grid2">${n('h', 'Height m', .01, .01, 50)}${n('w', 'Width m', .01, .01, 50)}</div>
-        <div class="grid2">${n('x', 'Position X', .05, -100, 100)}${n('z', 'Position Z', .05, -100, 100)}</div>
-        <div class="grid2">${n('y', 'Lift Y', .05, 0, 50)}${n('ry', 'Rotation °', 1, -720, 720)}</div>
-        <div class="grid2">${n('rx', 'Tilt (pitch) °', 1, -180, 180)}${n('rz', 'Roll (lean) °', 1, -180, 180)}</div>
+        ${posHtml}
+        ${rotHtml}
         ${scaleHtml}
         ${customHtml}
-        <div class="field"><div class="labrow"><label for="op_color">${kb(`obj.${o.id}.color`, 'Color')}Color</label></div><input type="color" id="op_color" data-ok="color"></div>
+        ${colorHtml}
         ${grpBtns}`;
       ['op_model', 'op_img', 'op_pose'].forEach(id => { if ($(id)) AC.enhance($(id)); });
     }
@@ -2872,7 +3285,8 @@ function syncObjProps() {
     set('op_y', rnd(Math.max(0, o.y || 0), 3)); set('op_ry', Math.round(o.ry));
     set('op_rx', Math.round(o.rx || 0)); set('op_rz', Math.round(o.rz || 0));
     set('op_sx', rnd(o.sx ?? 1, 2)); set('op_sy', rnd(o.sy ?? 1, 2)); set('op_sz', rnd(o.sz ?? 1, 2));
-    set('op_color', o.color);
+    const slots = colorSlotsForObject(o).slice(0, 3);
+    slots.forEach((cs, ci) => set(ci === 0 ? 'op_color' : `op_color_${ci}`, cs.val));
     if (!AC.refs[o.img]) o.img = -1;
     if ($('op_model')) { $('op_model').value = o.model; AC.refreshDD($('op_model')); }
     if ($('op_img')) { $('op_img').value = String(o.img); AC.refreshDD($('op_img')); }
@@ -2950,7 +3364,16 @@ $('objProps').addEventListener('input', e => {
     if (isVideo()) (tracks().focus || []).forEach(kf => { if (kf.v === old) kf.v = o.label; });
     o.auto = false; buildTimeline(); syncVideoFocus();
   }
-  else if (k === 'color') o.color = e.target.value;
+  else if (k === 'color') {
+    o.color = e.target.value;
+    if (o.parts?.shirt) o.parts.shirt = e.target.value;
+    renderObjects();
+  }
+  else if (k.startsWith('part:')) {
+    const partName = k.slice(5);
+    o.parts = o.parts || {};
+    o.parts[partName] = e.target.value;
+  }
   else if (k !== 'model' && k !== 'img' && k !== 'pose' && k !== 'clip') {
     const v = parseFloat(e.target.value);
     if (isFinite(v)) {
@@ -3395,13 +3818,21 @@ function setEase(keys, e) {
 }
 let ctxEl = null;
 function closeCtx() { ctxEl?.remove(); ctxEl = null; }
-function openCtx(x, y, keys) {
+function openCtx(x, y, keys, opts = {}) {
   closeCtx();
   const m = document.createElement('div'); m.className = 'ctx'; m.setAttribute('role', 'menu');
   const mac = /Mac|iP/.test(navigator.platform);
-  const items = [['easeInOut', 'Easy Ease', 'F9'], ['easeIn', 'Easy Ease In', 'Shift+F9'], ['easeOut', 'Easy Ease Out', 'Ctrl+Shift+F9'],
+  const items = [];
+  if (opts.pathKnot) {
+    const o = objById(opts.pathKnot.objId);
+    const curveOn = o ? isObjKnotCurveEnabled(o, opts.pathKnot.t) : false;
+    items.push(['curveControl', (curveOn ? '✓ ' : '') + 'Curve Control', 'Bezier Handles'], ['sep']);
+  }
+  items.push(
+    ['easeInOut', 'Easy Ease', 'F9'], ['easeIn', 'Easy Ease In', 'Shift+F9'], ['easeOut', 'Easy Ease Out', 'Ctrl+Shift+F9'],
     ['linear', 'Linear', mac ? 'Cmd + Click' : 'Ctrl + Click'], ['sep'], ['toggleHold', 'Toggle Hold Keyframe', ''], ['sep'],
-    ['anticipate', 'Anticipation', ''], ['overshoot', 'Overshoot', ''], ['bounce', 'Bounce', ''], ['elastic', 'Elastic', ''], ['sep'], ['delete', 'Delete keyframe', 'Del']];
+    ['anticipate', 'Anticipation', ''], ['overshoot', 'Overshoot', ''], ['bounce', 'Bounce', ''], ['elastic', 'Elastic', ''], ['sep'], ['delete', 'Delete keyframe', 'Del']
+  );
   m.innerHTML = items.map(([id, n, k]) => id === 'sep' ? '<div class="sepl"></div>' : `<button role="menuitem" data-ce="${id}">${n}<span>${k}</span></button>`).join('');
   document.body.appendChild(m); ctxEl = m;
   const r = m.getBoundingClientRect();
@@ -3409,11 +3840,64 @@ function openCtx(x, y, keys) {
   m.addEventListener('click', e => {
     const b = e.target.closest('[data-ce]'); if (!b) return;
     const id = b.dataset.ce; closeCtx();
-    if (id === 'delete') { const ks = new Set(keys); Object.keys(tracks()).forEach(q => { tracks()[q] = tracks()[q].filter(k => !ks.has(k)); }); selKey = null; cleanTracks(); buildTimeline(); apply(T); AC.save(); AC.changed(); }
-    else setEase(keys, id);
+    if (id === 'curveControl' && opts.pathKnot) {
+      const o = objById(opts.pathKnot.objId);
+      if (o) {
+        const enabled = toggleObjPathCurveControl(o, opts.pathKnot.t);
+        buildTimeline(); apply(T); AC.drawAll(); renderVP(); AC.save(); AC.changed();
+        AC.toast(enabled ? 'Curve Control on — drag the 2 Bezier handles to edit path curve' : 'Curve Control off');
+      }
+      return;
+    }
+    if (id === 'delete') {
+      const ks = new Set(keys);
+      Object.keys(tracks()).forEach(q => { tracks()[q] = tracks()[q].filter(k => !ks.has(k)); });
+      if (opts.pathKnot) pathCache.delete(opts.pathKnot.objId);
+      selKey = null; cleanTracks(); buildTimeline(); apply(T); AC.drawAll(); renderVP(); AC.save(); AC.changed();
+    } else {
+      if (opts.pathKnot) {
+        const o = objById(opts.pathKnot.objId);
+        if (o && id === 'linear') {
+          ['x', 'y', 'z'].forEach(ax => {
+            const k = findObjAxisKey(o, ax, opts.pathKnot.t);
+            if (k) { k.curve = false; delete k.cIn; delete k.cOut; }
+          });
+          pathCache.delete(o.id);
+        }
+      }
+      setEase(keys, id);
+      AC.drawAll(); renderVP();
+    }
   });
   m.querySelector('button')?.focus();
 }
+
+['top', 'side'].forEach(viewName => {
+  const cvs = $(viewName);
+  if (!cvs) return;
+  cvs.addEventListener('contextmenu', e => {
+    if (!isVideo() || !is3D()) return;
+    const v = lastViewTransform[viewName];
+    if (!v || !v.s) return;
+    const rect = cvs.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const hit = hitTestPathInView(viewName, v, x, y);
+    if (hit && (hit.kind === 'pathKf' || hit.kind === 'pathHandle')) {
+      e.preventDefault();
+      e.stopPropagation();
+      const o = objById(hit.objId);
+      if (!o) return;
+      selectObj(o.id, false);
+      ensureObjPathKnotKeys(o, hit.t);
+      const keysAtKnot = Object.entries(tracks())
+        .filter(([p]) => p.startsWith(`obj.${o.id}.`))
+        .flatMap(([, ks]) => ks.filter(k => Math.abs(k.t - hit.t) < frameDur() / 2 + 1e-4));
+      renderObjects(); buildTimeline(); AC.drawAll(); renderVP();
+      openCtx(e.clientX, e.clientY, keysAtKnot, {pathKnot:{objId:o.id, t:hit.t}});
+    }
+  });
+});
 function openObjCtx(x, y, targetObj) {
   closeCtx();
   const m = document.createElement('div'); m.className = 'ctx'; m.setAttribute('role', 'menu');
@@ -3874,10 +4358,14 @@ async function saveFile(filename, blob) {
 function exportSize() { const ar = aspectRatio(); return ar >= 1 ? {w:1280, h:Math.round(1280 / ar / 2) * 2} : {w:Math.round(1280 * ar / 2) * 2, h:1280}; }
 $('expFrame').addEventListener('click', () => {
   if (!R) { AC.toast('3D viewer is not available'); return; }
+  const btn = $('expFrame'), origTxt = btn.textContent;
+  btn.classList.add('busy');
+  btn.innerHTML = `<span class="spin"></span>${esc(origTxt)}`;
   const sz = exportSize(); renderVP(sz);
   let dataUrl = '';
   try { dataUrl = R.renderer.domElement.toDataURL('image/png'); } catch (e) {}
   R.renderer.domElement.toBlob(b => {
+    setTimeout(() => { btn.classList.remove('busy'); btn.textContent = origTxt; }, 220);
     renderVP();
     if (!b) { AC.toast('Could not export the image'); return; }
     saveFile('visionpilot-3d-reference.png', b);
@@ -3990,7 +4478,7 @@ $('expVideo').addEventListener('click', async () => {
   if (!R) { AC.toast('3D viewer is not available'); return; }
   exporting = true; stop();
   const btn = $('expVideo'), label = btn.textContent, sz = exportSize(), keepT = T, t0 = performance.now();
-  btn.disabled = true; btn.textContent = 'Preparing…';
+  btn.disabled = true; btn.classList.add('busy'); btn.innerHTML = '<span class="spin"></span>Preparing…';
   let blob = null;
   let thumbDataUrl = '';
   try {
@@ -4000,7 +4488,7 @@ $('expVideo').addEventListener('click', async () => {
     catch (e) { console.warn('Fast export failed, falling back to real time recording', e); blob = null; }
     if (!blob) { AC.toast('Fast export is not available here, recording in real time'); blob = await exportRealtime(btn, sz); }
   } finally {
-    btn.textContent = label; btn.disabled = false; exporting = false; setTime(keepT); renderVP();
+    btn.classList.remove('busy'); btn.textContent = label; btn.disabled = false; exporting = false; setTime(keepT); renderVP();
   }
   if (!blob) { AC.toast('Video export is not supported in this browser'); return; }
   const mp4 = blob.type === 'video/mp4';
@@ -5391,11 +5879,19 @@ function getVideoResolutionTier(w, h) {
 }
 
 let vidUpQualityMode = 'balanced';
+let vidUpActiveTier = '';
+let vidBatchFolderState = null;
+
+hooks.cancelVideoUpscale = () => {
+  if (vidUpRunning) vidUpAbort = true;
+};
 
 function syncVideoUpscalerUI() {
   const drop = $('vidUpscaleDrop');
   const thumbImg = $('vidUpscaleThumbImg');
   const thumbCvs = $('vidUpscaleThumb');
+  const folderPrev = $('vidUpscaleFolderPreview');
+  const folderNameEl = $('vidUpscaleFolderName');
   const empty = $('vidUpscaleEmpty');
   const metaEl = $('vidUpscaleMeta');
   const limitWarnEl = $('vidUpscaleLimitWarning');
@@ -5403,6 +5899,7 @@ function syncVideoUpscalerUI() {
   const resField = $('vidUpscaleResField');
   const btn2k = $('vidUpscale2kBtn');
   const btn4k = $('vidUpscale4kBtn');
+  const batchBtn = $('vidBatchUpscaleBtn');
   const modeRow = $('vidUpscaleModeRow');
   const loadBox = $('vidUpscaleLoading');
   const card = $('pVidUpscale');
@@ -5410,12 +5907,54 @@ function syncVideoUpscalerUI() {
 
   const isAdvOrPro = S.mode === 'adv' || !!AC.isPro?.();
   card?.classList.toggle('upscale-busy', vidUpRunning);
+  if (batchBtn) batchBtn.disabled = vidUpRunning;
   if (modeRow) {
     modeRow.querySelectorAll('.vid-mode-btn[data-vup-mode]').forEach(b => {
       b.setAttribute('aria-pressed', String(b.dataset.vupMode === vidUpQualityMode));
       b.disabled = vidUpRunning;
     });
   }
+
+  const syncBusyBtn = (btn, tierLbl) => {
+    if (!btn) return;
+    const isBusy = vidUpRunning && vidUpActiveTier === tierLbl;
+    btn.classList.toggle('busy', isBusy);
+    if (isBusy) {
+      if (!btn.querySelector('.spin')) btn.innerHTML = `<span class="spin"></span>${tierLbl}`;
+    } else if (btn.querySelector('.spin')) {
+      btn.textContent = tierLbl;
+    }
+  };
+  syncBusyBtn(btn2k, '2K');
+  syncBusyBtn(btn4k, '4K');
+
+  if (vidBatchFolderState && vidBatchFolderState.files.length) {
+    if (empty) empty.hidden = true;
+    if (thumbImg) thumbImg.hidden = true;
+    if (thumbCvs) thumbCvs.hidden = true;
+    if (folderPrev) folderPrev.hidden = false;
+    if (folderNameEl) folderNameEl.textContent = vidBatchFolderState.folderName;
+    drop.classList.add('folder-mode');
+    drop.style.height = '136px';
+    if (metaEl) {
+      metaEl.textContent = `Folder: ${vidBatchFolderState.folderName} · ${vidBatchFolderState.files.length} videos`;
+      metaEl.hidden = false;
+    }
+    if (limitWarnEl) limitWarnEl.hidden = true;
+    if (already4kEl) already4kEl.hidden = true;
+    if (resField) resField.hidden = false;
+    btn2k.disabled = vidUpRunning;
+    btn2k.classList.remove('upscale-disabled');
+    btn4k.dataset.forceDisabled = '0';
+    const dis4k = vidUpRunning || !isAdvOrPro;
+    btn4k.disabled = dis4k;
+    btn4k.classList.toggle('upscale-disabled', dis4k);
+    if (loadBox) loadBox.hidden = !vidUpRunning;
+    return;
+  }
+
+  if (folderPrev) folderPrev.hidden = true;
+  drop.classList.remove('folder-mode');
 
   if (!vidUpInput) {
     if (empty) empty.hidden = false;
@@ -5452,7 +5991,7 @@ function syncVideoUpscalerUI() {
   }
 
   const tier = getVideoResolutionTier(vidUpInput.width, vidUpInput.height);
-  const tooLong = vidUpInput.duration > 15.05;
+  const tooLong = vidUpInput.duration > 60.05;
 
   if (tooLong) {
     if (limitWarnEl) limitWarnEl.hidden = false;
@@ -5525,6 +6064,7 @@ function isCanvasFrameNonBlack(ctx, w, h) {
 
 async function handleVideoUpscaleFile(file) {
   if (!file || vidUpRunning) return;
+  vidBatchFolderState = null;
   const errBox = $('vidUpscaleError');
   if (errBox) { errBox.hidden = true; errBox.textContent = ''; }
   if (!file.type.startsWith('video/') && !/\.(mp4|webm|mov|m4v|mkv)$/i.test(file.name || '')) {
@@ -5662,6 +6202,9 @@ function formatSecLabel(sec) {
 
 async function runVideoUpscale(targetTier) {
   if (vidUpRunning) return;
+  if (vidBatchFolderState && vidBatchFolderState.files.length) {
+    return runVideoBatchFolderUpscale(targetTier);
+  }
   const errBox = $('vidUpscaleError');
   if (errBox) { errBox.hidden = true; errBox.textContent = ''; }
   if (!vidUpInput) {
@@ -5675,8 +6218,8 @@ async function runVideoUpscale(targetTier) {
     AC.toast('4K Video Upscale is available in Advanced mode or with a subscription.');
     return;
   }
-  if (vidUpInput.duration > 15.05) {
-    AC.toast('Maximum 15 seconds. Videos longer than 15 seconds cannot be upscaled.');
+  if (vidUpInput.duration > 60.05) {
+    AC.toast('Maximum 1 minute (60s). Videos longer than 1 minute cannot be upscaled.');
     return;
   }
   const resTier = getVideoResolutionTier(vidUpInput.width, vidUpInput.height);
@@ -5692,6 +6235,7 @@ async function runVideoUpscale(targetTier) {
   const engineDef = VID_UP_MODELS[vidUpQualityMode] || VID_UP_MODELS.balanced;
 
   vidUpRunning = true;
+  vidUpActiveTier = targetTier;
   vidUpAbort = false;
   syncVideoUpscalerUI();
 
@@ -5726,7 +6270,7 @@ async function runVideoUpscale(targetTier) {
     });
 
     const rawDur = (isFinite(workVid.duration) && workVid.duration > 0) ? workVid.duration : (vidUpInput.duration || 1);
-    const dur = Math.min(15, rawDur);
+    const dur = Math.min(60, rawDur);
 
     // 1. Extract and upscale the 5 section middle frames: (i + 0.5) / 5 * dur
     const origFrames = [];
@@ -5854,18 +6398,75 @@ async function runVideoUpscale(targetTier) {
     }
   } finally {
     vidUpRunning = false;
+    vidUpActiveTier = '';
     vidUpAbort = false;
     syncVideoUpscalerUI();
   }
 }
 
+async function runVideoBatchFolderUpscale(targetTier) {
+  if (!vidBatchFolderState || !vidBatchFolderState.files.length) return;
+  const files = vidBatchFolderState.files;
+  const folderName = vidBatchFolderState.folderName || 'batch-videos';
+  vidBatchFolderState = null;
+  for (let i = 0; i < files.length; i++) {
+    await handleVideoUpscaleFile(files[i]);
+    if (vidUpInput && vidUpInput.duration <= 60.05) {
+      await runVideoUpscale(targetTier);
+    }
+    if (vidUpAbort) break;
+  }
+  AC.toast(`Batch video upscale complete (${folderName})`);
+}
+
+hooks.handleDroppedVideos = async (videoFiles, folderName = '') => {
+  if (!videoFiles || !videoFiles.length || vidUpRunning) return;
+  if (folderName || videoFiles.length > 1) {
+    vidBatchFolderState = {
+      folderName: folderName || 'batch-videos',
+      files: videoFiles
+    };
+    syncVideoUpscalerUI();
+    AC.toast(`Loaded folder "${vidBatchFolderState.folderName}" (${videoFiles.length} videos) for Batch Video Upscaling.`);
+  } else {
+    await handleVideoUpscaleFile(videoFiles[0]);
+    AC.toast('Video loaded into Video Upscale.');
+  }
+};
+
 (function bindVideoUpscalerEvents() {
   const drop = $('vidUpscaleDrop');
   const fileIn = $('vidUpscaleFile');
+  const batchBtn = $('vidBatchUpscaleBtn');
+  const batchFolderIn = $('vidBatchFolderInput');
   const btn2k = $('vidUpscale2kBtn');
   const btn4k = $('vidUpscale4kBtn');
   const modeRow = $('vidUpscaleModeRow');
   const cancelBtn = $('vidUpscaleCancelBtn');
+
+  if (batchBtn && batchFolderIn) {
+    batchBtn.addEventListener('click', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (vidUpRunning) return;
+      batchFolderIn.value = '';
+      batchFolderIn.click();
+    });
+    batchFolderIn.addEventListener('change', e => {
+      const allFiles = [...(e.target.files || [])].filter(f =>
+        (f.type && f.type.startsWith('video/')) || /\.(mp4|webm|mov|m4v|mkv)$/i.test(f.name || '')
+      );
+      if (!allFiles.length) {
+        AC.toast('No valid video files found in the selected folder.');
+        return;
+      }
+      const firstRel = allFiles[0].webkitRelativePath || '';
+      const folderName = (firstRel.split('/')[0] || 'upscaled-videos').trim();
+      vidBatchFolderState = { folderName, files: allFiles };
+      syncVideoUpscalerUI();
+      AC.toast(`Loaded folder "${folderName}" (${allFiles.length} videos). Select 2K or 4K to batch upscale.`);
+    });
+  }
 
   if (drop && fileIn) {
     drop.addEventListener('click', () => {
@@ -5911,7 +6512,7 @@ async function runVideoUpscale(targetTier) {
 
 /* ---------- boot ---------- */
 // small read-only inspection hook (used by the automated viewport tests)
-AC.vpTest = {R:() => R, setTime:t => setTime(t), time:() => T, objs:() => V().objects, stop:() => stop(), renderVP:sz => renderVP(sz), pathDist:(o, t) => pathDist(o, t), applyPreset:id => applyAnimPreset(id), preciseMinY, detect3DFocusPartAt, sampleFocusPartTimeline, focusMarkerAt, setFocusMarkerWorld};
+AC.vpTest = {R:() => R, setTime:t => setTime(t), time:() => T, objs:() => V().objects, stop:() => stop(), renderVP:sz => renderVP(sz), pathDist:(o, t) => pathDist(o, t), applyPreset:id => applyAnimPreset(id), preciseMinY, detect3DFocusPartAt, sampleFocusPartTimeline, focusMarkerAt, setFocusMarkerWorld, toggleObjPathCurveControl, isObjKnotCurveEnabled, objPathKeyTimes, objPosAt, hitTestPathInView, smoothTurnRiggedOnDrag, colorSlotsForObject, lastViewTransform:() => lastViewTransform, projectObjPathPt, ensureObjPathKnotKeys};
 renderPresets();
 renderAnimPresets();
 updateTimeUI();

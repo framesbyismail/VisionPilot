@@ -372,11 +372,15 @@ function switchModeState(nextApp) {
   if (S.app === nextApp) return;
   snapshotMode(S.app);
   S.app = nextApp;
-  const src = S.modeStates?.[nextApp] || DEF;
+  const defForMode = nextApp === 'video' ? {...DEF, aspect: '16:9'} : DEF;
+  const src = S.modeStates?.[nextApp] || defForMode;
   MODE_KEYS.forEach(k => {
-    const val = src[k] !== undefined ? src[k] : DEF[k];
+    const val = src[k] !== undefined ? src[k] : defForMode[k];
     if (val !== undefined) S[k] = JSON.parse(JSON.stringify(val));
   });
+  if (nextApp === 'video' && !S.modeStates?.video?.aspect) {
+    S.aspect = '16:9';
+  }
   S.focus = {...DEF_FOCUS(), ...(S.focus || {})};
   if (nextApp === 'video') {
     S.focus.showMark = false;
@@ -437,6 +441,8 @@ function ensureAdvMode(what) {
   if (S.mode !== 'adv') {
     S.mode = 'adv';
     document.body.classList.add('adv');
+    if ($('modeNormal')) $('modeNormal').hidden = true;
+    if ($('modeAdv')) $('modeAdv').disabled = true;
     renderDock();
     afterLayout();
     toast('Advanced mode enabled');
@@ -446,13 +452,28 @@ function ensureAdvMode(what) {
 // the one "Advanced mode needed" panel every locked control uses; auth.js fills in the sign-in / request buttons
 function needAdv(what) {
   $('advMsg').textContent = (what ? what + ' is part of Advanced mode. ' : '')
-    + 'Advanced mode opens Video, Lighting, Camera & lens, Focus point, Extra notes and every background and lighting preset. Send a request and framesbyismail will give you access.';
+    + 'Advanced mode opens Video & 3D, Lighting, Camera & lens, Focus point, Extra notes, 4x/4K Upscaling and every background and lighting preset. Send a request and framesbyismail will give you access.';
   hooks.advRender?.();
+  if ($('advPopBackdrop')) $('advPopBackdrop').hidden = false;
   $('advPop').classList.add('show');
 }
-function hideAdv() { $('advPop').classList.remove('show'); }
+function hideAdv() {
+  $('advPop').classList.remove('show');
+  if ($('advPopBackdrop')) $('advPopBackdrop').hidden = true;
+}
 $('advClose').addEventListener('click', hideAdv);
+$('advPopBackdrop')?.addEventListener('click', hideAdv);
 document.addEventListener('keydown', e => { if (e.key === 'Escape') hideAdv(); });
+
+// Normal mode user reminder: every 15 minutes, show the centered Advanced Mode prompt window
+const ADV_REMINDER_INTERVAL_MS = 15 * 60 * 1000;
+function triggerNormalModeAdvReminder() {
+  if (S.mode !== 'adv') {
+    needAdv('Upgrade to Advanced Mode');
+  }
+}
+setInterval(triggerNormalModeAdvReminder, ADV_REMINDER_INTERVAL_MS);
+window.__triggerAdvReminderForTest = triggerNormalModeAdvReminder;
 function setPro(v) {
   v = !GATED || !!v;
   try { localStorage.setItem('vp-pro', v ? '1' : '0'); } catch (e) {}
@@ -683,10 +704,22 @@ const hardName = h => h < 25 ? 'Very soft' : h < 45 ? 'Soft' : h < 65 ? 'Medium'
 
 function syncUI() {
   const k = calc(), body = getBody(), lens = getLens();
-  document.body.classList.toggle('adv', S.mode === 'adv');
+  const isAdv = S.mode === 'adv';
+  document.body.classList.toggle('adv', isAdv);
   document.body.classList.toggle('pro', PRO);
   document.body.classList.toggle('video', S.app === 'video');
-  $('modeNormal').setAttribute('aria-pressed', S.mode !== 'adv'); $('modeAdv').setAttribute('aria-pressed', S.mode === 'adv');
+  if ($('modeNormal')) {
+    $('modeNormal').setAttribute('aria-pressed', !isAdv);
+    $('modeNormal').hidden = isAdv;
+  }
+  if ($('modeAdv')) {
+    $('modeAdv').setAttribute('aria-pressed', isAdv);
+    $('modeAdv').setAttribute('aria-disabled', isAdv ? 'true' : 'false');
+    $('modeAdv').tabIndex = isAdv ? -1 : 0;
+  }
+  if ($('vpDrawerUserMode')) {
+    $('vpDrawerUserMode').textContent = isAdv ? 'Advanced' : 'Normal';
+  }
   $('appImage').setAttribute('aria-pressed', S.app !== 'video'); $('appVideo').setAttribute('aria-pressed', S.app === 'video');
   $('promptKind').textContent = promptLabel();
   const sa = signed(S.az);
@@ -1049,7 +1082,7 @@ function updateAutoDescription(force = false) {
     return;
   }
 
-  // Always use the whole-image Stage 1 Vision Pilot AI Reference Description (never mention Person 1, 2, Product 1, 2, Object 1, 2)
+  // Always use the whole-image Stage 1 VisionPilot AI Reference Description (never mention Person 1, 2, Product 1, 2, Object 1, 2)
   if (r.vpRefDesc) {
     const clean = stripNumberedSubjectLabels(r.vpRefDesc);
     S.subjDesc = clean;
@@ -1292,7 +1325,7 @@ async function detectRef(ref, opts = {}) {
     } else if (activeModel === 'visionpilot' && (!opts.skipRefStep || !ref.vpRefDesc) && window.VPLocalWriter?.writeReferenceDescription) {
       ref.status = 'busy';
       renderRefs();
-      setDescLoading(true, 'Vision Pilot AI analyzing reference image…');
+      setDescLoading(true, 'VisionPilot AI analyzing reference image…');
       try {
         const vpText = await ensureVpRefDesc(ref, {
           forceRegen: Boolean(opts.forceDesc && !opts.skipRefStep),
@@ -1317,7 +1350,7 @@ async function detectRef(ref, opts = {}) {
         }
         ref.status = 'ok';
       } catch (vpErr) {
-        if (!vpErr?.cancelled) console.warn('[Vision Pilot AI Stage 1] Error:', vpErr);
+        if (!vpErr?.cancelled) console.warn('[VisionPilot AI Stage 1] Error:', vpErr);
         ref.status = 'ok';
       }
     } else {
@@ -1409,7 +1442,7 @@ async function detectRef(ref, opts = {}) {
     } else if (activeModel === 'visionpilot' && (!opts.skipRefStep || !ref.vpRefDesc) && window.VPLocalWriter?.writeReferenceDescription) {
       ref.status = 'busy';
       renderRefs();
-      setDescLoading(true, 'Vision Pilot AI analyzing reference image…');
+      setDescLoading(true, 'VisionPilot AI analyzing reference image…');
       try {
         const vpText = await ensureVpRefDesc(ref, {
           forceRegen: Boolean(opts.forceDesc && !opts.skipRefStep),
@@ -1431,7 +1464,7 @@ async function detectRef(ref, opts = {}) {
           if ($('subjDesc')) $('subjDesc').value = vpText;
         }
       } catch (vpErr) {
-        if (!vpErr?.cancelled) console.warn('[Vision Pilot AI Stage 1] Error:', vpErr);
+        if (!vpErr?.cancelled) console.warn('[VisionPilot AI Stage 1] Error:', vpErr);
         ref.status = 'ok';
       }
     } else {
@@ -1465,7 +1498,7 @@ async function detectRef(ref, opts = {}) {
   else if (!S.descUserEdited && refs.every(x => x.status === 'fail')) { S.subjDesc = ''; setIfIdle($('subjDesc'), ''); }
   focusKey = ''; renderRefs(); hooks.refsChanged?.(); changed();
 
-  // If Multiple Mode is selected for this image, run Step 3 automatically (external AI or local Vision Pilot AI writer)
+  // If Multiple Mode is selected for this image, run Step 3 automatically (external AI or local VisionPilot AI writer)
   if (willRunFollowupMulti && myEpoch === aiModelSessionEpoch && (S.aiModel || 'visionpilot') === activeModel) {
     await runMultiModeAIStep(ref);
   }
@@ -2101,7 +2134,7 @@ function syncActiveSingleItem() {
     S.focus.multiMarkerText = cleanText;
   }
 }
-// STEP THREE: Multiple Mode — runs external AI (Claude / GPT / Gemini) or local Vision Pilot AI writer
+// STEP THREE: Multiple Mode — runs external AI (Claude / GPT / Gemini) or local VisionPilot AI writer
 // and fills each subject's hidden text box with a 30-to-40-word description.
 async function runMultiModeAIStep(ref) {
   const myEpoch = aiModelSessionEpoch;
@@ -2127,7 +2160,7 @@ async function runMultiModeAIStep(ref) {
     ref.status = 'busy';
     renderRefs();
     setFocusDetailLoading(true);
-    setDescLoading(true, 'Vision Pilot AI scoring subject boxes…');
+    setDescLoading(true, 'VisionPilot AI scoring subject boxes…');
     try {
       const res = await window.VPLocalWriter.writeMultipleModeDetails(ref.img, subs, {
         det: ref.det,
@@ -2181,7 +2214,7 @@ async function runMultiModeAIStep(ref) {
         $('focusMultiText').value = '';
       }
     } catch (vpErr) {
-      if (!vpErr?.cancelled) console.warn('[Vision Pilot AI Stage 3] Error:', vpErr);
+      if (!vpErr?.cancelled) console.warn('[VisionPilot AI Stage 3] Error:', vpErr);
       ref.status = 'ok';
     } finally {
       if (myEpoch === aiModelSessionEpoch) {
@@ -2419,7 +2452,7 @@ async function identifyAt(ref, x, y) {
     return;
   }
 
-  // Built-in Vision Pilot AI writer (Stage 2: Single Mode Focus Detail & Multiple Mode Marker Detail, 30 to 40 words)
+  // Built-in VisionPilot AI writer (Stage 2: Single Mode Focus Detail & Multiple Mode Marker Detail, 30 to 40 words)
   if (isMulti && !S.focus.showMark) {
     return;
   }
@@ -2439,7 +2472,7 @@ async function identifyAt(ref, x, y) {
     ref.status = 'busy';
     renderRefs();
     setFocusDetailLoading(true);
-    setDescLoading(true, 'Vision Pilot AI scoring focus region…');
+    setDescLoading(true, 'VisionPilot AI scoring focus region…');
     try {
       await ref.ready;
       if (myEpoch !== aiModelSessionEpoch || (S.aiModel || 'visionpilot') !== 'visionpilot' || ref.cancelled || !refs.includes(ref)) {
@@ -2489,7 +2522,7 @@ async function identifyAt(ref, x, y) {
         syncActiveSingleItem();
       }
     } catch (vpErr) {
-      if (!vpErr?.cancelled) console.warn('[Vision Pilot AI Stage 2] Error:', vpErr);
+      if (!vpErr?.cancelled) console.warn('[VisionPilot AI Stage 2] Error:', vpErr);
       ref.status = 'ok';
     } finally {
       if (myEpoch === aiModelSessionEpoch) {
@@ -3150,7 +3183,7 @@ $('modeNormal').onclick = () => {
   renderDock(); afterLayout();
   changed();
 };
-$('modeAdv').onclick = () => { if (!PRO) return needAdv(); S.mode = 'adv'; document.body.classList.add('adv'); renderDock(); afterLayout(); changed(); };
+$('modeAdv').onclick = () => { if (!PRO) return needAdv(); S.mode = 'adv'; document.body.classList.add('adv'); if ($('modeNormal')) $('modeNormal').hidden = true; if ($('modeAdv')) $('modeAdv').disabled = true; renderDock(); afterLayout(); changed(); };
 $('appImage').onclick = () => {
   if (S.app === 'image') return;
   if (S.app === 'video') {
@@ -4754,6 +4787,7 @@ function toggleHistoryDrawer(forceState) {
   drawer.setAttribute('aria-hidden', String(!nextOpen));
   if (moreBtn) moreBtn.setAttribute('aria-expanded', String(nextOpen));
 }
+window.toggleHistoryDrawer = toggleHistoryDrawer;
 
 $('vpMoreBtn')?.addEventListener('click', (e) => {
   e.stopPropagation();
@@ -4763,7 +4797,33 @@ $('vpOpenHistoryOpt')?.addEventListener('click', (e) => {
   e.stopPropagation();
   toggleHistoryDrawer(true);
 });
-$('vpHistoryCloseBtn')?.addEventListener('click', () => toggleHistoryDrawer(false));
+
+// Collapsible sections inside #vpHistoryDrawer (User bar, Settings bar, History / Library bar)
+function bindDrawerCollapsibleSection(secId, headId, bodyId, arrowSelector) {
+  const sec = $(secId);
+  const head = $(headId);
+  const body = $(bodyId);
+  if (!sec || !head || !body) return;
+  head.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const isMin = sec.classList.toggle('min');
+    body.hidden = isMin;
+    head.setAttribute('aria-expanded', String(!isMin));
+    const arr = arrowSelector ? head.querySelector(arrowSelector) : head.querySelector('.vpd-sec-arr');
+    if (arr) arr.textContent = isMin ? '▸' : '▾';
+  });
+}
+bindDrawerCollapsibleSection('vpDrawerUserSec', 'vpDrawerUserHead', 'vpDrawerUserBody', '#vpDrawerUserArrow');
+bindDrawerCollapsibleSection('vpDrawerSettingsSec', 'vpDrawerSettingsHead', 'vpDrawerSettingsBody', '.vpd-sec-arr');
+bindDrawerCollapsibleSection('vpDrawerHistSec', 'vpDrawerHistHead', 'vpHistoryList', '#vpHistoryMinArrow');
+
+// Clicking anywhere outside the open 3-dot drawer automatically slides it back in
+document.addEventListener('pointerdown', (e) => {
+  const drawer = $('vpHistoryDrawer');
+  if (!drawer || !drawer.classList.contains('open')) return;
+  if (drawer.contains(e.target) || e.target.closest('#vpMoreBtn') || e.target.closest('#vpHistDeleteModal')) return;
+  toggleHistoryDrawer(false);
+});
 
 /* ---------- PART 4: UNIFIED RESULT WINDOW (Generated Image / Upscaled Image / Upscaled Video / 3D Export) ---------- */
 let currentResultModalState = {
@@ -5261,6 +5321,11 @@ function closeGeneratedImageResultModal() {
   if (vidPlayer) {
     try { vidPlayer.pause(); } catch (_) {}
   }
+  // If an upscale was started from the Result/Download window (or is running), closing the window immediately stops it
+  if (imgUpscaleRunning) {
+    imgUpscaleAbort = true;
+  }
+  hooks.cancelVideoUpscale?.();
   if (modal) modal.hidden = true;
 }
 
@@ -6259,6 +6324,8 @@ async function startImageBoxUpscale(scaleFactor) {
   const loadLbl = $('imgUpscaleLoadingLbl');
   const progBar = $('imgUpscaleProgBar');
   const card = $('pImgUpscale');
+  const activeScaleBtn = scaleFactor === 4 ? $('imgUpscale4xBtn') : $('imgUpscale2xBtn');
+  const origScaleBtnHtml = activeScaleBtn ? activeScaleBtn.innerHTML : `${scaleFactor}x`;
 
   if (errBox) { errBox.hidden = true; errBox.textContent = ''; }
 
@@ -6276,6 +6343,10 @@ async function startImageBoxUpscale(scaleFactor) {
   imgUpscaleRunning = true;
   imgUpscaleAbort = false;
   card?.classList.add('upscale-busy');
+  if (activeScaleBtn) {
+    activeScaleBtn.classList.add('busy');
+    activeScaleBtn.innerHTML = `<span class="spin"></span> ${scaleFactor}x`;
+  }
   setImageGenBoxesLocked(true);
 
   if (loadBox) loadBox.hidden = false;
@@ -6340,6 +6411,10 @@ async function startImageBoxUpscale(scaleFactor) {
     imgUpscaleRunning = false;
     imgUpscaleAbort = false;
     card?.classList.remove('upscale-busy');
+    if (activeScaleBtn) {
+      activeScaleBtn.classList.remove('busy');
+      activeScaleBtn.innerHTML = origScaleBtnHtml;
+    }
     if (loadBox) loadBox.hidden = true;
     setImageGenBoxesLocked(false);
     syncImageUpscalerUI();
@@ -6377,7 +6452,10 @@ async function runGeneratedWindowUpscaleAndDownload(scaleFactor) {
   imgUpscaleAbort = false;
   if (btn2x) btn2x.disabled = true;
   if (btn4x) btn4x.disabled = true;
-  if (activeBtn) activeBtn.innerHTML = `<span class="spin"></span> Upscaling ${scaleFactor}x… 0%`;
+  if (activeBtn) {
+    activeBtn.classList.add('busy');
+    activeBtn.innerHTML = `<span class="spin"></span> Upscaling ${scaleFactor}x… 0%`;
+  }
 
   try {
     const imgEl = await new Promise((resolve, reject) => {
@@ -6393,8 +6471,12 @@ async function runGeneratedWindowUpscaleAndDownload(scaleFactor) {
       (pct) => {
         if (activeBtn) activeBtn.innerHTML = `<span class="spin"></span> Upscaling ${scaleFactor}x… ${pct}%`;
       },
-      () => imgUpscaleAbort
+      () => imgUpscaleAbort || Boolean($('genImgResultModal')?.hidden)
     );
+
+    if (imgUpscaleAbort || $('genImgResultModal')?.hidden) {
+      throw Object.assign(new Error('Upscale cancelled.'), { cancelled: true });
+    }
 
     if (!res || !res.dataUrl) {
       throw new Error('Upscaler failed to produce an upscaled image.');
@@ -6436,12 +6518,16 @@ async function runGeneratedWindowUpscaleAndDownload(scaleFactor) {
 
     toast(`${scaleLabel} upscaled image downloaded and saved to History / Library`);
   } catch (err) {
-    // Keep the Generated Image window open and show a clear error
-    const msg = err?.message || String(err);
-    toast(msg);
+    if (!err?.cancelled) {
+      const msg = err?.message || String(err);
+      toast(msg);
+    } else {
+      toast('Upscale cancelled');
+    }
   } finally {
     imgUpscaleRunning = false;
     imgUpscaleAbort = false;
+    if (activeBtn) activeBtn.classList.remove('busy');
     if (btn2x) {
       btn2x.disabled = false;
       btn2x.innerHTML = orig2xHtml;
@@ -6474,7 +6560,9 @@ function resetPrompt() { lastObj = null; showEmpty(); $('status').textContent = 
 /* ---------- layout: dockable tabbed panels in both modes ---------- */
 function place(parent, ids) { ids.forEach(id => { const el = $(id); if (el) parent.appendChild(el); }); }
 const panelName = id =>
-  id === 'pObjects'
+  id === 'pRef'
+    ? 'Input'
+    : id === 'pObjects'
     ? 'Object'
     : id === 'pImgUpscale' || id === 'pVidUpscale'
     ? 'Upscale'
@@ -6545,16 +6633,30 @@ function measureRefBoxHeight() {
 function applyUpscalerExactBoxSize() {
   const m = mode();
   const targetH = cachedRefBoxHeight[m] || (m === 'video' ? 370 : 395);
-  const upEl = $(m === 'video' ? 'pVidUpscale' : 'pImgUpscale');
-  if (upEl) {
-    upEl.style.height = targetH + 'px';
-    upEl.style.minHeight = targetH + 'px';
-    upEl.style.maxHeight = targetH + 'px';
-  }
+  ['pImgUpscale', 'pVidUpscale'].forEach(id => {
+    const upEl = $(id);
+    if (!upEl) return;
+    const isCollapsed = upEl.classList.contains('min') || Boolean(upEl.closest('.tgroup')?.classList.contains('collapsed'));
+    if (isCollapsed) {
+      upEl.style.height = '';
+      upEl.style.minHeight = '';
+      upEl.style.maxHeight = '';
+    } else if ((m === 'video' && id === 'pVidUpscale') || (m !== 'video' && id === 'pImgUpscale')) {
+      upEl.style.height = targetH + 'px';
+      upEl.style.minHeight = targetH + 'px';
+      upEl.style.maxHeight = targetH + 'px';
+    }
+  });
 }
 function renderDock() {
   measureRefBoxHeight();
   const m = mode(), d = dockOf(m), hold = $('vHold');
+  const refEl = $('pRef');
+  if (refEl) {
+    refEl.dataset.name = 'Input';
+    const rTagBtn = refEl.querySelector('.shead .tag');
+    if (rTagBtn) rTagBtn.textContent = 'Input';
+  }
   const objEl = $('pObjects');
   if (objEl) {
     objEl.dataset.name = 'Object';
@@ -6585,7 +6687,7 @@ function renderDock() {
         const t = document.createElement('button');
         t.type = 'button';
         t.className = 'tab' + (isUpscaleTab ? ' tab-upscale' : '') + (isLocked ? ' locked' : '');
-        t.draggable = !isCamLocked && !isUpscaleTab;
+        t.draggable = !isCamLocked;
         t.dataset.pid = id;
         t.setAttribute('role', 'tab'); t.setAttribute('aria-selected', id === g.active ? 'true' : 'false');
         t.innerHTML = esc(panelName(id));
@@ -6601,11 +6703,13 @@ function renderDock() {
       el.append(bar, $(g.active)); box.appendChild(el); box.appendChild(zone(gi + 1));
     });
   });
+  applyUpscalerExactBoxSize();
   requestAnimationFrame(() => {
     measureRefBoxHeight();
     applyUpscalerExactBoxSize();
     syncImageUpscalerUI();
     hooks.syncVideoUpscalerUI?.();
+    if (typeof alignBrandWithInputBox === 'function') alignBrandWithInputBox();
   });
 }
 function movePanel(pid, col, gi, asTab) {
@@ -6695,9 +6799,14 @@ function syncAIModelUI() {
   const info = window.VPAIBridge?.getModelInfo ? window.VPAIBridge.getModelInfo(activeId) : {name:'VisionPilot AI', color:'#e85d2b'};
   const extConn = window.VPAIBridge?.isExtensionConnected ? window.VPAIBridge.isExtensionConnected() : false;
   if ($('aiModelCur')) $('aiModelCur').textContent = info.name;
+  if ($('aiModelM')) {
+    $('aiModelM').setAttribute('data-active-model', activeId);
+    $('aiModelM').style.setProperty('--ai-c', info.color || '#e85d2b');
+  }
   if ($('aiModelBtn')) {
     $('aiModelBtn').setAttribute('data-active-model', activeId);
     $('aiModelBtn').style.setProperty('--active-ai-color', info.color || '#e85d2b');
+    $('aiModelBtn').style.setProperty('--ai-c', info.color || '#e85d2b');
   }
   document.querySelectorAll('#aiModelMenu .aimodel-opt').forEach(b => {
     b.setAttribute('aria-checked', String(b.dataset.aimodel === activeId));
@@ -6883,8 +6992,210 @@ $('aiExtConnectNowBtn')?.addEventListener('click', async () => {
   }
 });
 
+// Align ONLY the Logo (img.vp-logo) horizontally centered above the "Input" box (#pRef / left column),
+// while keeping the maker name & tagline right beside the logo at the same 14px gap.
+function alignBrandWithInputBox() {
+  const brand = document.querySelector('.nav .brand');
+  const logo = brand?.querySelector('.vp-logo');
+  const navIn = document.querySelector('.nav-in');
+  if (!brand || !logo || !navIn) return;
+  if (window.innerWidth <= 820) {
+    brand.style.marginLeft = '0px';
+    return;
+  }
+  const leftCol = $(S.app === 'video' ? 'vLeft' : 'iLeft');
+  const refBox = ($('pRef')?.offsetParent ? $('pRef') : null) || leftCol;
+  if (!refBox) return;
+  const refRect = refBox.getBoundingClientRect();
+  if (refRect.width < 40) return;
+
+  const targetCenterX = refRect.left + refRect.width / 2;
+  const brandRect = brand.getBoundingClientRect();
+  const logoRect = logo.getBoundingClientRect();
+  const curMarginLeft = parseFloat(brand.style.marginLeft || '0') || 0;
+  const currentLogoCenterX = logoRect.left + logoRect.width / 2;
+  const deltaX = targetCenterX - currentLogoCenterX;
+  const nextMarginLeft = Math.round(curMarginLeft + deltaX);
+  brand.style.marginLeft = nextMarginLeft + 'px';
+}
+window.alignBrandWithInputBox = alignBrandWithInputBox;
+
+// Button click visual feedback across UI (dark gray #2b2d31 + light gray text, loading icon, and box outline #b8bec8),
+// leaving "Key prompts" (#keys) and "Select Focus Subject" (#focusSubjList, #vfSubjList) untouched.
+document.addEventListener('pointerdown', (e) => {
+  if (e.target.closest('#keys, #focusSubjList, #vfSubjList')) return;
+  const btn = e.target.closest('.btn, #genImgDownloadBtn, .vph-del-btn, #vpHistDelCancelBtn, #vpHistDelConfirmBtn');
+  if (!btn || btn.disabled || btn.classList.contains('upscale-disabled')) return;
+  btn.classList.add('vp-btn-pressed');
+  const release = () => {
+    setTimeout(() => {
+      btn.classList.remove('vp-btn-pressed');
+    }, 240);
+    window.removeEventListener('pointerup', release);
+    window.removeEventListener('pointercancel', release);
+  };
+  window.addEventListener('pointerup', release, { once: true });
+  window.addEventListener('pointercancel', release, { once: true });
+});
+
+// Global Drag-and-Drop anywhere on the page:
+// - Dropping image(s) or a folder of images anywhere loads into Input (#pRef) and Image Upscale (#pImgUpscale) and turns on the Upscale box.
+// - Dropping video(s) or a folder of videos anywhere loads into Video Upscale (#pVidUpscale) and turns on the Video Upscale box (blocked for Normal mode users without Advanced mode).
+function isSupportedDropVideoFile(fileOrName) {
+  const name = typeof fileOrName === 'string' ? fileOrName : (fileOrName?.name || '');
+  const type = typeof fileOrName === 'object' && fileOrName ? (fileOrName.type || '') : '';
+  if (type && type.startsWith('video/')) return true;
+  return /\.(mp4|webm|mov|m4v|mkv|avi|ogv)$/i.test(name);
+}
+
+async function readDirectoryEntryRecursive(dirEntry) {
+  const out = [];
+  const reader = dirEntry.createReader();
+  const readBatch = () => new Promise((resolve) => {
+    reader.readEntries((entries) => resolve(entries || []), () => resolve([]));
+  });
+  let batch = await readBatch();
+  while (batch.length) {
+    for (const entry of batch) {
+      if (entry.isFile) {
+        const f = await new Promise((res) => entry.file((file) => res(file), () => res(null)));
+        if (f) out.push(f);
+      } else if (entry.isDirectory) {
+        const sub = await readDirectoryEntryRecursive(entry);
+        out.push(...sub);
+      }
+    }
+    batch = await readBatch();
+  }
+  return out;
+}
+
+async function extractDroppedFilesAndFolder(dataTransfer) {
+  const rawFiles = Array.from(dataTransfer?.files || []);
+  const items = Array.from(dataTransfer?.items || []);
+  const entries = items
+    .map((it) => (typeof it.webkitGetAsEntry === 'function' ? it.webkitGetAsEntry() : null))
+    .filter(Boolean);
+
+  const dirEntry = entries.find((en) => en.isDirectory);
+  if (dirEntry) {
+    const dirFiles = await readDirectoryEntryRecursive(dirEntry);
+    return {
+      files: dirFiles.length ? dirFiles : rawFiles,
+      isFolder: true,
+      folderName: dirEntry.name || 'Dropped_Folder'
+    };
+  }
+
+  let folderName = '';
+  let isFolder = false;
+  if (rawFiles.length && rawFiles[0].webkitRelativePath && /[\\/]/.test(rawFiles[0].webkitRelativePath)) {
+    folderName = rawFiles[0].webkitRelativePath.split(/[\\/]/)[0];
+    isFolder = true;
+  }
+  return {
+    files: rawFiles,
+    isFolder,
+    folderName: folderName || (rawFiles.length > 1 ? 'Dropped_Batch' : '')
+  };
+}
+
+async function handleGlobalPageDroppedPayload({ files = [], isFolder = false, folderName = '' } = {}) {
+  const all = Array.from(files || []).filter(Boolean);
+  if (!all.length) return;
+  const imgFiles = all.filter((f) => isSupportedBatchImageFile(f));
+  const vidFiles = all.filter((f) => isSupportedDropVideoFile(f));
+
+  // Video drop (single video, multiple videos, or folder of videos)
+  if (vidFiles.length > 0 && imgFiles.length === 0) {
+    if (!PRO) {
+      needAdv('Video Upscale');
+      toast('Video Upscale is only available in Advanced mode.');
+      return;
+    }
+    if (S.mode !== 'adv') {
+      if (!ensureAdvMode('Video Upscale')) return;
+    }
+    if (S.app !== 'video') {
+      hooks.enterVideo?.();
+    }
+    showPanel('pVidUpscale');
+    hooks.handleDroppedVideos?.({
+      files: vidFiles,
+      isFolder: Boolean(isFolder || vidFiles.length > 1),
+      folderName: folderName || 'Selected_Video_Folder'
+    });
+    return;
+  }
+
+  // Image drop (single image, multiple images, or folder of images)
+  if (imgFiles.length > 0) {
+    if (S.app === 'video') {
+      hooks.leaveVideo?.();
+      switchModeState('image');
+      applyLayout();
+    }
+    if (isFolder) {
+      // Load first image into Input (#pRef) and set folder batch in Image Upscale (#pImgUpscale)
+      addFiles([imgFiles[0]]);
+      selectBatchFolderFromFileList(imgFiles, folderName || 'Dropped_Folder');
+    } else {
+      batchFolderState = null;
+      addFiles(imgFiles);
+      if (refs.length) {
+        S.focus.img = refs.length - 1;
+      }
+    }
+    showPanel('pImgUpscale');
+    syncImageUpscalerUI();
+  }
+}
+window.handleGlobalPageDroppedPayload = handleGlobalPageDroppedPayload;
+
+let pageDragDepth = 0;
+window.addEventListener('dragenter', (e) => {
+  if (dragPid) return;
+  const types = Array.from(e.dataTransfer?.types || []);
+  if (!types.includes('Files')) return;
+  e.preventDefault();
+  pageDragDepth++;
+  document.body.classList.add('vp-page-dragover');
+});
+window.addEventListener('dragover', (e) => {
+  if (dragPid) return;
+  const types = Array.from(e.dataTransfer?.types || []);
+  if (!types.includes('Files')) return;
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  document.body.classList.add('vp-page-dragover');
+});
+window.addEventListener('dragleave', (e) => {
+  if (dragPid) return;
+  pageDragDepth = Math.max(0, pageDragDepth - 1);
+  if (pageDragDepth === 0 || e.relatedTarget === null) {
+    pageDragDepth = 0;
+    document.body.classList.remove('vp-page-dragover');
+  }
+});
+window.addEventListener('drop', async (e) => {
+  if (dragPid) return;
+  const hasFiles = (e.dataTransfer?.files && e.dataTransfer.files.length) ||
+    (e.dataTransfer?.items && e.dataTransfer.items.length);
+  pageDragDepth = 0;
+  document.body.classList.remove('vp-page-dragover');
+  if (!hasFiles) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const payload = await extractDroppedFilesAndFolder(e.dataTransfer);
+  await handleGlobalPageDroppedPayload(payload);
+}, true);
+
 // height of the top bar, so the video workspace can fill exactly the rest of the screen
-function measureNav() { const n = document.querySelector('.nav'); if (n) root.style.setProperty('--navh', Math.ceil(n.getBoundingClientRect().height + 10) + 'px'); }
+function measureNav() {
+  const n = document.querySelector('.nav');
+  if (n) root.style.setProperty('--navh', Math.ceil(n.getBoundingClientRect().height + 10) + 'px');
+  alignBrandWithInputBox();
+}
 // in both image and video mode the prompt box takes the room under Output so its bottom aligns with Top & Front views (or Timeline)
 function fitPrompt() {
   const pre = $('json'), bar = $('genImgModelBar'), card = $('pPrompt'), col = $(S.app === 'video' ? 'vRight' : 'iRight');
@@ -6902,8 +7213,8 @@ function fitPrompt() {
   pre.style.height = h;
   if (bar) bar.style.height = h;
 }
-window.addEventListener('resize', () => { measureNav(); fitPrompt(); });
-document.fonts?.ready.then(() => { measureNav(); fitPrompt(); });
+window.addEventListener('resize', () => { measureNav(); fitPrompt(); alignBrandWithInputBox(); });
+document.fonts?.ready.then(() => { measureNav(); fitPrompt(); alignBrandWithInputBox(); });
 function applyLayout() {
   measureNav();
   const video = S.app === 'video';
@@ -6923,6 +7234,7 @@ function applyLayout() {
   resetPrompt();
   syncUI();
   afterLayout();
+  requestAnimationFrame(alignBrandWithInputBox);
 }
 
 /* ---------- boot ---------- */

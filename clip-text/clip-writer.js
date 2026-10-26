@@ -1,8 +1,8 @@
-/* VisionPilot — Local Vision Pilot AI Writer
- * Connects the local Vision Pilot AI Text and Vision model folders
+/* VisionPilot — Local VisionPilot AI Writer
+ * Connects the local VisionPilot AI Text and Vision model folders
  * to the VisionPilot AI engine via a background Web Worker.
  *
- * Strictly follows the 3-Stage Vision Pilot AI Template Rules:
+ * Strictly follows the 3-Stage VisionPilot AI Template Rules:
  * - Stage 1: Reference Description (30 to 50 words)
  * - Stage 2: Single Mode Focus Detail (30 to 40 words, never over 40)
  * - Stage 3: Multiple Mode Subject Details (30 to 40 words per subject box)
@@ -37,7 +37,7 @@
   }
 
   function makeCancelError() {
-    const err = new Error('Vision Pilot AI operation cancelled due to AI model switch');
+    const err = new Error('VisionPilot AI operation cancelled due to AI model switch');
     err.cancelled = true;
     return err;
   }
@@ -78,11 +78,11 @@
         }
         if (msg.ok) p.resolve(msg.result);
         else if (msg.error === 'Cancelled') p.reject(makeCancelError());
-        else p.reject(new Error(msg.error || 'Vision Pilot AI Worker error'));
+        else p.reject(new Error(msg.error || 'VisionPilot AI Worker error'));
       }
     };
     worker.onerror = (err) => {
-      const errMsg = err?.message || 'Vision Pilot AI Worker failed to load';
+      const errMsg = err?.message || 'VisionPilot AI Worker failed to load';
       pendingReqs.forEach((p) => p.reject(new Error(errMsg)));
       pendingReqs.clear();
     };
@@ -290,7 +290,7 @@
       if (err?.cancelled || callEpoch !== writerEpoch) {
         throw makeCancelError();
       }
-      console.warn('[Vision Pilot AI] Worker unavailable, using local canvas patch scorer:', err?.message || err);
+      console.warn('[VisionPilot AI] Worker unavailable, using local canvas patch scorer:', err?.message || err);
       return fallbackScoreImagePatches(workerPatches);
     }
   }
@@ -483,7 +483,8 @@
     if (!imgEl) return '';
     const callEpoch = writerEpoch;
     const onProgress = opts.onProgress;
-    emitProgress('Vision Pilot AI analyzing reference image…', callEpoch);
+    emitProgress('VisionPilot AI analyzing reference image…', callEpoch);
+    await new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
 
     const fullCrop = cropToDataUrl(imgEl, { x: 0, y: 0, w: 1, h: 1 });
     const leftCrop = cropToDataUrl(imgEl, { x: 0.14, y: 0.30, w: 0.22, h: 0.52 });
@@ -643,7 +644,8 @@
     if (!imgEl) return '';
     const callEpoch = writerEpoch;
     const onProgress = opts.onProgress;
-    emitProgress('Vision Pilot AI scoring focus marker region…', callEpoch);
+    emitProgress('VisionPilot AI scoring focus marker region…', callEpoch);
+    await new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
 
     const nx = clamp(Number(x) || 0.5, 0, 1);
     const ny = clamp(Number(y) || 0.5, 0, 1);
@@ -1156,11 +1158,12 @@
     if (!imgEl) return { byKey: {}, byLabel: {}, refinedRawSubjects: null };
     const callEpoch = writerEpoch;
     const onProgress = opts.onProgress;
-    emitProgress('Vision Pilot AI scoring Multiple Mode subject regions…', callEpoch);
+    emitProgress('VisionPilot AI scoring Multiple Mode subject regions…', callEpoch);
+    await new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
 
     const rawSubs = Array.isArray(subjects) ? subjects.map(s => ({ ...s })) : [];
 
-    // Score full image + key regions so Vision Pilot AI can verify/refine subject boxes
+    // Score full image + key regions so VisionPilot AI can verify/refine subject boxes
     const fullCrop = cropToDataUrl(imgEl, { x: 0, y: 0, w: 1, h: 1 });
     const leftFoodCrop = cropToDataUrl(imgEl, { x: 0.08, y: 0.48, w: 0.50, h: 0.46 });
     const rightProdCrop = cropToDataUrl(imgEl, { x: 0.48, y: 0.02, w: 0.42, h: 0.84 });

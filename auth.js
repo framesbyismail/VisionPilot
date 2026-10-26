@@ -17,18 +17,32 @@ if (m) { token = m[1]; store.set(KEY, token); history.replaceState(null, '', loc
 
 const menu = $('authMenu'), wrap = $('authM'), btn = $('authBtn');
 const configured = !API.includes('YOUR-SUBDOMAIN');
-const status = () => me?.approved ? 'Advanced mode' : me?.requested ? 'Normal mode · request sent' : 'Normal mode';
+const status = () => (me?.approved || AC.S?.mode === 'adv') ? 'Advanced mode' : me?.requested ? 'Normal mode · request sent' : 'Normal mode';
 function render() {
-  btn.classList.toggle('pro', !!me?.approved);
-  btn.innerHTML = me ? `${me.picture ? `<img src="${escAttr(me.picture)}" alt="" referrerpolicy="no-referrer">` : ''}<span>${esc(me.name.split(' ')[0])}</span>` : '<span>Sign in</span>';
-  menu.innerHTML = me
-    ? `<div class="who"><strong>${esc(me.name)}</strong>${esc(me.email)}<br><span class="st${me.approved ? ' on' : ''}">${status()}</span></div>`
-      + (me.approved ? '' : '<button type="button" data-act="adv">Get Advanced mode</button>') + '<button type="button" data-act="out">Sign out</button>'
-    : `<button type="button" data-act="google">${ICON.google}Continue with Google</button><button type="button" data-act="github">${ICON.github}Continue with GitHub</button>`;
+  const isAdv = Boolean(AC.S?.mode === 'adv' || me?.approved);
+  if (btn) {
+    btn.classList.toggle('pro', !!me?.approved);
+    btn.innerHTML = me ? `${me.picture ? `<img src="${escAttr(me.picture)}" alt="" referrerpolicy="no-referrer">` : ''}<span>${esc(me.name.split(' ')[0])}</span>` : '<span>Sign in</span>';
+  }
+  if ($('vpDrawerUserName')) {
+    $('vpDrawerUserName').textContent = me ? (me.name || me.email || 'Account') : 'Sign in';
+  }
+  if ($('vpDrawerUserMode')) {
+    $('vpDrawerUserMode').textContent = AC.S?.mode === 'adv' ? 'Advanced' : 'Normal';
+  }
+  if (menu) {
+    menu.innerHTML = me
+      ? `<div class="who"><strong>${esc(me.name)}</strong>${esc(me.email)}<br><span class="st${isAdv ? ' on' : ''}">${status()}</span></div>`
+        + (isAdv ? '' : '<button type="button" data-act="adv">Get Advanced mode</button>') + '<button type="button" data-act="out">Sign out</button>'
+      : `<div class="who"><strong>Guest User</strong>Sign in to sync your account<br><span class="st${isAdv ? ' on' : ''}">${AC.S?.mode === 'adv' ? 'Advanced mode' : 'Normal mode'}</span></div>`
+        + `<button type="button" data-act="google">${ICON.google}Continue with Google</button><button type="button" data-act="github">${ICON.github}Continue with GitHub</button>`
+        + (AC.S?.mode === 'adv' ? '' : '<button type="button" data-act="adv">Get Advanced mode</button>');
+  }
 }
 // the buttons inside the "Advanced mode needed" panel
 function advRender() {
   const acts = $('advActs'), st = $('advState');
+  if (!acts || !st) return;
   if (!me) {
     acts.innerHTML = `<button type="button" data-adv="google">${ICON.google}Sign in with Google</button><button type="button" data-adv="github">${ICON.github}Sign in with GitHub</button>`;
     st.textContent = 'Sign in first, then send your request with one click.';
@@ -62,11 +76,11 @@ $('advActs').addEventListener('click', e => {
   else { store.set(AFTER, '1'); signIn(a); }   // open the panel again after the sign-in round trip
 });
 
-const open = v => { wrap.classList.toggle('open', v); btn.setAttribute('aria-expanded', v); };
-btn.addEventListener('click', () => open(!wrap.classList.contains('open')));
-document.addEventListener('pointerdown', e => { if (!wrap.contains(e.target)) open(false); });
+const open = v => { if (!wrap) return; wrap.classList.toggle('open', v); btn?.setAttribute('aria-expanded', v); };
+btn?.addEventListener('click', () => open(!wrap.classList.contains('open')));
+document.addEventListener('pointerdown', e => { if (wrap && !wrap.contains(e.target)) open(false); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') open(false); });
-menu.addEventListener('click', e => {
+menu?.addEventListener('click', e => {
   const a = e.target.closest('[data-act]')?.dataset.act; if (!a) return;
   open(false);
   if (a === 'out') { token = null; me = null; store.set(KEY, null); store.set('vp-pro', null); AC.setPro(false); render(); AC.toast('Signed out'); return; }
@@ -93,9 +107,20 @@ function poll() {
   clearInterval(pollT);
   if (me?.requested && !me.approved) pollT = setInterval(() => { if (document.visibilityState === 'visible') refresh(); }, 60000);
 }
-hooks.authInfo = () => ({signedIn:!!me, email:me?.email || '', requested:!!me?.requested});
-hooks.signIn = () => { open(true); btn.focus(); };
-hooks.advRender = advRender;
+hooks.authInfo = () => ({signedIn:!!me, user:me, email:me?.email || '', requested:!!me?.requested});
+hooks.signIn = () => {
+  if (typeof window.toggleHistoryDrawer === 'function') window.toggleHistoryDrawer(true);
+  const sec = $('vpDrawerUserSec'), body = $('vpDrawerUserBody');
+  if (sec) sec.classList.remove('min');
+  if (body) body.hidden = false;
+  open(true);
+};
+hooks.advRender = () => { render(); advRender(); };
+const prevAfterSync = hooks.afterSync;
+hooks.afterSync = () => {
+  prevAfterSync?.();
+  render();
+};
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && token) refresh(); });
 render(); advRender();
 refresh().then(() => {

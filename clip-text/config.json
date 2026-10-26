@@ -1,6 +1,6 @@
 {
   "_commit_hash": "e6a30b603a447e251fdaca1c3056b2a16cdfebeb",
-  "_name_or_path": "Vision Pilot AI",
+  "_name_or_path": "VisionPilot AI",
   "architectures": [
     "CLIPModel"
   ],

@@ -1,5 +1,5 @@
-/* VisionPilot — Local Vision Pilot AI Web Worker
- * Loads Transformers.js + local quantized Vision Pilot AI Text & Vision models strictly from local folders.
+/* VisionPilot — Local VisionPilot AI Web Worker
+ * Loads Transformers.js + local quantized VisionPilot AI Text & Vision models strictly from local folders.
  * Remote models are disabled. Runs in a Web Worker with WebGPU when available and WASM fallback.
  */
 import {
@@ -25,9 +25,8 @@ env.localModelPath = ROOT_DIR;
 
 if (env.backends && env.backends.onnx && env.backends.onnx.wasm) {
   env.backends.onnx.wasm.wasmPaths = WORKER_DIR;
-  env.backends.onnx.wasm.numThreads = self.crossOriginIsolated
-    ? Math.min(4, (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 2)
-    : 1;
+  // Single WASM thread inside Web Worker prevents CPU thread contention so main-thread UI and loading animations stay 60fps
+  env.backends.onnx.wasm.numThreads = 1;
 }
 
 // Intercept worker fetch to enforce local-only loading and report byte progress
@@ -39,7 +38,7 @@ self.fetch = async function localVisionPilotAIFetch(input, init) {
 
   const resolved = new URL(urlStr, ROOT_DIR);
   if (resolved.origin !== self.location.origin && resolved.protocol !== 'blob:' && resolved.protocol !== 'data:') {
-    throw new Error('External network access is disabled for local Vision Pilot AI models.');
+    throw new Error('External network access is disabled for local VisionPilot AI models.');
   }
 
   const res = await nativeFetch(resolved.href, init);
@@ -65,14 +64,14 @@ self.fetch = async function localVisionPilotAIFetch(input, init) {
           loaded: total,
           total,
           percent: 100,
-          message: `Loading Vision Pilot AI model (${fileName})… 100%`
+          message: `Loading VisionPilot AI model (${fileName})… 100%`
         });
         controller.close();
         return;
       }
       loaded += value.byteLength;
       const now = Date.now();
-      if (now - lastEmit > 120 || loaded === total) {
+      if (now - lastEmit > 160 || loaded === total) {
         lastEmit = now;
         const pct = Math.min(100, Math.round((loaded / total) * 100));
         self.postMessage({
@@ -82,7 +81,7 @@ self.fetch = async function localVisionPilotAIFetch(input, init) {
           loaded,
           total,
           percent: pct,
-          message: `Loading Vision Pilot AI model (${fileName})… ${pct}%`
+          message: `Loading VisionPilot AI model (${fileName})… ${pct}%`
         });
       }
       controller.enqueue(value);
@@ -96,7 +95,7 @@ self.fetch = async function localVisionPilotAIFetch(input, init) {
   });
 };
 
-/* ---------- Candidate Word / Phrase Banks for Vision Pilot AI Zero-Shot Scoring ---------- */
+/* ---------- Candidate Word / Phrase Banks for VisionPilot AI Zero-Shot Scoring ---------- */
 const PROMPT_BANKS = {
   subjects: [
     { id: 'multiple_phones', word: 'smartphones', noun: 'smartphones', category: 'phone', text: 'a product photo of multiple smartphones standing side by side' },
@@ -332,7 +331,7 @@ async function ensureModelsLoaded(textDir = DEFAULT_TEXT_DIR, imageDir = DEFAULT
       type: 'progress',
       stage: 'init',
       percent: 5,
-      message: 'Initializing Vision Pilot AI engine…'
+      message: 'Initializing VisionPilot AI engine…'
     });
 
     const cleanTextDir = String(textDir || DEFAULT_TEXT_DIR).replace(/^\/+|\/+$/g, '');
@@ -345,7 +344,7 @@ async function ensureModelsLoaded(textDir = DEFAULT_TEXT_DIR, imageDir = DEFAULT
       type: 'progress',
       stage: 'init',
       percent: 20,
-      message: 'Loading Vision Pilot AI text model…'
+      message: 'Loading VisionPilot AI text model…'
     });
 
     modelState.textModel = await VisionPilotAITextModel.from_pretrained(cleanTextDir, {
@@ -357,7 +356,7 @@ async function ensureModelsLoaded(textDir = DEFAULT_TEXT_DIR, imageDir = DEFAULT
       type: 'progress',
       stage: 'init',
       percent: 55,
-      message: 'Loading Vision Pilot AI vision model…'
+      message: 'Loading VisionPilot AI vision model…'
     });
 
     modelState.processor = await AutoProcessor.from_pretrained(cleanImageDir, {
@@ -373,7 +372,7 @@ async function ensureModelsLoaded(textDir = DEFAULT_TEXT_DIR, imageDir = DEFAULT
       type: 'progress',
       stage: 'init',
       percent: 82,
-      message: 'Caching Vision Pilot AI vocabulary embeddings…'
+      message: 'Caching VisionPilot AI vocabulary embeddings…'
     });
 
     // Precompute and cache normalized embeddings for every candidate phrase bank
@@ -382,6 +381,7 @@ async function ensureModelsLoaded(textDir = DEFAULT_TEXT_DIR, imageDir = DEFAULT
       const name = bankNames[i];
       const texts = PROMPT_BANKS[name].map(item => item.text);
       modelState.bankEmbeddings[name] = await encodeTexts(texts);
+      await new Promise(r => setTimeout(r, 0));
     }
 
     modelState.ready = true;
@@ -389,7 +389,7 @@ async function ensureModelsLoaded(textDir = DEFAULT_TEXT_DIR, imageDir = DEFAULT
       type: 'progress',
       stage: 'ready',
       percent: 100,
-      message: 'Vision Pilot AI ready'
+      message: 'VisionPilot AI ready'
     });
     return modelState;
   })();
@@ -446,9 +446,10 @@ self.onmessage = async (e) => {
             type: 'progress',
             stage: 'scoring',
             percent: Math.round(((i + 1) / patches.length) * 100),
-            message: payload.progressLabel || `Vision Pilot AI scoring image region ${i + 1} of ${patches.length}…`
+            message: payload.progressLabel || `VisionPilot AI scoring image region ${i + 1} of ${patches.length}…`
           });
         }
+        await new Promise(r => setTimeout(r, 0));
         const imgVec = await encodeRgbaPatch(p);
         const bankScores = {};
         for (const bankName of Object.keys(PROMPT_BANKS)) {
@@ -483,7 +484,7 @@ self.onmessage = async (e) => {
       return;
     }
 
-    throw new Error('Unknown Vision Pilot AI worker action: ' + action);
+    throw new Error('Unknown VisionPilot AI worker action: ' + action);
   } catch (err) {
     self.postMessage({
       id,
