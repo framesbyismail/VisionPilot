@@ -324,7 +324,10 @@ try {
       S.camDefV2 = true;
     }
     if (!['visionpilot', 'claude', 'gpt', 'gemini'].includes(S.aiModel)) S.aiModel = 'visionpilot';
-    S.focus = {...DEF_FOCUS(), ...(saved.focus || {})};
+    // Reference images live only in memory; clear stale per-image descriptions from previous sessions on fresh load
+    S.subjDesc = '';
+    S.descUserEdited = false;
+    S.focus = {...DEF_FOCUS(), ...(saved.focus || {}), desc:'', multiEdits:{}, multiMarkerText:'', subjectItems:[], activeSubjs:[], activeSubj:'', target:'', singleActive:false};
     if (S.focus.mode === 'multi') S.focus.showMark = false;
     else if (saved.focus?.showMark === undefined) S.focus.showMark = true;
     S.focus.multiEditOpen = true;
@@ -961,6 +964,39 @@ let lastAIError = '';
 let aiBusyMsg = '';
 let aiConnectedOk = false;
 
+function stripNumberedSubjectLabels(text) {
+  return String(text || '')
+    .replace(/\b(Person|Product|Object|Subject|Vehicle|Animal)\s*\d+\s*:\s*/gi, 'A $1 ')
+    .replace(/\b(Person|Product|Object|Subject|Vehicle|Animal)\s*\d+\b/gi, '$1')
+    .replace(/\s*\[(Human|Product\/Object|Animal|Vehicle)\]/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+async function ensureClipRefDesc(ref, opts = {}) {
+  if (!ref || ref.cancelled || !refs.includes(ref) || !window.VPClipWriter?.writeReferenceDescription) return '';
+  if (ref.clipRefDesc && !opts.forceRegen) return ref.clipRefDesc;
+  if (!ref._clipRefPromise || opts.forceRegen) {
+    ref._clipRefPromise = (async () => {
+      try {
+        await ref.ready;
+      } catch (e) {}
+      if (ref.cancelled || !refs.includes(ref)) return '';
+      const raw = await window.VPClipWriter.writeReferenceDescription(ref.img, {
+        onProgress: opts.onProgress
+      });
+      const clean = stripNumberedSubjectLabels(raw);
+      if (!ref.cancelled && refs.includes(ref) && clean) {
+        ref.clipRefDesc = clean;
+      }
+      return clean;
+    })().finally(() => {
+      ref._clipRefPromise = null;
+    });
+  }
+  return ref._clipRefPromise;
+}
+
 function updateAutoDescription(force = false) {
   if (S.descUserEdited && !force) return;
   const activeModel = S.aiModel || 'visionpilot';
@@ -979,56 +1015,38 @@ function updateAutoDescription(force = false) {
     return;
   }
 
-  // When VisionPilot AI local CLIP writer has generated the Stage 1 Reference Description (30-50 words), keep it
-  if (r?.clipRefDesc) {
-    S.subjDesc = r.clipRefDesc;
-    setIfIdle($('subjDesc'), S.subjDesc);
-    return;
-  }
-
-  // In Single Mode, built-in image detection is OFF — only run built-in scene description when Multiple Mode is ON
-  if (S.focus.mode !== 'multi') {
-    if (!refs.length && force) {
-      S.subjDesc = '';
-      setIfIdle($('subjDesc'), '');
-    }
-    return;
-  }
-
-  const isMulti = S.focus.on && S.focus.mode === 'multi';
-  const selectedKey = isMulti ? (S.focus.multiSel || '') : '';
-  const pointedInfo = (S.focus.on && S.focus.showMark && S.focus.note && S.focus.note !== 'background area')
-    ? {
-        index: isMulti ? currentImgSubjects().findIndex(s => s.key === selectedKey) : 0,
-        part: isMulti ? (S.focus.multiPart || S.focus.note) : S.focus.note,
-        where: isMulti ? (S.focus.multiWhere || S.focus.where) : S.focus.where,
-        whereOnSubject: isMulti ? (S.focus.multiWhere || S.focus.where) : S.focus.where,
-        colorName: S.focus.multiPartColor || ''
-      }
-    : null;
-  if (!refs.length) {
+  if (!refs.length || !r) {
     if (force) {
       S.subjDesc = '';
       setIfIdle($('subjDesc'), '');
     }
     return;
   }
+
+  // Always use the whole-image Stage 1 CLIP Reference Description (never mention Person 1, 2, Product 1, 2, Object 1, 2)
+  if (r.clipRefDesc) {
+    const clean = stripNumberedSubjectLabels(r.clipRefDesc);
+    S.subjDesc = clean;
+    setIfIdle($('subjDesc'), S.subjDesc);
+    return;
+  }
+
+  if (window.VPClipWriter?.writeReferenceDescription) {
+    ensureClipRefDesc(r).then((clipText) => {
+      if (clipText && (!S.descUserEdited || force) && (refs[S.focus.img] === r || refs[0] === r)) {
+        S.subjDesc = clipText;
+        setIfIdle($('subjDesc'), S.subjDesc);
+      }
+    }).catch(() => {});
+    return;
+  }
+
   if (r?.det && window.VPDetect?.buildSceneParagraph) {
-    const para = window.VPDetect.buildSceneParagraph(r.det, {isMulti, selectedKey, pointedInfo, customSubjects:currentImgSubjects()});
+    const para = stripNumberedSubjectLabels(window.VPDetect.buildSceneParagraph(r.det, { customSubjects: currentImgSubjects() }));
     if (para) {
       S.subjDesc = para;
       setIfIdle($('subjDesc'), S.subjDesc);
-      return;
     }
-  }
-  const all = allSubjects();
-  const withDesc = all.filter(s => s.desc);
-  if (withDesc.length) {
-    S.subjDesc = all.length > 1 ? withDesc.map(s => `${s.label}: ${s.desc}.`).join(' ') : (all[0].detail || all[0].desc || '');
-    setIfIdle($('subjDesc'), S.subjDesc);
-  } else if (refs.every(x => x.status === 'fail')) {
-    S.subjDesc = '';
-    setIfIdle($('subjDesc'), '');
   }
 }
 function applySummary(forceDesc = false) {
@@ -1240,12 +1258,13 @@ async function detectRef(ref, opts = {}) {
         lastAIError = errMsg;
         toast(`${info.name} Error: ${errMsg}`);
       }
-    } else if (activeModel === 'visionpilot' && !opts.skipRefStep && window.VPClipWriter?.writeReferenceDescription) {
+    } else if (activeModel === 'visionpilot' && (!opts.skipRefStep || !ref.clipRefDesc) && window.VPClipWriter?.writeReferenceDescription) {
       ref.status = 'busy';
       renderRefs();
       setDescLoading(true, 'VisionPilot AI analyzing reference image with local CLIP…');
       try {
-        const clipText = await window.VPClipWriter.writeReferenceDescription(ref.img, {
+        const clipText = await ensureClipRefDesc(ref, {
+          forceRegen: Boolean(opts.forceDesc && !opts.skipRefStep),
           onProgress: (msg) => setDescLoading(true, msg)
         });
         if (ref.cancelled || !refs.includes(ref)) {
@@ -1253,8 +1272,7 @@ async function detectRef(ref, opts = {}) {
           if (typeof syncFocusLockState === 'function') syncFocusLockState();
           return;
         }
-        ref.clipRefDesc = clipText;
-        if (!S.descUserEdited || opts.forceDesc) {
+        if (clipText && (!S.descUserEdited || opts.forceDesc)) {
           S.subjDesc = clipText;
           if ($('subjDesc')) $('subjDesc').value = clipText;
         }
@@ -1348,12 +1366,13 @@ async function detectRef(ref, opts = {}) {
         lastAIError = errMsg;
         toast(`${info.name} Error: ${errMsg}`);
       }
-    } else if (activeModel === 'visionpilot' && !opts.skipRefStep && !ref.clipRefDesc && window.VPClipWriter?.writeReferenceDescription) {
+    } else if (activeModel === 'visionpilot' && (!opts.skipRefStep || !ref.clipRefDesc) && window.VPClipWriter?.writeReferenceDescription) {
       ref.status = 'busy';
       renderRefs();
       setDescLoading(true, 'VisionPilot AI analyzing reference image with local CLIP…');
       try {
-        const clipText = await window.VPClipWriter.writeReferenceDescription(ref.img, {
+        const clipText = await ensureClipRefDesc(ref, {
+          forceRegen: Boolean(opts.forceDesc && !opts.skipRefStep),
           onProgress: (msg) => setDescLoading(true, msg)
         });
         if (ref.cancelled || !refs.includes(ref)) {
@@ -1362,8 +1381,7 @@ async function detectRef(ref, opts = {}) {
           return;
         }
         ref.status = 'ok';
-        ref.clipRefDesc = clipText;
-        if (!S.descUserEdited || opts.forceDesc) {
+        if (clipText && (!S.descUserEdited || opts.forceDesc)) {
           S.subjDesc = clipText;
           if ($('subjDesc')) $('subjDesc').value = clipText;
         }
@@ -1440,11 +1458,8 @@ async function detectRefAI(ref, opts = {}) {
   focusKey = ''; renderRefs(); hooks.refsChanged?.(); changed();
 }
 function renderRefs() {
-  const subs = S.focus.mode === 'multi' ? allSubjects() : [];
   $('refGrid').innerHTML = refs.map((r, i) => {
-    const labs = (S.focus.mode === 'multi' && r.subjects && r.subjects.length)
-      ? subs.filter(s => s.img === i).map(s => s.label).join(', ')
-      : `Image ${i + 1}`;
+    const labs = `Image ${i + 1}`;
     return `<div class="reftile"><img src="${r.src}" alt="Reference ${i + 1}"><span class="num">${i + 1}</span>`
       + `<button type="button" class="x" data-rm="${r.id}" aria-label="Remove image ${i + 1}" title="Remove image"><svg viewBox="0 0 12 12"><path d="m2 2 8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>`
       + (r.status === 'busy' ? '<span class="busy"><span class="spin"></span></span>' : '')
@@ -2963,9 +2978,15 @@ $('resetCustom').addEventListener('click', async () => {
     r.aiSingleFocusDesc = '';
     r.aiMultiEdits = {};
     r.aiMultiMarkerDesc = '';
+    r.clipRefDesc = '';
+    r.clipSingleFocusDesc = '';
+    r.clipMultiEdits = {};
+    r.clipMultiMarkerDesc = '';
+    r._clipRefPromise = null;
     if (Array.isArray(r.subjects)) {
       r.subjects.forEach(s => {
         delete s.aiDesc;
+        delete s.clipDesc;
       });
     }
   });

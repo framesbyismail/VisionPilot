@@ -879,8 +879,8 @@ function describe(o, px, faces, idx, counts) {
     const hairNote = parts.hair ? ` with ${parts.hair.name} hair` : '';
     const skinNote = parts.skin ? `, natural ${parts.skin.name} skin tone` : '';
     s.desc = `${pa.framing} of a person${hairNote}${skinNote} ${pos.horiz} (${pos.depth}), ${pa.facing}${wear.length ? ', wearing ' + joinList(wear) : ''}`;
-    s.detail = `${label} (${category}): ${s.desc}. Dominant outfit color: ${s.colorName} (${s.color}).`;
-    s.richSentence = `${label} is captured in a ${pa.framing}${hairNote}${skinNote}, positioned ${pos.horiz} in the ${pos.depth.split(' (')[0]}, ${pa.facing}${wear.length ? ', dressed in ' + joinList(wear) : ''} with lifelike skin pores, hair strands, and crisp garment textures`;
+    s.detail = `A person in a ${s.desc}. Dominant outfit color: ${s.colorName}.`;
+    s.richSentence = `A person captured in a ${pa.framing}${hairNote}${skinNote}, positioned ${pos.horiz} in the ${pos.depth.split(' (')[0]}, ${pa.facing}${wear.length ? ', dressed in ' + joinList(wear) : ''} with lifelike skin pores, hair strands, and crisp garment textures`;
   } else if (t === 'animal') {
     const inner = sub(b, .14, .16, .72, .68);
     const c = dominant(px, inner, {satWeight:2.0, centerWeight:true});
@@ -899,8 +899,8 @@ function describe(o, px, faces, idx, counts) {
     const posture = ar > 1.32 ? 'walking or outstretched posture' : ar < .88 ? 'attentive seated posture' : 'alert standing posture';
     s.pose = posture;
     s.desc = `${s.colorName} ${animalName}${secNote} in an ${posture} ${pos.horiz} (${pos.depth}), ${oa.angleText}`;
-    s.detail = `${label} (${category}): ${s.desc}. Primary coat color: ${s.colorName} (${s.color}), ${s.condition}.`;
-    s.richSentence = `${label} is a ${s.colorName} ${animalName}${secNote} in an ${posture}, positioned ${pos.horiz} in the ${pos.depth.split(' (')[0]} (${oa.angleText}) with finely resolved fur strands, expressive eyes, alert ears, and natural whiskers`;
+    s.detail = `A ${s.desc}. Primary coat color: ${s.colorName}, ${s.condition}.`;
+    s.richSentence = `A ${s.colorName} ${animalName}${secNote} in an ${posture}, positioned ${pos.horiz} in the ${pos.depth.split(' (')[0]} (${oa.angleText}) with finely resolved fur strands, expressive eyes, alert ears, and natural whiskers`;
   } else {
     const inner = (t === 'car' || t === 'vehicle') ? sub(b, .12, .18, .76, .54) : sub(b, .12, .12, .76, .76);
     const c = dominant(px, inner, {satWeight:2.8, centerWeight:true});
@@ -917,13 +917,13 @@ function describe(o, px, faces, idx, counts) {
     const itemName = subtype || NOUN[t] || 'object';
     const secNote = s.secColorName ? ` with ${s.secColorName} trim and accents` : '';
     s.desc = `${s.colorName} ${itemName}${secNote} ${pos.horiz} (${pos.depth}), ${oa.angleText}, ${oa.finish}`;
-    s.detail = `${label} (${category}): ${s.desc}. Primary color: ${s.colorName} (${s.color}), ${oa.condition}.`;
+    s.detail = `A ${s.desc}. Primary color: ${s.colorName}, ${oa.condition}.`;
     if (t === 'car' || t === 'vehicle') {
-      s.richSentence = `${label} is a ${s.colorName} ${itemName}${secNote} featuring a ${oa.finish} and ${oa.condition}, positioned ${pos.horiz} in the ${pos.depth.split(' (')[0]} in a ${oa.angleText} with clearly defined bodywork, wheels, glass cabin, and trim details`;
+      s.richSentence = `A ${s.colorName} ${itemName}${secNote} featuring a ${oa.finish} and ${oa.condition}, positioned ${pos.horiz} in the ${pos.depth.split(' (')[0]} in a ${oa.angleText} with clearly defined bodywork, wheels, glass cabin, and trim details`;
     } else if (t === 'phone') {
-      s.richSentence = `${label} is a sleek ${s.colorName} ${itemName}${secNote} with a ${oa.finish} and precision-machined edges, placed ${pos.horiz} in the ${pos.depth.split(' (')[0]} in an ${oa.angleText}`;
+      s.richSentence = `A sleek ${s.colorName} ${itemName}${secNote} with a ${oa.finish} and precision-machined edges, placed ${pos.horiz} in the ${pos.depth.split(' (')[0]} in an ${oa.angleText}`;
     } else {
-      s.richSentence = `${label} is a ${s.colorName} ${itemName}${secNote} with a ${oa.finish} (${oa.condition}), positioned ${pos.horiz} in the ${pos.depth.split(' (')[0]} and seen from a ${oa.angleText}`;
+      s.richSentence = `A ${s.colorName} ${itemName}${secNote} with a ${oa.finish} (${oa.condition}), positioned ${pos.horiz} in the ${pos.depth.split(' (')[0]} and seen from a ${oa.angleText}`;
     }
   }
   return s;
@@ -1049,53 +1049,42 @@ function analyzeSceneContext(px, subjects, mnScene) {
   return {bgSentence, lightSentence, camSentence, shotScale, dofDesc, styleGenre, topName, floorName};
 }
 
-// Builds a rich 5-8 sentence paragraph for #subjDesc (Part 7), with Multiple Mode main-subject emphasis when selected
+// Builds a natural whole-image scene paragraph for #subjDesc without numbered subject labels (never mentions Person 1, Product 1, Object 1, etc.)
 function buildSceneParagraph(det, opts = {}) {
   if (!det || !Array.isArray(det.subjects) || !det.subjects.length) return '';
   const subs = opts.customSubjects || det.subjects;
-  const isMulti = !!opts.isMulti;
-  const selectedKey = opts.selectedKey || '';
-  const pointed = opts.pointedInfo || null;
   const meta = det.sceneMeta || analyzeSceneContext(det._px || {w:16, h:16, data:new Uint8ClampedArray(1024)}, subs, []);
 
-  const sentences = [];
+  const cleanSubjPhrase = (s) => {
+    const noun = (s.subtype || s.cls || (s.type === 'person' ? 'person' : s.type === 'phone' ? 'smartphone' : s.type === 'car' ? 'car' : s.type === 'animal' ? 'animal' : 'item')).toLowerCase();
+    const col = s.colorName ? `${s.colorName} ` : '';
+    const pos = s.horiz || s.position || 'in the frame';
+    const act = s.pose ? ` ${s.pose}` : (s.finish ? ` with a ${s.finish}` : '');
+    return `a ${col}${noun}${act} ${pos}`.replace(/\s+/g, ' ').trim();
+  };
 
-  if (subs.length === 1 && !isMulti) {
-    const s = subs[0];
-    sentences.push(`Photorealistic ${meta.styleGenre} scene featuring a single main subject (${s.label}, ${s.category}) in ${meta.shotScale}.`);
-    sentences.push(`${s.richSentence || `${s.label}: ${s.desc}`}, rendered with a dominant ${s.colorName || 'natural'} color palette and crisp surface detail.`);
-    if (pointed && pointed.part && pointed.index >= 0) {
-      sentences.push(`Focus marker is pointing at ${s.label}'s ${pointed.part} (${pointed.whereOnSubject || pointed.where}${pointed.colorName ? `, ${pointed.colorName} tone` : ''}), locking razor-sharp focal detail onto that exact part.`);
-    }
+  const people = subs.filter(s => s.type === 'person');
+  const items = subs.filter(s => s.type !== 'person');
+
+  let mainSentence = '';
+  if (people.length && items.length) {
+    const pDesc = people.slice(0, 3).map(cleanSubjPhrase).join(', ');
+    const iDesc = items.slice(0, 3).map(cleanSubjPhrase).join(' and ');
+    mainSentence = `The scene shows ${pDesc}, accompanied by ${iDesc} arranged in the foreground.`;
+  } else if (people.length > 1) {
+    mainSentence = `The scene shows ${people.slice(0, 3).map(cleanSubjPhrase).join(' alongside ')} captured together in a natural setting.`;
+  } else if (subs.length === 1) {
+    mainSentence = `The image features ${cleanSubjPhrase(subs[0])} captured in ${meta.shotScale}.`;
   } else {
-    const selIdx = selectedKey ? subs.findIndex((s, i) => (s.key || `img0_s${i}`) === selectedKey || s.label === selectedKey) : -1;
-    const selSub = selIdx >= 0 ? subs[selIdx] : null;
-    const countSummary = `${subs.length} detected subject${subs.length > 1 ? 's' : ''} (${subs.map(s => `${s.label} [${s.category}]`).join(', ')})`;
-
-    if (selSub) {
-      sentences.push(`Photorealistic multi-subject scene containing ${countSummary}, with primary compositional emphasis locked on ${selSub.label} as the central hero subject of the shot.`);
-      sentences.push(`MAIN FOCUS SUBJECT — ${selSub.richSentence || `${selSub.label}: ${selSub.desc}`}, rendered in a dominant ${selSub.colorName || 'natural'} palette, placed centrally in sharpest focus and hero lighting.`);
-      if (pointed && pointed.part && (pointed.index === selIdx || (pointed.subject && pointed.subject.label === selSub.label))) {
-        sentences.push(`FOCUS MARKER TARGET — The green focus cursor points directly at ${selSub.label}'s ${pointed.part} (${pointed.whereOnSubject || pointed.where}${pointed.colorName ? `, ${pointed.colorName} tone` : ''}), making that specific part the tack-sharp focal anchor.`);
-      }
-      const others = subs.filter((_, i) => i !== selIdx);
-      if (others.length) {
-        const otherDescs = others.map(o => `${o.richSentence || `${o.label}: ${o.desc}`} (surrounding secondary subject kept around the main focus subject)`).join('; ');
-        sentences.push(`Surrounding subjects in the scene: ${otherDescs}.`);
-      }
-    } else {
-      sentences.push(`Photorealistic scene featuring ${countSummary} arranged in ${meta.shotScale}.`);
-      subs.forEach(s => {
-        sentences.push(`${s.richSentence || `${s.label}: ${s.desc}`} (dominant color: ${s.colorName || 'natural'}).`);
-      });
-    }
+    mainSentence = `The composition features ${subs.slice(0, 3).map(cleanSubjPhrase).join(', ')} arranged across the frame.`;
   }
 
-  sentences.push(meta.bgSentence);
-  sentences.push(meta.lightSentence);
-  sentences.push(meta.camSentence);
-
-  return sentences.filter(Boolean).join(' ');
+  const raw = `${mainSentence} ${meta.bgSentence || ''}`.replace(/\s+/g, ' ').trim();
+  return raw
+    .replace(/\b(Person|Product|Object|Subject|Vehicle|Animal)\s*\d+\b/gi, '$1')
+    .replace(/\s*\[(Human|Product\/Object|Animal|Vehicle)\]/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 // Re-evaluate a detection result when the user manually changes #subjType so Focus Mode & descriptions reload immediately
