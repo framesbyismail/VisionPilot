@@ -935,15 +935,24 @@ function queueSave() {
   if (saveTimer) return;
   saveTimer = setTimeout(() => {
     saveTimer = 0;
-    save();
-  }, 140);
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(() => save(), { timeout: 600 });
+    } else {
+      save();
+    }
+  }, 180);
 }
-window.addEventListener('beforeunload', () => {
+const flushSaveNow = () => {
   if (saveTimer) {
     clearTimeout(saveTimer);
     saveTimer = 0;
-    save();
   }
+  save();
+};
+window.addEventListener('beforeunload', flushSaveNow);
+window.addEventListener('pagehide', flushSaveNow);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushSaveNow();
 });
 function changed() {
   enforce();
@@ -7319,7 +7328,7 @@ window.AC = {S, DEF, refs, $, rad, deg, clamp, norm360, signed, rnd, cap, joinLi
   calc, getBody, getLens, setAz, setEl, setDist, setFocal, distForShot, allSubjects, currentThumb, sampleImg, onLights,
   changed, applyQuiet, syncUI, drawAll, readTokens, fit, drawCam, drawArrow, drawThumb, toast, enhance, refreshDD,
   common, angleParts, azInfo, elInfo, lensCharFor, lightPhrase, rigText, cameraJSON, lightingJSON, getSetup, kelvinRGB, apStr, hardName, buildImagePrompt, ensureBackgroundImagePrompt,
-  applyLayout, switchModeState, renderRefs, renderImgPresets, loadUserImgPresets, saveUserImgPresets, resetPrompt, save, views, DMIN, DMAX, showPanel, rigTarget, setIfIdle, undo, redo, histUI, flushSnapshot,
+  applyLayout, switchModeState, renderRefs, renderImgPresets, loadUserImgPresets, saveUserImgPresets, resetPrompt, save:queueSave, saveNow:save, views, DMIN, DMAX, showPanel, rigTarget, setIfIdle, undo, redo, histUI, flushSnapshot,
   addFiles, identifyAt, selectMultiSubject, selectAIModel, syncFocus, placeMark, placeBoxes,
   isPro:() => PRO, setPro, needAdv, ensureAdvMode, hideAdv, GATED};
 window.ensureBackgroundImagePrompt = ensureBackgroundImagePrompt;

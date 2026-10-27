@@ -57,12 +57,15 @@ const easeClass = e => e === 'linear' ? '' : e === 'hold' ? 'hold' : 'ease';
 const MODELS = {
   person:'Person',
   car:'Car',
+  bike:'Bike',
   phone:'Phone',
   cat:'Cat',
   animal:'Animal (Dog)',
   tree:'Tree',
   table:'Table',
   chair:'Chair',
+  stairs:'Stairs',
+  ramp:'Jump Ramp',
   backdrop:'Backdrop',
   box:'Box (Cube)',
   sphere:'Sphere',
@@ -84,6 +87,8 @@ const PERSON_POSES = {
   walking_still:{name:'Walking', prompt:'walking in a natural articulated stride'},
   running_still:{name:'Running', prompt:'running in an athletic sprint'},
   sitting_chair:{name:'Sitting on Chair', prompt:'seated comfortably on a chair with knees bent'},
+  riding_bike:{name:'Riding Bike (Rider)', prompt:'seated on the bike holding the handlebars in a natural riding posture'},
+  riding_bike_back:{name:'Riding Bike (Passenger)', prompt:'seated on the rear passenger seat of the bike behind the rider'},
   sitting_ground:{name:'Sitting on Ground', prompt:'sitting low on the ground'},
   crouch_prep:{name:'Jump Preparation Crouch', prompt:'crouched down with knees bent and arms pulled back preparing to jump'},
   jumping_pose:{name:'Mid-Air Jump Pose', prompt:'leaping in mid-air with arms raised and legs tucked'},
@@ -116,14 +121,19 @@ const CAR_POSES = {
   standing:{name:'Parked (Default)', prompt:'parked level on all four wheels'},
   jumping:{name:'Jump (Airborne)', prompt:'airborne in a stunt jump with the nose raised, wheels hanging loose and suspension fully extended'}
 };
+const BIKE_POSES = {
+  standing:{name:'Parked (Default)', prompt:'stationary upright on two wheels'},
+  jumping:{name:'Jump (Airborne)', prompt:'airborne in a stunt jump with the front wheel raised'}
+};
 const isRiggedChar = m => m === 'person' || m === 'cat' || m === 'animal';
-const hasPoseModel = m => isRiggedChar(m) || m === 'car';
-const poseMapFor = m => m === 'person' ? PERSON_POSES : m === 'cat' ? CAT_POSES : m === 'animal' ? ANIMAL_POSES : m === 'car' ? CAR_POSES : null;
+const isVehicleModel = m => m === 'car' || m === 'bike';
+const hasPoseModel = m => isRiggedChar(m) || isVehicleModel(m);
+const poseMapFor = m => m === 'person' ? PERSON_POSES : m === 'cat' ? CAT_POSES : m === 'animal' ? ANIMAL_POSES : m === 'car' ? CAR_POSES : m === 'bike' ? BIKE_POSES : null;
 // jump poses lift the object off the ground (so choosing them from the dropdown / right-click menu looks right immediately)
 const JUMP_POSES = new Set(['jumping_pose', 'jumping', 'leaping']);
 function applyPoseSideEffects(o) {
   if (!o) return;
-  if (JUMP_POSES.has(o.pose) && (o.y || 0) < .05) o.y = rnd(Math.max(.28, (o.h || 1) * (o.model === 'person' ? .28 : o.model === 'car' ? .55 : .7)), 2);
+  if (JUMP_POSES.has(o.pose) && (o.y || 0) < .05) o.y = rnd(Math.max(.28, (o.h || 1) * (o.model === 'person' ? .28 : isVehicleModel(o.model) ? .55 : .7)), 2);
   else if (!JUMP_POSES.has(o.pose) && o.model !== 'person' && (o.y || 0) > .05 && o._poseLift) o.y = 0;
   o._poseLift = JUMP_POSES.has(o.pose);
 }
@@ -134,6 +144,9 @@ function modelFor(s) {
   if (s.type === 'person') return 'person';
   const d = `${s.label || ''} ${s.desc || ''} ${s.cocoClass || ''}`.toLowerCase();
   if (/\b(cat|kitten|feline)\b/.test(d)) return 'cat';
+  if (/\b(bike|motorcycle|motorbike|bicycle|scooter)\b/.test(d)) return 'bike';
+  if (/\b(stair|stairs|staircase|steps)\b/.test(d)) return 'stairs';
+  if (/\b(ramp|jump ramp)\b/.test(d)) return 'ramp';
   if (/\b(chair|armchair|stool|couch|sofa|bench|seat)\b/.test(d)) return 'chair';
   if (/\b(table|desk|dining table|counter)\b/.test(d)) return 'table';
   if (/\b(tree|plant|potted plant|palm|bush)\b/.test(d)) return 'tree';
@@ -145,18 +158,18 @@ function modelFor(s) {
   return 'capsule';
 }
 function defaultHeightFor(model) {
-  return {person:1.75, car:1.15, phone:.16, cat:.34, animal:.65, tree:2.4, table:.78, chair:.86, backdrop:2.6,
+  return {person:1.75, car:1.15, bike:1.12, phone:.16, cat:.34, animal:.65, tree:2.4, table:.78, chair:.86, stairs:1.25, ramp:.72, backdrop:2.6,
     box:.6, sphere:.6, cylinder:.7, cone:.7, torus:.55, capsule:.65, pyramid:.7, tube:.6, disc:.08, plane:.04, platonic:.6, image:1.2, group:1.0}[model] || .6;
 }
 function widthFor(model, h) {
-  return {person:Math.max(.34, h * .29), car:Math.max(1.5, h * 2.25), phone:h * .48, cat:Math.max(.26, h * 1.35), animal:h * 1.45,
-    tree:h * .68, table:h * 1.55, chair:h * .58, backdrop:h * 1.15, box:h * .85, sphere:h, cylinder:h * .55, cone:h * .65,
+  return {person:Math.max(.34, h * .29), car:Math.max(1.5, h * 2.25), bike:Math.max(1.25, h * 1.85), phone:h * .48, cat:Math.max(.26, h * 1.35), animal:h * 1.45,
+    tree:h * .68, table:h * 1.55, chair:h * .58, stairs:h * 1.05, ramp:h * 1.65, backdrop:h * 1.15, box:h * .85, sphere:h, cylinder:h * .55, cone:h * .65,
     torus:h, capsule:h * .45, pyramid:h * .85, tube:h * .75, disc:h * 6, plane:h * 25, platonic:h, image:h * .75, group:h}[model] || h * .65;
 }
 function depthFor(o) {
   const m = o.model, w = o.w, h = o.h;
-  return {person:.32, car:w * .44, phone:.014, cat:w * .38, animal:w * .42, tree:w, table:w * .65, chair:w * .95,
-    backdrop:Math.max(h * .92, w * .82), sphere:w, cylinder:w, cone:w, torus:h * .28, capsule:w, pyramid:w, tube:w, disc:w, plane:w, platonic:w,
+  return {person:.32, car:w * .44, bike:w * .34, phone:.014, cat:w * .38, animal:w * .42, tree:w, table:w * .65, chair:w * .95,
+    stairs:h * 1.68, ramp:h * 2.55, backdrop:Math.max(h * .92, w * .82), sphere:w, cylinder:w, cone:w, torus:h * .28, capsule:w, pyramid:w, tube:w, disc:w, plane:w, platonic:w,
     image:.02, box:w * .85, group:w}[m] ?? w * .75;
 }
 function newObject(model, label, h, extra = {}) {
@@ -165,6 +178,9 @@ function newObject(model, label, h, extra = {}) {
   return {id:'o' + Date.now().toString(36) + (++oid), label, model, h:rnd(h, 3), w:rnd(widthFor(model, h), 3),
     sx:1, sy:1, sz:1,
     color:model === 'backdrop' ? '#dcdedf' : PALETTE[list.length % PALETTE.length], x:0, z:0, y:0, ry:0, img:-1, auto:false,
+    collideG:extra.collideG !== false,
+    collideObj:Boolean(extra.collideObj),
+    collideIds:Array.isArray(extra.collideIds) ? extra.collideIds.slice() : [],
     pose:hasPoseModel(model) ? 'standing' : '', children:null, ...extra};
 }
 
@@ -224,7 +240,10 @@ function sanitizeObjects(objs) {
     if (!isFinite(o.sy) || o.sy <= 0) o.sy = 1;
     if (!isFinite(o.sz) || o.sz <= 0) o.sz = 1;
     if (!isFinite(o.x)) o.x = 0;
-    if (!isFinite(o.y) || o.y < 0) o.y = 0;
+    if (o.collideG === undefined) o.collideG = true;
+    if (!Array.isArray(o.collideIds)) o.collideIds = [];
+    if (!isFinite(o.y)) o.y = 0;
+    if (o.collideG !== false && o.y < 0) o.y = 0;
     if (!isFinite(o.z)) o.z = 0;
     if (!isFinite(o.ry)) o.ry = 0;
     if (hasPoseModel(o.model) && !o.pose) o.pose = 'standing';
@@ -241,8 +260,8 @@ function findAlignedChairForPerson(o) {
     const ang = -rad(ch.ry || 0);
     const localX = dx * Math.cos(ang) - dz * Math.sin(ang);
     const localZ = dx * Math.sin(ang) + dz * Math.cos(ang);
-    const D = depthFor(ch), W = ch.w || .5;
-    if (Math.abs(localX) <= W * .68 && localZ >= -D * .48 && localZ <= D * .88) {
+    const D = depthFor(ch) * (ch.sz ?? 1), W = (ch.w || .5) * (ch.sx ?? 1);
+    if (Math.abs(localX) <= W * .75 && localZ >= -D * .58 && localZ <= D * .95) {
       const d = Math.hypot(localX, localZ);
       if (d < bestDist) { bestDist = d; best = {chair:ch, localX, localZ, D, W}; }
     }
@@ -251,25 +270,255 @@ function findAlignedChairForPerson(o) {
 }
 function checkAutoSitOnChair(o, snapXZ = false) {
   if (!o || o.model !== 'person') return false;
+  if (o.seatedBikeId) return false;
   const aligned = findAlignedChairForPerson(o);
-  if (aligned && (o.y || 0) <= (aligned.chair.h || .86) * .75) {
+  if (aligned && (o.y || 0) <= ((aligned.chair.y || 0) + (aligned.chair.h || .86) * .85)) {
     const {chair, localX, D, W} = aligned;
     o.pose = 'sitting_chair';
     o._autoSatChairId = chair.id;
-    o.ry = chair.ry || 0;
-    if (snapXZ) {
-      const sx = clamp(localX, -W * .12, W * .12);
-      const sz = -D * .12;
-      const ang = rad(chair.ry || 0);
-      o.x = rnd((chair.x || 0) + sx * Math.cos(ang) - sz * Math.sin(ang), 3);
-      o.z = rnd((chair.z || 0) + sx * Math.sin(ang) + sz * Math.cos(ang), 3);
-    }
+    const targetRy = chair.ry || 0;
+    o.ry = snapXZ ? targetRy : rnd(norm360((o.ry || 0) + signed(targetRy - (o.ry || 0)) * .38), 1);
+    const sx = clamp(localX, -W * .10, W * .10);
+    const sz = -D * .10;
+    const ang = rad(chair.ry || 0);
+    const tx = (chair.x || 0) + sx * Math.cos(ang) - sz * Math.sin(ang);
+    const tz = (chair.z || 0) + sx * Math.sin(ang) + sz * Math.cos(ang);
+    const blend = snapXZ ? 1 : .35;
+    o.x = rnd((o.x || 0) + (tx - (o.x || 0)) * blend, 3);
+    o.z = rnd((o.z || 0) + (tz - (o.z || 0)) * blend, 3);
     return true;
   } else if (o._autoSatChairId) {
     delete o._autoSatChairId;
     if (!o.userPosed && o.pose === 'sitting_chair') o.pose = 'standing';
   }
   return false;
+}
+
+// Find a bike that a person is placed near; supports up to 2 riders (Slot 0 = Rider, Slot 1 = Passenger), rejects 3rd person
+function findAlignedBikeForPerson(o) {
+  if (!o || o.model !== 'person') return null;
+  const bikes = (V().objects || []).filter(b => b.id !== o.id && b.model === 'bike');
+  let best = null, bestDist = 1e9;
+  for (const bk of bikes) {
+    const dx = (o.x || 0) - (bk.x || 0), dz = (o.z || 0) - (bk.z || 0);
+    const ang = -rad(bk.ry || 0);
+    const localX = dx * Math.cos(ang) - dz * Math.sin(ang);
+    const localZ = dx * Math.sin(ang) + dz * Math.cos(ang);
+    const L = (bk.w || 2.0) * (bk.sx ?? 1);
+    const W = Math.max(.48, L * .36) * (bk.sz ?? 1);
+    if (Math.abs(localX) <= W * 1.15 && Math.abs(localZ) <= L * .64) {
+      const d = Math.hypot(localX, localZ);
+      if (d < bestDist) { bestDist = d; best = {bike:bk, localX, localZ, L, W, dist:d}; }
+    }
+  }
+  return best;
+}
+function getBikeRiders(bikeId, excludePersonId = null) {
+  return (V().objects || []).filter(p =>
+    p.model === 'person' &&
+    p.id !== excludePersonId &&
+    p.seatedBikeId === bikeId &&
+    (p.pose === 'riding_bike' || p.pose === 'riding_bike_back')
+  );
+}
+function positionPersonOnBike(person, bike, slot, blend = 1) {
+  const L = (bike.w || 2.0) * (bike.sx ?? 1);
+  const seatOffsetZ = slot === 0 ? L * .03 : -L * .20;
+  const ang = rad(bike.ry || 0);
+  const tx = (bike.x || 0) + Math.sin(ang) * seatOffsetZ;
+  const tz = (bike.z || 0) + Math.cos(ang) * seatOffsetZ;
+  const ty = Math.max(0, bike.y || 0);
+  person.x = rnd((person.x || 0) + (tx - (person.x || 0)) * blend, 3);
+  person.z = rnd((person.z || 0) + (tz - (person.z || 0)) * blend, 3);
+  person.y = rnd((person.y || 0) + (ty - (person.y || 0)) * blend, 3);
+  person.ry = blend >= .99 ? (bike.ry || 0) : rnd(norm360((person.ry || 0) + signed((bike.ry || 0) - (person.ry || 0)) * Math.max(.42, blend)), 1);
+  person.rx = rnd(bike.rx || 0, 1);
+  person.rz = rnd(bike.rz || 0, 1);
+}
+function checkAutoSitOnBike(o, isDropEnd = false) {
+  if (!o || o.model !== 'person') return false;
+  const aligned = findAlignedBikeForPerson(o);
+  if (!aligned) {
+    if (o.seatedBikeId) {
+      delete o.seatedBikeId;
+      delete o.seatedBikeSlot;
+      if (o.pose === 'riding_bike' || o.pose === 'riding_bike_back') o.pose = 'standing';
+      o.rx = 0; o.rz = 0;
+    }
+    return false;
+  }
+  const {bike, localX, W} = aligned;
+  const otherRiders = getBikeRiders(bike.id, o.id);
+  if (otherRiders.length >= 2) {
+    // 3rd person rejected! Push slightly outside the bike's side so they cannot mount
+    delete o.seatedBikeId;
+    delete o.seatedBikeSlot;
+    if (o.pose === 'riding_bike' || o.pose === 'riding_bike_back') o.pose = 'standing';
+    if (isDropEnd) {
+      const sideSign = localX >= 0 ? 1 : -1;
+      const ang = rad(bike.ry || 0);
+      o.x = rnd((bike.x || 0) + Math.cos(ang) * sideSign * (W * 1.28), 3);
+      o.z = rnd((bike.z || 0) - Math.sin(ang) * sideSign * (W * 1.28), 3);
+      AC.toast('Maximum 2 riders per bike — 3rd person cannot board this bike');
+    }
+    return false;
+  }
+  const slot0Taken = otherRiders.some(r => r.seatedBikeSlot === 0 || r.pose === 'riding_bike');
+  const slot = slot0Taken ? 1 : 0;
+  o.seatedBikeId = bike.id;
+  o.seatedBikeSlot = slot;
+  o.pose = slot === 0 ? 'riding_bike' : 'riding_bike_back';
+  delete o._autoSatChairId;
+  positionPersonOnBike(o, bike, slot, isDropEnd ? 1 : .38);
+  return true;
+}
+function syncSeatedBikeRiders(bike) {
+  if (!bike || bike.model !== 'bike') return;
+  const riders = getBikeRiders(bike.id, null);
+  riders.slice(0, 2).forEach((p, idx) => {
+    const slot = typeof p.seatedBikeSlot === 'number' ? p.seatedBikeSlot : idx;
+    p.pose = slot === 0 ? 'riding_bike' : 'riding_bike_back';
+    positionPersonOnBike(p, bike, slot, 1);
+  });
+}
+
+// Link Car/Bike with Jump Ramp (`ramp`) and Person/Cat/Dog with Stairs (`stairs`), plus Ground/Object Colliders
+function applyRampAndStairsInteraction(o) {
+  if (!o) return false;
+  const objs = V().objects || [];
+  // 1) Car or Bike driving over a Jump Ramp (`ramp`)
+  if (isVehicleModel(o.model)) {
+    const ramps = objs.filter(r => r.id !== o.id && r.model === 'ramp');
+    for (const rp of ramps) {
+      const dx = (o.x || 0) - (rp.x || 0), dz = (o.z || 0) - (rp.z || 0);
+      const ang = -rad(rp.ry || 0);
+      const lx = dx * Math.cos(ang) - dz * Math.sin(ang);
+      const lz = dx * Math.sin(ang) + dz * Math.cos(ang);
+      const rH = (rp.h || .72) * (rp.sy ?? 1);
+      const rW = (rp.w || 1.18) * (rp.sx ?? 1);
+      const rL = depthFor(rp) * (rp.sz ?? 1);
+      const halfL = rL * .5;
+      if (Math.abs(lx) <= rW * .65 && lz >= -halfL - .15 && lz <= halfL + rL * .85) {
+        const headingDot = Math.cos(rad((o.ry || 0) - (rp.ry || 0)));
+        const pitchSign = headingDot >= 0 ? -1 : 1;
+        if (lz <= halfL) {
+          // On the curved ramp surface: smoothly elevate Y and pitch nose up along the curve
+          const u = clamp((lz + halfL) / Math.max(.1, rL), 0, 1);
+          const curveY = (rp.y || 0) + rH * (.28 * u + .72 * u * u);
+          const slopeDeg = deg(Math.atan2(rH * (.28 + 1.44 * u), Math.max(.1, rL)));
+          o.y = rnd(curveY, 3);
+          o.rx = rnd(pitchSign * slopeDeg, 1);
+          o._onRampId = rp.id;
+          if (o.model === 'bike') syncSeatedBikeRiders(o);
+          return true;
+        } else {
+          // Launched off the top lip (+halfL .. +halfL + rL * 0.85): parabolic jump arc!
+          const uAir = clamp((lz - halfL) / Math.max(.1, rL * .85), 0, 1);
+          const arcY = (rp.y || 0) + Math.max(0, rH * (1 + .75 * uAir - 1.75 * uAir * uAir));
+          const airPitch = (1 - 2.1 * uAir) * 24;
+          o.y = rnd(arcY, 3);
+          o.rx = rnd(pitchSign * airPitch, 1);
+          o._onRampId = rp.id;
+          if (o.model === 'bike') syncSeatedBikeRiders(o);
+          return true;
+        }
+      }
+    }
+    if (o._onRampId) {
+      delete o._onRampId;
+      if (!JUMP_POSES.has(o.pose)) {
+        o.rx = 0;
+        if (o.collideG !== false) o.y = 0;
+      }
+      if (o.model === 'bike') syncSeatedBikeRiders(o);
+    }
+  }
+  // 2) Person, Cat, or Dog (`animal`) walking up/down Stairs (`stairs`)
+  if (isRiggedChar(o.model) && !o.seatedBikeId) {
+    const stairsList = objs.filter(s => s.id !== o.id && s.model === 'stairs');
+    for (const stObj of stairsList) {
+      const dx = (o.x || 0) - (stObj.x || 0), dz = (o.z || 0) - (stObj.z || 0);
+      const ang = -rad(stObj.ry || 0);
+      const lx = dx * Math.cos(ang) - dz * Math.sin(ang);
+      const lz = dx * Math.sin(ang) + dz * Math.cos(ang);
+      const sH = (stObj.h || 1.25) * (stObj.sy ?? 1);
+      const sW = (stObj.w || 1.3) * (stObj.sx ?? 1);
+      const sL = depthFor(stObj) * (stObj.sz ?? 1);
+      const halfL = sL * .5;
+      if (Math.abs(lx) <= sW * .62 && lz >= -halfL - .12 && lz <= halfL + .12) {
+        const u = clamp((halfL - lz) / Math.max(.1, sL), 0, 1);
+        const steps = 8;
+        const sf = u * steps, si = Math.min(steps - 1, Math.floor(sf)), frac = sf - si;
+        const smoothStep = frac * frac * (3 - 2 * frac);
+        const stepY = (stObj.y || 0) + ((si + smoothStep) / steps) * sH;
+        o.y = rnd(stepY, 3);
+        o._onStairsId = stObj.id;
+        return true;
+      }
+    }
+    if (o._onStairsId) {
+      delete o._onStairsId;
+      if (o.collideG !== false && !JUMP_POSES.has(o.pose)) o.y = 0;
+    }
+  }
+  return false;
+}
+
+function objCollisionHalfExtents(o) {
+  const sx = o.sx ?? 1, sy = o.sy ?? 1, sz = o.sz ?? 1;
+  const h = Math.max(.04, (o.h || defaultHeightFor(o.model)) * sy);
+  const w = Math.max(.08, (o.w || widthFor(o.model, h)) * sx);
+  const d = Math.max(.08, depthFor(o) * sz);
+  const isVeh = isVehicleModel(o.model);
+  const rx = (isVeh ? d : w) * .46;
+  const rz = (isVeh ? w : d) * .46;
+  return {rx, rz, h};
+}
+function enforceObjectCollisions(o) {
+  if (!o) return;
+  // 1) Ground collider ("Collide with G")
+  if (o.collideG !== false) {
+    if ((o.y || 0) < 0) o.y = 0;
+  }
+  // 2) Ramp & Stairs linkages
+  const onSpecial = applyRampAndStairsInteraction(o);
+  // 3) Object-to-Object collider ("Collide with Obj")
+  if (!o.collideObj) return;
+  const allOther = (V().objects || []).filter(x => x.id !== o.id);
+  const activeIds = Array.isArray(o.collideIds) && o.collideIds.length
+    ? new Set(o.collideIds)
+    : new Set(allOther.map(x => x.id));
+  const extA = objCollisionHalfExtents(o);
+  for (const other of allOther) {
+    if (!activeIds.has(other.id)) continue;
+    // Skip linked pairs so seating/ramps/stairs work naturally
+    if (o.model === 'person' && (other.model === 'chair' || other.model === 'bike' || other.model === 'stairs')) continue;
+    if ((o.model === 'cat' || o.model === 'animal') && other.model === 'stairs') continue;
+    if (isVehicleModel(o.model) && (other.model === 'ramp' || other.id === o.seatedBikeId)) continue;
+    if (o.model === 'bike' && other.model === 'person' && other.seatedBikeId === o.id) continue;
+    if (onSpecial && (other.id === o._onRampId || other.id === o._onStairsId)) continue;
+    const extB = objCollisionHalfExtents(other);
+    const dx = (o.x || 0) - (other.x || 0);
+    const dz = (o.z || 0) - (other.z || 0);
+    const minX = extA.rx + extB.rx;
+    const minZ = extA.rz + extB.rz;
+    if (Math.abs(dx) >= minX || Math.abs(dz) >= minZ) continue;
+    const botA = o.y || 0, topA = botA + extA.h;
+    const botB = other.y || 0, topB = botB + extB.h;
+    if (topA <= botB + .005 || botA >= topB - .005) continue;
+    const overlapX = minX - Math.abs(dx);
+    const overlapZ = minZ - Math.abs(dz);
+    const overlapTop = topB - botA;
+    if (botA >= botB + extB.h * .55 && overlapTop < Math.min(overlapX, overlapZ) * 1.35) {
+      o.y = rnd(topB, 3);
+    } else if (overlapX < overlapZ) {
+      const signX = dx >= 0 ? 1 : -1;
+      o.x = rnd((other.x || 0) + signX * minX, 3);
+    } else {
+      const signZ = dz >= 0 ? 1 : -1;
+      o.z = rnd((other.z || 0) + signZ * minZ, 3);
+    }
+  }
 }
 
 function syncObjectsFromSubjectsFor(targetState) {
@@ -772,7 +1021,7 @@ function apply(t) {
   AC.applyQuiet(() => {
     P.forEach(p => { if (tracks()[p.path]?.length) p.set(valueAt(p.path, t, p.kind, p.get())); });
     (V().objects || []).forEach(o => {
-      if (!['person', 'cat', 'animal', 'car'].includes(o.model)) return;
+      if (!['person', 'cat', 'animal', 'car', 'bike'].includes(o.model)) return;
       const kx = tracks()[`obj.${o.id}.x`], kz = tracks()[`obj.${o.id}.z`], kry = tracks()[`obj.${o.id}.ry`];
       if (!((kx && kx.length > 1) || (kz && kz.length > 1))) return;
       const hasManualRot = kry && kry.length > 1 && kry.some(k => k.userRot) && (Math.max(...kry.map(k => k.v)) - Math.min(...kry.map(k => k.v)) > 1.5);
@@ -781,6 +1030,11 @@ function apply(t) {
       if (pd && typeof pd.ry === 'number' && isFinite(pd.ry)) {
         o.ry = rnd(pd.ry, 1);
       }
+    });
+    (V().objects || []).forEach(o => {
+      enforceObjectCollisions(o);
+      applyRampAndStairsInteraction(o);
+      if (o.model === 'bike') syncSeatedBikeRiders(o);
     });
   });
   lastApplied = {};
@@ -1208,8 +1462,8 @@ const lastViewTransform = {top:null, side:null};
 let activePathDrag = null;
 
 function smoothTurnRiggedOnDrag(o, prevX, prevZ, newX, newZ) {
-  if (!o || !['person', 'cat', 'animal', 'car'].includes(o.model)) return;
-  if (o.pose === 'sitting_chair') return;
+  if (!o || !['person', 'cat', 'animal', 'car', 'bike'].includes(o.model)) return;
+  if (o.pose === 'sitting_chair' || o.seatedBikeId) return;
   const stepDx = (newX || 0) - (prevX || 0);
   const stepDz = (newZ || 0) - (prevZ || 0);
   const stepDist = Math.hypot(stepDx, stepDz);
@@ -1218,7 +1472,7 @@ function smoothTurnRiggedOnDrag(o, prevX, prevZ, newX, newZ) {
   o._dragDirZ = (typeof o._dragDirZ === 'number' ? o._dragDirZ : stepDz) * 0.65 + stepDz * 0.35;
   const dirLen = Math.hypot(o._dragDirX, o._dragDirZ);
   if (dirLen < 0.001) return;
-  if (o.model === 'car') {
+  if (isVehicleModel(o.model)) {
     const curRad = rad(o.ry || 0);
     const fwdDot = (o._dragDirX * Math.sin(curRad) + o._dragDirZ * Math.cos(curRad)) / dirLen;
     if (fwdDot < -0.22) {
@@ -1233,7 +1487,7 @@ function smoothTurnRiggedOnDrag(o, prevX, prevZ, newX, newZ) {
   }
   const targetRy = deg(Math.atan2(o._dragDirX, o._dragDirZ));
   const diff = signed(targetRy - (o.ry || 0));
-  const turnRate = clamp(stepDist * (o.model === 'car' ? 5.8 : 9.5), 0.10, 0.34);
+  const turnRate = clamp(stepDist * (isVehicleModel(o.model) ? 5.8 : 9.5), 0.10, 0.34);
   o.ry = rnd(norm360((o.ry || 0) + diff * turnRate), 1);
 }
 
@@ -1576,7 +1830,12 @@ hooks.dragViewObj = (name, v, objId, x, y, isEnd) => {
     delete o._dragDirX;
     delete o._dragDirZ;
     delete o._reverseDrag;
-    if (o.model === 'person') checkAutoSitOnChair(o, true);
+    if (o.model === 'person') {
+      checkAutoSitOnBike(o, true);
+      if (!o.seatedBikeId) checkAutoSitOnChair(o, true);
+    }
+    if (o.model === 'bike') syncSeatedBikeRiders(o);
+    enforceObjectCollisions(o);
     autoKey();
     AC.save();
     return;
@@ -1594,8 +1853,15 @@ hooks.dragViewObj = (name, v, objId, x, y, isEnd) => {
     smoothTurnRiggedOnDrag(o, prevX, prevZ, o.x, o.z);
   } else if (name === 'side') {
     const groundY = v.cy + tg.y * v.s;
-    o.y = rnd(Math.max(0, (groundY - y) / v.s - (o.h || 1) * .5), 3);
+    const rawY = (groundY - y) / v.s - (o.h || 1) * .5;
+    o.y = rnd(o.collideG !== false ? Math.max(0, rawY) : clamp(rawY, -50, 50), 3);
   }
+  if (o.model === 'person') {
+    checkAutoSitOnBike(o, false);
+    if (!o.seatedBikeId) checkAutoSitOnChair(o, false);
+  }
+  if (o.model === 'bike') syncSeatedBikeRiders(o);
+  enforceObjectCollisions(o);
   o.placed = true;
   o.userMoved = true;
   syncObjProps();
@@ -2180,6 +2446,151 @@ function buildSingleModel(o) {
       g.userData.rig = {type:'car', h, L, W, bodyGrp, wheels, frontSteer, wheelR};
       break;
     }
+    case 'bike': {
+      const L = depthFor(o), W = Math.max(.64, w), P = o.parts || {};
+      const bodyM = mat(c === '#e85d2b' ? 0xe11d48 : c, {metalness:.65, roughness:.22});
+      const darkM = mat(P.trim || 0x151821, {metalness:.35, roughness:.48});
+      const seatM = mat(0x1e222d, {roughness:.68, metalness:.1});
+      const chromeM = mat(P.wheels || 0xdbe0e8, {metalness:.86, roughness:.18});
+      const tireM = mat(0x111318, {roughness:.85, metalness:.08});
+      const headM = new THREE.MeshStandardMaterial({color:0xffffff, emissive:0xfff4d2, emissiveIntensity:.55, roughness:.2});
+      const tailM = new THREE.MeshStandardMaterial({color:0xff2020, emissive:0xd01010, emissiveIntensity:.5, roughness:.25});
+      const wheelR = clamp(h * .28, .26, .35), tireW = Math.max(.12, W * .21);
+      const wb = L * .35;
+      const bodyGrp = new THREE.Group(); g.add(bodyGrp);
+      // Engine & frame cradle
+      addMesh(bodyGrp, new THREE.BoxGeometry(W * .34, h * .28, L * .28), darkM, 0, wheelR + h * .06, 0);
+      addMesh(bodyGrp, new THREE.CylinderGeometry(W * .14, W * .14, W * .38, 14), chromeM, 0, wheelR + h * .04, L * .04).rotation.z = Math.PI / 2;
+      // Fuel tank (sculpted)
+      const tank = addMesh(bodyGrp, new THREE.SphereGeometry(W * .26, 20, 14), bodyM, 0, wheelR + h * .26, L * .10);
+      tank.scale.set(.85, .68, 1.45);
+      // Front fairing & windshield
+      const fair = addMesh(bodyGrp, new THREE.ConeGeometry(W * .25, L * .26, 18), bodyM, 0, wheelR + h * .28, L * .27);
+      fair.rotation.x = Math.PI * .42;
+      const wind = addMesh(bodyGrp, new THREE.BoxGeometry(W * .30, h * .16, .018), mat(0x1b2838, {roughness:.1, metalness:.85}), 0, wheelR + h * .41, L * .25);
+      wind.rotation.x = -.52;
+      addMesh(bodyGrp, new THREE.SphereGeometry(W * .09, 14, 10), headM, 0, wheelR + h * .26, L * .36);
+      // Two-person stepped seat (Rider seat + Pillion rear seat)
+      addMesh(bodyGrp, new THREE.BoxGeometry(W * .34, h * .07, L * .22), seatM, 0, wheelR + h * .20, -L * .06);
+      const pillion = addMesh(bodyGrp, new THREE.BoxGeometry(W * .31, h * .075, L * .20), seatM, 0, wheelR + h * .25, -L * .24);
+      pillion.rotation.x = .08;
+      // Rear tail cowling & taillight
+      const tailCowl = addMesh(bodyGrp, new THREE.BoxGeometry(W * .26, h * .07, L * .16), bodyM, 0, wheelR + h * .25, -L * .35);
+      tailCowl.rotation.x = .12;
+      addMesh(bodyGrp, new THREE.BoxGeometry(W * .16, h * .035, .02), tailM, 0, wheelR + h * .26, -L * .43);
+      // Twin exhaust pipes & rear swingarm
+      [-1, 1].forEach(sx => {
+        const ex = addMesh(bodyGrp, new THREE.CylinderGeometry(.032, .026, L * .42, 12), chromeM, sx * W * .21, wheelR * .92, -L * .18);
+        ex.rotation.x = Math.PI / 2 - .12;
+        const sw = addMesh(bodyGrp, new THREE.BoxGeometry(.028, .045, L * .26), darkM, sx * W * .13, wheelR, -wb * .55);
+        sw.rotation.x = -.05;
+      });
+      const wheels = [], frontSteer = [];
+      // Front steerable fork + handlebars + front wheel
+      const steerGrp = new THREE.Group();
+      steerGrp.position.set(0, wheelR, wb);
+      g.add(steerGrp);
+      frontSteer.push(steerGrp);
+      [-1, 1].forEach(sx => {
+        const fk = addMesh(steerGrp, new THREE.CylinderGeometry(.024, .020, h * .46, 12), chromeM, sx * W * .12, h * .20, -.04);
+        fk.rotation.x = -.22;
+      });
+      // Handlebars & grips
+      const hBar = addMesh(steerGrp, new THREE.CylinderGeometry(.016, .016, W * .88, 12), chromeM, 0, h * .42, -.09);
+      hBar.rotation.z = Math.PI / 2;
+      [-1, 1].forEach(sx => {
+        const grip = addMesh(steerGrp, new THREE.CylinderGeometry(.022, .022, W * .16, 10), darkM, sx * W * .38, h * .42, -.09);
+        grip.rotation.z = Math.PI / 2;
+      });
+      const buildBikeWheel = parentGrp => {
+        const spinGrp = new THREE.Group();
+        parentGrp.add(spinGrp);
+        wheels.push(spinGrp);
+        const tire = addMesh(spinGrp, new THREE.CylinderGeometry(wheelR, wheelR, tireW, 24), tireM, 0, 0, 0);
+        tire.rotation.z = Math.PI / 2;
+        const rim = addMesh(spinGrp, new THREE.CylinderGeometry(wheelR * .66, wheelR * .66, tireW * 1.04, 20), chromeM, 0, 0, 0);
+        rim.rotation.z = Math.PI / 2;
+        const spokeGeo = new THREE.BoxGeometry(tireW * 1.06, wheelR * .10, wheelR * 1.24);
+        for (let sp = 0; sp < 6; sp++) {
+          const ang = (sp / 6) * Math.PI;
+          const spk = addMesh(spinGrp, spokeGeo, darkM, 0, 0, 0);
+          spk.rotation.x = ang;
+        }
+      };
+      buildBikeWheel(steerGrp);
+      const rearWheelHolder = new THREE.Group();
+      rearWheelHolder.position.set(0, wheelR, -wb);
+      g.add(rearWheelHolder);
+      buildBikeWheel(rearWheelHolder);
+      g.userData.rig = {type:'bike', h, L, W, bodyGrp, wheels, frontSteer, wheelR};
+      break;
+    }
+    case 'stairs': {
+      const D = depthFor(o), P = o.parts || {};
+      const stepCol = c === '#e85d2b' ? 0x94a3b8 : c;
+      const stepM = mat(stepCol, {roughness:.62, metalness:.12});
+      const railM = mat(P.sec || 0x475569, {roughness:.45, metalness:.35});
+      const numSteps = 8;
+      const stepH = h / numSteps, stepD = D / numSteps;
+      for (let i = 0; i < numSteps; i++) {
+        // Steps ascend from +D/2 (front, y=0) toward -D/2 (back, y=h)
+        const curH = (i + 1) * stepH;
+        const zCenter = D / 2 - (i + 0.5) * stepD;
+        addMesh(g, new THREE.BoxGeometry(w * .94, curH, stepD * 1.02), stepM, 0, curH / 2, zCenter);
+      }
+      // Side stringer rails along the stair slope
+      const diagLen = Math.hypot(D, h);
+      const slopeAng = Math.atan2(h, D);
+      [-1, 1].forEach(sx => {
+        const rail = addMesh(g, new THREE.BoxGeometry(Math.max(.04, w * .045), Math.max(.08, h * .07), diagLen), railM, sx * (w * .48), h * .52, 0);
+        rail.rotation.x = slopeAng;
+      });
+      break;
+    }
+    case 'ramp': {
+      // Smooth curved stunt jump ramp rising from -D/2 (entry, y=0) to +D/2 (launch lip, y=h)
+      const D = depthFor(o), P = o.parts || {};
+      const rampCol = c === '#e85d2b' ? 0xf59e0b : c;
+      const rampM = mat(rampCol, {roughness:.52, metalness:.22});
+      const sideM = mat(P.sec || 0x1e293b, {roughness:.48, metalness:.35});
+      const segs = 24;
+      const shape = new THREE.Shape();
+      shape.moveTo(-D / 2, 0);
+      for (let i = 1; i <= segs; i++) {
+        const u = i / segs;
+        const z = -D / 2 + u * D;
+        const y = h * (0.22 * u + 0.78 * u * u);
+        shape.lineTo(z, y);
+      }
+      shape.lineTo(D / 2, 0);
+      shape.closePath();
+      const geo = new THREE.ExtrudeGeometry(shape, {depth:w * .92, bevelEnabled:false, curveSegments:24});
+      geo.translate(0, 0, -w * .46);
+      geo.rotateY(-Math.PI / 2);
+      geo.computeVertexNormals();
+      addMesh(g, geo, rampM, 0, 0, 0);
+      // Side safety curbs along the curved ramp
+      const curbShape = new THREE.Shape();
+      const curbH = Math.max(.05, h * .08);
+      curbShape.moveTo(-D / 2, 0);
+      for (let i = 0; i <= segs; i++) {
+        const u = i / segs;
+        const z = -D / 2 + u * D;
+        const y = h * (0.22 * u + 0.78 * u * u) + curbH;
+        curbShape.lineTo(z, y);
+      }
+      curbShape.lineTo(D / 2, 0);
+      curbShape.closePath();
+      const curbW = Math.max(.045, w * .045);
+      const curbGeo = new THREE.ExtrudeGeometry(curbShape, {depth:curbW, bevelEnabled:false});
+      curbGeo.translate(0, 0, -curbW / 2);
+      curbGeo.rotateY(-Math.PI / 2);
+      curbGeo.computeVertexNormals();
+      [-1, 1].forEach(sx => {
+        addMesh(g, curbGeo, sideM, sx * (w * .46), 0, 0);
+      });
+      break;
+    }
     case 'phone': {
       const d = Math.max(.008, w * .1), P = o.parts || {};
       addMesh(g, new THREE.BoxGeometry(w, h, d), mat(c, {metalness:.5, roughness:.25}), 0, h / 2, 0);
@@ -2219,30 +2630,42 @@ function buildSingleModel(o) {
       break;
     }
     case 'backdrop': {
-      // Smooth continuous one-piece L-shaped studio cyclorama backdrop (matching Image 1)
+      // Single-surface zero-thickness L-shaped studio cyclorama backdrop (face only, no thickness)
       const floorL = Math.max(1.4, w * .68);
-      const t = Math.max(.045, Math.min(h, w) * .028);
       const rIn = clamp(Math.min(h, floorL) * .32, .22, .85);
-      const rOut = rIn + t;
       const zBack = -floorL / 2, zFront = floorL / 2;
-      const zC = zBack + rOut, yC = rOut;
-      const shape = new THREE.Shape();
-      shape.moveTo(zBack, h);
-      shape.lineTo(zBack + t, h);
-      shape.lineTo(zBack + t, yC);
-      shape.absarc(zC, yC, rIn, Math.PI, Math.PI * 1.5, false);
-      shape.lineTo(zFront, t);
-      shape.lineTo(zFront, 0);
-      shape.lineTo(zC, 0);
-      shape.absarc(zC, yC, rOut, Math.PI * 1.5, Math.PI, true);
-      shape.closePath();
-      const geo = new THREE.ExtrudeGeometry(shape, {depth:w, bevelEnabled:false, curveSegments:32});
-      geo.translate(0, 0, -w / 2);
-      geo.rotateY(-Math.PI / 2);
+      const zC = zBack + rIn, yC = rIn;
+      const prof = [];
+      prof.push([yC + (h - yC), zBack]);
+      const arcSegs = 28;
+      for (let i = 0; i <= arcSegs; i++) {
+        const ang = Math.PI + (i / arcSegs) * (Math.PI * 0.5);
+        prof.push([yC + Math.sin(ang) * rIn, zC + Math.cos(ang) * rIn]);
+      }
+      prof.push([0, zFront]);
+      const positions = [];
+      const uvs = [];
+      const indices = [];
+      const halfW = w / 2;
+      for (let i = 0; i < prof.length; i++) {
+        const [py, pz] = prof[i];
+        const v = i / (prof.length - 1);
+        positions.push(-halfW, py, pz, halfW, py, pz);
+        uvs.push(0, v, 1, v);
+        if (i < prof.length - 1) {
+          const a = i * 2, b = a + 1, c0 = a + 2, d = a + 3;
+          indices.push(a, c0, b, b, c0, d);
+        }
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+      geo.setIndex(indices);
       geo.computeVertexNormals();
       const bdCol = c === '#e85d2b' ? '#dcdedf' : c;
-      const bdM = mat(bdCol, {roughness:.8, metalness:.04});
-      addMesh(g, geo, bdM, 0, 0, 0);
+      const bdM = new THREE.MeshStandardMaterial({color:new THREE.Color(bdCol), roughness:.8, metalness:.04, side:THREE.DoubleSide});
+      const bdMesh = addMesh(g, geo, bdM, 0, 0, 0);
+      bdMesh.userData.isThinSheet = true;
       break;
     }
     case 'sphere': { const s = addMesh(g, new THREE.SphereGeometry(h / 2, 32, 24), m, 0, h / 2, 0); s.scale.x = s.scale.z = w / h; break; }
@@ -2260,7 +2683,14 @@ function buildSingleModel(o) {
       break;
     }
     case 'disc': addMesh(g, new THREE.CylinderGeometry(w / 2, w / 2, Math.max(.015, h), 36), m, 0, Math.max(.015, h) / 2, 0); break;
-    case 'plane': addMesh(g, new THREE.BoxGeometry(w, Math.max(.01, h), w), m, 0, Math.max(.01, h) / 2, 0); break;
+    case 'plane': {
+      // Single-surface zero-thickness flat plane (face only, no thickness)
+      const plMat = new THREE.MeshStandardMaterial({color:new THREE.Color(c), roughness:.62, metalness:.1, side:THREE.DoubleSide});
+      const pl = addMesh(g, new THREE.PlaneGeometry(w, w), plMat, 0, .001, 0);
+      pl.rotation.x = -Math.PI / 2;
+      pl.userData.isThinSheet = true;
+      break;
+    }
     case 'platonic': addMesh(g, new THREE.DodecahedronGeometry(Math.max(w, h) * .5), m, 0, h / 2, 0); break;
     case 'capsule': {
       const r = w / 2, body = Math.max(.001, h - w);
@@ -2331,7 +2761,7 @@ function buildModel(o) {
   bodyMeshes.forEach(m => {
     if (m.userData.noOutline || m.isSkinnedMesh) return;
     const gType = m.geometry?.type || '';
-    const isFlat = gType === 'PlaneGeometry' || gType === 'RingGeometry' || gType === 'CircleGeometry';
+    const isFlat = Boolean(m.userData.isThinSheet) || gType === 'PlaneGeometry' || gType === 'RingGeometry' || gType === 'CircleGeometry';
     if (!isFlat) {
       const sh = new THREE.Mesh(m.geometry, backMatPrimary);
       sh.scale.set(1.065, 1.045, 1.065);
@@ -2341,7 +2771,7 @@ function buildModel(o) {
       outlines.push(sh);
     }
     if (isFlat || gType === 'BoxGeometry') {
-      const ed = new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry, 75), edgeMatPrimary);
+      const ed = new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry, isFlat ? 15 : 75), edgeMatPrimary);
       ed.visible = false; ed.userData.isOutline = true; ed.userData.oid = o.id;
       m.add(ed);
       outlines.push(ed);
@@ -2398,7 +2828,7 @@ function pathDist(o, t) {
         const initDx = xs[idxEnd] - xs[0], initDz = zs[idxEnd] - zs[0];
         const initDist = Math.hypot(initDx, initDz);
         if (initDist > 1e-4) {
-          if (o.model === 'car') {
+          if (isVehicleModel(o.model)) {
             const r0 = rad(curRy);
             const fwd0 = (initDx * Math.sin(r0) + initDz * Math.cos(r0)) / initDist;
             if (fwd0 < -0.22) {
@@ -2431,7 +2861,7 @@ function pathDist(o, t) {
         const vx = (xs[j1] - xs[j0]) / spanT, vz = (zs[j1] - zs[j0]) / spanT;
         const speed = Math.hypot(vx, vz);
         if (speed > 0.008) {
-          if (o.model === 'car') {
+          if (isVehicleModel(o.model)) {
             const r = rad(curRy);
             const fwdDot = (vx * Math.sin(r) + vz * Math.cos(r)) / speed;
             if (fwdDot < -0.22) {
@@ -2500,9 +2930,10 @@ function updateRigPoseAndMotion(o, g, t) {
     pd = pathDist(o, t);
     if (pd && typeof pd.vRy === 'number' && Math.abs(vRy) < 1e-3) vRy = pd.vRy;
   }
-  // 2) Check automatic chair sitting for person before drag-walk so placing/aligning with a chair seats immediately
-  if (rig.type === 'person' && timelineSpeed <= .05 && o.y <= .08 && o.pose !== 'walking_still' && o.pose !== 'running_still') {
-    checkAutoSitOnChair(o, false);
+  // 2) Check automatic bike / chair sitting for person before drag-walk so placing/aligning with a bike or chair seats immediately
+  if (rig.type === 'person' && timelineSpeed <= .05 && (o.y <= .08 || o.pose === 'riding_bike' || o.pose === 'riding_bike_back') && o.pose !== 'walking_still' && o.pose !== 'running_still') {
+    checkAutoSitOnBike(o, false);
+    if (o.pose !== 'riding_bike' && o.pose !== 'riding_bike_back') checkAutoSitOnChair(o, false);
     g.rotation.y = rad(o.ry || 0);
   }
   // 3) Interactive drag movement or turning (moving or rotating the object in a view) only when the timeline is not driving it
@@ -2514,6 +2945,7 @@ function updateRigPoseAndMotion(o, g, t) {
   const wheelR = rig.wheelR || .3;
   const isPoseWalk = isRiggedChar(o.model) && o.pose === 'walking_still';
   const isPoseRun = isRiggedChar(o.model) && o.pose === 'running_still';
+  const isSeatedPose = o.pose === 'sitting_chair' || o.pose === 'riding_bike' || o.pose === 'riding_bike_back';
   const hasPath = Boolean(pd && pd.total > .001);
   const timeScrubbed = Math.abs(t - (st.lastT ?? t)) > 1e-4;
   st.lastT = t;
@@ -2531,7 +2963,7 @@ function updateRigPoseAndMotion(o, g, t) {
   } else if (clocked && !activeVpDrag && (isPoseWalk || isPoseRun || timelineTurnSpeed > 1.5)) {
     const turnCadence = rig.type === 'cat' ? (isPoseRun ? 11.5 : 7.5) : rig.type === 'animal' ? (isPoseRun ? 9.8 : 6.8) : (isPoseRun ? 9.2 : 5.2);
     st.phase = 0.62 + t * turnCadence;
-  } else if (!clocked && !timeScrubbed && o.pose !== 'sitting_chair' && (dragMoveDist > .0008 || dRyDrag > .15)) {
+  } else if (!clocked && !timeScrubbed && !isSeatedPose && (dragMoveDist > .0008 || dRyDrag > .15)) {
     vx = dxDrag / dt; vz = dzDrag / dt;
     st.moveHold = now + 180;
     const stepAdvance = dragMoveDist + (dRyDrag * .018);
@@ -2540,25 +2972,26 @@ function updateRigPoseAndMotion(o, g, t) {
     clearTimeout(st.settleTimer);
     st.settleTimer = setTimeout(() => renderVP(), 190);
   }
-  if (dyDrag > .015 && (o.y || 0) < .28 && !clocked) st.jumpPrep = now + 220;
+  if (dyDrag > .015 && (o.y || 0) < .28 && !o._onStairsId && !clocked) st.jumpPrep = now + 220;
 
-  const isActivelyMoving = o.pose !== 'sitting_chair' && (
+  const isActivelyMoving = !isSeatedPose && (
     (isVideo() && (timelineSpeed > .03 || timelineTurnSpeed > 1.5 || (clocked && (isPoseWalk || isPoseRun)))) ||
     now < (st.moveHold || 0)
   );
-  const rawSpeed = o.pose === 'sitting_chair' ? 0 : Math.max(timelineSpeed, timelineTurnSpeed * .02, now < (st.moveHold || 0) ? .68 : 0);
+  const rawSpeed = isSeatedPose ? 0 : Math.max(timelineSpeed, timelineTurnSpeed * .02, now < (st.moveHold || 0) ? .68 : 0);
   const effSpeed = isPoseRun ? Math.max(rawSpeed, 2.3) : isPoseWalk ? Math.max(rawSpeed, .95) : rawSpeed;
-  const isRunning = (isPoseRun || (!isPoseWalk && hasPath && timelineSpeed > (animalish ? .85 : 1.02))) && (o.y || 0) <= .08;
-  const isMoving = (isPoseWalk || isRunning || (isActivelyMoving && effSpeed > .03)) && (o.y || 0) <= .08;
+  const onGroundOrStairs = (o.y || 0) <= .08 || Boolean(o._onStairsId);
+  const isRunning = (isPoseRun || (!isPoseWalk && hasPath && timelineSpeed > (animalish ? .85 : 1.02))) && onGroundOrStairs;
+  const isMoving = (isPoseWalk || isRunning || (isActivelyMoving && effSpeed > .03)) && onGroundOrStairs;
   const locoBlend = (isPoseWalk || isPoseRun) ? 1 : clamp(effSpeed / .32, 0, 1);
   const posePhi = st.phase;
 
   st.x = o.x || 0; st.y = o.y || 0; st.z = o.z || 0; st.ry = o.ry || 0; st.t = now;
   st.isMoving = isMoving;
 
-  const isPrep = crouchPrep > .05 || now < st.jumpPrep || o.pose === 'crouch_prep';
-  const isAirborne = (o.y || 0) > .08 || JUMP_POSES.has(o.pose);
-  const rawAir = JUMP_POSES.has(o.pose) ? 1 : clamp(((o.y || 0) - .01) / .18, 0, 1);
+  const isPrep = !o._onStairsId && !isSeatedPose && (crouchPrep > .05 || now < st.jumpPrep || o.pose === 'crouch_prep');
+  const isAirborne = !o._onStairsId && !isSeatedPose && ((o.y || 0) > .08 || JUMP_POSES.has(o.pose));
+  const rawAir = isSeatedPose || o._onStairsId ? 0 : JUMP_POSES.has(o.pose) ? 1 : clamp(((o.y || 0) - .01) / .18, 0, 1);
   const airBlend = rawAir * rawAir * (3 - 2 * rawAir);
   rig.st = st;
 
@@ -2622,9 +3055,40 @@ function updateRigPoseAndMotion(o, g, t) {
       rightArm.sh.rotation.x = -sL * amp * .76;
       rightArm.elbow.rotation.x = (-.16 - (.5 + .5 * sL) * .28) * locoBlend;
     } else if (airBlend < .99) {
-      checkAutoSitOnChair(o, false);
+      checkAutoSitOnBike(o, false);
+      if (o.pose !== 'riding_bike' && o.pose !== 'riding_bike_back') checkAutoSitOnChair(o, false);
       g.rotation.y = rad(o.ry || 0);
       switch (o.pose || 'standing') {
+        case 'riding_bike': {
+          const bk = (o._bikeId ? objById(o._bikeId) : null) || findAlignedBikeForPerson(o)?.bike || (V().objects || []).find(b => b.model === 'bike');
+          const bkH = bk ? (bk.h || 1.12) : 1.12;
+          const bkY = bk ? (bk.y || 0) : 0;
+          const seatTopY = bkY + bkH * .50;
+          root.position.y = (seatTopY - (o.y || 0)) - h * .435;
+          torsoGrp.rotation.x = .32;
+          headGrp.rotation.x = -.26;
+          leftLeg.hip.rotation.x = -1.08; leftLeg.hip.rotation.z = -.24; leftLeg.knee.rotation.x = 1.48;
+          rightLeg.hip.rotation.x = -1.08; rightLeg.hip.rotation.z = .24; rightLeg.knee.rotation.x = 1.48;
+          leftArm.sh.rotation.x = -1.05; leftArm.sh.rotation.z = -.14; leftArm.elbow.rotation.x = -.32;
+          rightArm.sh.rotation.x = -1.05; rightArm.sh.rotation.z = .14; rightArm.elbow.rotation.x = -.32;
+          rig.seatedChair = true;
+          break;
+        }
+        case 'riding_bike_back': {
+          const bk = (o._bikeId ? objById(o._bikeId) : null) || findAlignedBikeForPerson(o)?.bike || (V().objects || []).find(b => b.model === 'bike');
+          const bkH = bk ? (bk.h || 1.12) : 1.12;
+          const bkY = bk ? (bk.y || 0) : 0;
+          const seatTopY = bkY + bkH * .55;
+          root.position.y = (seatTopY - (o.y || 0)) - h * .435;
+          torsoGrp.rotation.x = .18;
+          headGrp.rotation.x = -.14;
+          leftLeg.hip.rotation.x = -1.12; leftLeg.hip.rotation.z = -.25; leftLeg.knee.rotation.x = 1.52;
+          rightLeg.hip.rotation.x = -1.12; rightLeg.hip.rotation.z = .25; rightLeg.knee.rotation.x = 1.52;
+          leftArm.sh.rotation.x = -.78; leftArm.sh.rotation.z = .16; leftArm.elbow.rotation.x = -.55;
+          rightArm.sh.rotation.x = -.78; rightArm.sh.rotation.z = -.16; rightArm.elbow.rotation.x = -.55;
+          rig.seatedChair = true;
+          break;
+        }
         case 'sitting_chair': {
           const aligned = findAlignedChairForPerson(o);
           const ch = aligned?.chair || (V().objects || []).find(c => c.model === 'chair');
@@ -2693,7 +3157,7 @@ function updateRigPoseAndMotion(o, g, t) {
     }
   } else if (rig.type === 'cat' || rig.type === 'animal') {
     animateQuadruped(rig, o, st, {isRunning, isMoving, isActivelyMoving, posePhi, locoBlend, isPrep, isAirborne, airBlend, crouchPrep, t, vy});
-  } else if (rig.type === 'car') {
+  } else if (rig.type === 'car' || rig.type === 'bike') {
     animateCar(rig, o, st, {vx, vz, vy, vRy, timelineSpeed, isAirborne, dt, isReverse:Boolean(pd?.rev || o._reverseDrag)});
   }
 }
@@ -2884,15 +3348,21 @@ function preciseMinY(root) {
     const geo = n.geometry, pos = geo?.attributes?.position;
     if (!pos) return;
     const me = n.matrixWorld.elements;
-    if (!geo.boundingSphere) geo.computeBoundingSphere();
-    const bs = geo.boundingSphere;
-    if (bs) {
-      const sc = Math.max(Math.hypot(me[0], me[1], me[2]), Math.hypot(me[4], me[5], me[6]), Math.hypot(me[8], me[9], me[10]));
-      const cy = me[1] * bs.center.x + me[5] * bs.center.y + me[9] * bs.center.z + me[13];
-      if (cy - bs.radius * sc >= minY) return;
+    const a = me[1], b = me[5], c = me[9], d = me[13];
+    if (!geo.boundingBox) geo.computeBoundingBox();
+    const bb = geo.boundingBox;
+    if (bb) {
+      const cx = (bb.min.x + bb.max.x) * .5, cy = (bb.min.y + bb.max.y) * .5, cz = (bb.min.z + bb.max.z) * .5;
+      const hx = (bb.max.x - bb.min.x) * .5, hy = (bb.max.y - bb.min.y) * .5, hz = (bb.max.z - bb.min.z) * .5;
+      const boxMinY = (a * cx + b * cy + c * cz + d) - (Math.abs(a) * hx + Math.abs(b) * hy + Math.abs(c) * hz);
+      if (boxMinY >= minY - 1e-4) return;
+      if (Math.abs(a) < 1e-4 && Math.abs(c) < 1e-4 && b > 0) {
+        const exactY = b * bb.min.y + d;
+        if (exactY < minY) minY = exactY;
+        return;
+      }
     }
     const arr = pos.array, cnt = pos.count, stride = pos.itemSize || 3;
-    const a = me[1], b = me[5], c = me[9], d = me[13];
     for (let i = 0; i < cnt; i++) {
       const j = i * stride, y = a * arr[j] + b * arr[j + 1] + c * arr[j + 2] + d;
       if (y < minY) minY = y;
@@ -2904,8 +3374,12 @@ function preciseMinY(root) {
 function syncScene(showSelUI = true) {
   const live = new Set();
   V().objects.forEach(o => {
+    if (o.model === 'bike') syncSeatedBikeRiders(o);
+  });
+  V().objects.forEach(o => {
     live.add(o.id);
-    o.y = Math.max(0, o.y || 0);
+    applyRampAndStairsInteraction(o);
+    if (o.collideG !== false) o.y = Math.max(0, o.y || 0);
     const ref = AC.refs[o.img];
     const sig = [o.model, rnd(o.h, 3), rnd(o.w, 3), o.color, JSON.stringify(o.parts || ''), JSON.stringify(o.children || ''), o.img, o.customId || '', o.model === 'custom' ? (CUSTOM.has(o.customId) ? 'ok' : 'missing') : '', o.model === 'image' ? (ref ? ref.id + ':' + (ref.img.naturalWidth || 0) : 'none') : ''].join('|');
     let e = R.objs.get(o.id);
@@ -2919,9 +3393,9 @@ function syncScene(showSelUI = true) {
     updateRigPoseAndMotion(o, e.g, T);
     if (e.g.userData.customRig) updateCustomClip(o, e.g.userData.customRig, T);
     // Strict ground-plane collision & anti-floating clamp (exact lowest vertex, so spinning wheels / swinging limbs never bounce the object)
-    const carFlatOnGround = o.model === 'car' && (o.y || 0) <= .001 && !JUMP_POSES.has(o.pose) && Math.abs(o.rx || 0) < .05 && Math.abs(o.rz || 0) < .05;
+    const carFlatOnGround = isVehicleModel(o.model) && (o.y || 0) <= .001 && !JUMP_POSES.has(o.pose) && Math.abs(o.rx || 0) < .05 && Math.abs(o.rz || 0) < .05;
     const charMovingOnGround = isRiggedChar(o.model) && e.g.userData.rig?.st?.isMoving && (o.y || 0) <= .001 && !JUMP_POSES.has(o.pose);
-    if (!carFlatOnGround && !charMovingOnGround && o.model !== 'custom' && o.model !== 'group') {
+    if (!carFlatOnGround && !charMovingOnGround && o.model !== 'custom' && o.model !== 'group' && o.collideG !== false) {
       e.g.updateMatrixWorld(true);
       const minY = preciseMinY(e.g);
       if (isFinite(minY)) {
@@ -2990,7 +3464,9 @@ function syncScene(showSelUI = true) {
   }
 }
 function renderVP(sizeOverride) {
-  if (!is3D() || !R) return;
+  if (!is3D()) return;
+  if (!R) initThree();
+  if (!R) return;
   const ar = aspectRatio();
   let w, h;
   if (sizeOverride) ({w, h} = sizeOverride);
@@ -3165,9 +3641,19 @@ function setVpViewMode(m) {
   }
   renderVP();
 }
+function syncFreeCamRowUI() {
+  const row = $('freeCamBtn');
+  if (row) {
+    row.setAttribute('aria-pressed', String(sel === 'camera' || freeCamMode));
+    row.setAttribute('data-cam-sel', String(sel === 'camera'));
+  }
+  const tog = $('freeCamToggle');
+  if (tog) tog.setAttribute('aria-checked', String(freeCamMode));
+  const txt = $('freeCamStateTxt');
+  if (txt) txt.textContent = freeCamMode ? 'ON' : 'OFF';
+}
 function toggleFreeCamMode(forceState) {
   freeCamMode = typeof forceState === 'boolean' ? forceState : !freeCamMode;
-  $('freeCamBtn')?.setAttribute('aria-pressed', String(freeCamMode));
   if (freeCamMode) {
     const cw = camWorld(T), tg = targetAt(T);
     freeCam.target = {
@@ -3186,13 +3672,33 @@ function toggleFreeCamMode(forceState) {
     setVpViewMode(vpViewMode);
     AC.toast('Free Camera OFF — Returned to Camera View');
   }
+  syncFreeCamRowUI();
   objPropsKey = '';
   renderObjects();
   buildTimeline();
   renderVP();
   AC.drawAll();
 }
-$('freeCamBtn')?.addEventListener('click', () => toggleFreeCamMode());
+$('freeCamBtn')?.addEventListener('click', e => {
+  if (e.target.closest('[data-fc-toggle]')) {
+    e.stopPropagation();
+    toggleFreeCamMode();
+    return;
+  }
+  if (!freeCamMode) {
+    toggleFreeCamMode(true);
+  } else if (sel !== 'camera') {
+    selectObj('camera', false);
+    syncFreeCamRowUI();
+    objPropsKey = '';
+    renderObjects();
+    buildTimeline();
+    renderVP();
+    AC.drawAll();
+  } else {
+    toggleFreeCamMode(false);
+  }
+});
 $('vtagOrbit')?.addEventListener('click', () => setVpViewMode('orbit'));
 $('vtagTop')?.addEventListener('click', () => setVpViewMode('top'));
 $('vtagSide')?.addEventListener('click', () => setVpViewMode('side'));
@@ -3238,24 +3744,36 @@ function projectWorldDeltaToAxis(originVec, axisVec, dxPx, dyPx) {
   return (dxPx * vx + dyPx * vy) / lenSq;
 }
 function bindViewportPicking() {
-  const wrap = $('vpWrap'); if (!wrap) return;
+  const wrap = $('vpWrap'); if (!wrap || wrap.dataset.vpPickBound) return;
+  wrap.dataset.vpPickBound = '1';
   let vpDrag = null;
   wrap.addEventListener('mousedown', e => { if (e.button === 1) e.preventDefault(); });
   wrap.addEventListener('auxclick', e => { if (e.button === 1) e.preventDefault(); });
   wrap.addEventListener('pointerdown', e => {
     if (e.target.closest('button, input, select')) return;
-    // Middle mouse button (or Alt+Left-click in Free Camera mode) orbits/pans Free Camera C4D-style
-    if (freeCamMode && (e.button === 1 || (e.button === 0 && e.altKey && !raycastGizmoAt(e.clientX, e.clientY)))) {
+    // Middle mouse button (or Alt+Left-click) orbits/pans Free Camera OR Scene Camera in 3D mode
+    if (e.button === 1 || (e.button === 0 && e.altKey && !raycastGizmoAt(e.clientX, e.clientY))) {
       e.preventDefault(); e.stopPropagation();
       try { wrap.setPointerCapture(e.pointerId); } catch (err) {}
       activeVpDrag = true;
-      vpDrag = {
-        mode:e.shiftKey ? 'freeCamPan' : 'freeCamOrbit',
-        x0:e.clientX, y0:e.clientY,
-        az0:freeCam.az, el0:freeCam.el,
-        tx0:freeCam.target.x, ty0:freeCam.target.y, tz0:freeCam.target.z,
-        moved:false
-      };
+      if (freeCamMode) {
+        vpDrag = {
+          mode:e.shiftKey ? 'freeCamPan' : 'freeCamOrbit',
+          x0:e.clientX, y0:e.clientY,
+          az0:freeCam.az, el0:freeCam.el,
+          tx0:freeCam.target.x, ty0:freeCam.target.y, tz0:freeCam.target.z,
+          moved:false
+        };
+      } else {
+        const cw = camWorld(T);
+        vpDrag = {
+          mode:e.shiftKey ? 'sceneCamPan' : 'sceneCamOrbit',
+          x0:e.clientX, y0:e.clientY,
+          az0:S.az, el0:S.el,
+          cx0:cw.x, cy0:cw.y, cz0:cw.z,
+          moved:false
+        };
+      }
       wrap.style.cursor = 'grabbing';
       return;
     }
@@ -3405,6 +3923,25 @@ function bindViewportPicking() {
       renderVP();
       return;
     }
+    if (vpDrag.mode === 'sceneCamOrbit' || vpDrag.mode === 'sceneCamPan') {
+      const dx = e.clientX - vpDrag.x0, dy = e.clientY - vpDrag.y0;
+      if (Math.hypot(dx, dy) > 1) vpDrag.moved = true;
+      wrap.style.cursor = 'grabbing';
+      if (vpDrag.mode === 'sceneCamPan' || e.shiftKey) {
+        const panScale = Math.max(.002, S.dist * .0022);
+        const sa = rad(S.az);
+        const rx = Math.cos(sa), rz = -Math.sin(sa);
+        const nx = vpDrag.cx0 - dx * panScale * rx;
+        const nz = vpDrag.cz0 - dx * panScale * rz;
+        const ny = Math.max(.05, vpDrag.cy0 + dy * panScale);
+        setCamFromWorldPos(nx, ny, nz);
+      } else {
+        AC.setAz(rnd(norm360(vpDrag.az0 - dx * .45), 1));
+        AC.setEl(rnd(clamp(vpDrag.el0 + dy * .38, -89, 89), 1));
+      }
+      syncObjProps(); renderVP(); AC.drawAll();
+      return;
+    }
     if (vpDrag.mode === 'vpPathEdit') {
       const dx = e.clientX - vpDrag.x0, dy = e.clientY - vpDrag.y0;
       if (Math.hypot(dx, dy) > 1) vpDrag.moved = true;
@@ -3478,6 +4015,7 @@ function bindViewportPicking() {
     if (!vpDrag.moved) return;
     wrap.style.cursor = 'grabbing';
     const scale = Math.max(.002, (freeCamMode ? freeCam.dist : S.dist) * .0022);
+    const clampObjY = v => o.collideG !== false ? Math.max(0, v) : clamp(v, -50, 50);
     const origin = new R.THREE.Vector3(vpDrag.ox, vpDrag.oy + Math.min((o.h || 1) * (o.sy ?? 1) * .48, 1.0), vpDrag.oz);
     const objEuler = new R.THREE.Euler(rad(vpDrag.orx || 0), rad(vpDrag.ory || 0), rad(vpDrag.orz || 0), 'YXZ');
     const axX = new R.THREE.Vector3(1, 0, 0).applyEuler(objEuler).normalize();
@@ -3513,7 +4051,7 @@ function bindViewportPicking() {
       const prevX = o.x || 0, prevZ = o.z || 0;
       const d = projectWorldDeltaToAxis(origin, axX, dx, dy);
       o.x = rnd(vpDrag.ox + axX.x * d, 3);
-      o.y = rnd(Math.max(0, vpDrag.oy + axX.y * d), 3);
+      o.y = rnd(clampObjY(vpDrag.oy + axX.y * d), 3);
       o.z = rnd(vpDrag.oz + axX.z * d, 3);
       smoothTurnRiggedOnDrag(o, prevX, prevZ, o.x, o.z);
     } else if (vpDrag.axis === 'y' || e.altKey) {
@@ -3522,16 +4060,16 @@ function bindViewportPicking() {
         : -dy * scale;
       if (vpDrag.axis === 'y') {
         o.x = rnd(vpDrag.ox + axY.x * d, 3);
-        o.y = rnd(Math.max(0, vpDrag.oy + axY.y * d), 3);
+        o.y = rnd(clampObjY(vpDrag.oy + axY.y * d), 3);
         o.z = rnd(vpDrag.oz + axY.z * d, 3);
       } else {
-        o.y = rnd(Math.max(0, vpDrag.oy + d), 3);
+        o.y = rnd(clampObjY(vpDrag.oy + d), 3);
       }
     } else if (vpDrag.axis === 'z') {
       const prevX = o.x || 0, prevZ = o.z || 0;
       const d = projectWorldDeltaToAxis(origin, axZ, dx, dy);
       o.x = rnd(vpDrag.ox + axZ.x * d, 3);
-      o.y = rnd(Math.max(0, vpDrag.oy + axZ.y * d), 3);
+      o.y = rnd(clampObjY(vpDrag.oy + axZ.y * d), 3);
       o.z = rnd(vpDrag.oz + axZ.z * d, 3);
       smoothTurnRiggedOnDrag(o, prevX, prevZ, o.x, o.z);
     } else if (vpViewMode === 'top') {
@@ -3541,7 +4079,7 @@ function bindViewportPicking() {
       smoothTurnRiggedOnDrag(o, prevX, prevZ, o.x, o.z);
     } else if (vpViewMode === 'side') {
       o.z = rnd(vpDrag.oz - dx * scale, 3);
-      o.y = rnd(Math.max(0, vpDrag.oy - dy * scale), 3);
+      o.y = rnd(clampObjY(vpDrag.oy - dy * scale), 3);
     } else {
       const prevX = o.x || 0, prevZ = o.z || 0;
       const va = rad(freeCamMode ? freeCam.az : S.az);
@@ -3550,6 +4088,13 @@ function bindViewportPicking() {
       o.z = rnd(vpDrag.oz + dx * scale * rz - dy * scale * fz, 3);
       smoothTurnRiggedOnDrag(o, prevX, prevZ, o.x, o.z);
     }
+    if (o.model === 'person') {
+      checkAutoSitOnBike(o, false);
+      if (o.pose !== 'riding_bike' && o.pose !== 'riding_bike_back') checkAutoSitOnChair(o, false);
+    } else if (o.model === 'bike') {
+      syncSeatedBikeRiders(o);
+    }
+    enforceObjectCollisions(o);
     o.placed = true; o.userMoved = true;
     syncObjProps(); renderVP(); AC.drawAll();
   });
@@ -3558,6 +4103,13 @@ function bindViewportPicking() {
     if (vpDrag.mode === 'freeCamOrbit' || vpDrag.mode === 'freeCamPan') {
       vpDrag = null; activeVpDrag = false; wrap.style.cursor = '';
       renderVP();
+      return;
+    }
+    if (vpDrag.mode === 'sceneCamOrbit' || vpDrag.mode === 'sceneCamPan') {
+      const moved = vpDrag.moved;
+      vpDrag = null; activeVpDrag = false; wrap.style.cursor = '';
+      renderVP(); AC.drawAll();
+      if (moved) { autoKey(); AC.save(); AC.changed(); }
       return;
     }
     if (vpDrag.mode === 'vpPathEdit') {
@@ -3589,8 +4141,13 @@ function bindViewportPicking() {
     if (o) { delete o._dragDirX; delete o._dragDirZ; delete o._reverseDrag; }
     const moved = vpDrag.moved; vpDrag = null; activeVpDrag = false; hoverGizmoAxis = null; wrap.style.cursor = '';
     if (moved && o && o.model === 'person') {
-      if (checkAutoSitOnChair(o, true)) { objPropsKey = ''; syncObjProps(); }
+      const bChanged = checkAutoSitOnBike(o, true);
+      const cChanged = (!bChanged && o.pose !== 'riding_bike' && o.pose !== 'riding_bike_back') ? checkAutoSitOnChair(o, true) : false;
+      if (bChanged || cChanged) { objPropsKey = ''; syncObjProps(); }
+    } else if (moved && o && o.model === 'bike') {
+      syncSeatedBikeRiders(o);
     }
+    if (moved && o) enforceObjectCollisions(o);
     renderVP(); AC.drawAll();
     if (moved) { autoKey(); AC.save(); AC.changed(); }
   };
@@ -3605,6 +4162,7 @@ function bindViewportPicking() {
     openObjEditBar(hit.id);
   });
 }
+bindViewportPicking();
 
 /* ---------- Object panel & Bottom Slide-Up Editing Bar (#objEditBar) ---------- */
 const CAM_ICON = '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><rect x="1" y="4" width="10" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="m11 7 4-2v6l-4-2z" fill="currentColor"/></svg>';
@@ -3662,10 +4220,17 @@ function colorSlotsForObject(o) {
         {key:'part:hair', label:'Hair', val:P.hair || '#2a211b'}
       ];
     case 'car':
+    case 'bike':
       return [
-        {key:'color', label:'Body', val:c},
+        {key:'color', label:'Body', val:o.model === 'bike' && c === '#e85d2b' ? '#e11d48' : c},
         {key:'part:trim', label:'Trim', val:P.trim || '#15171c'},
         {key:'part:wheels', label:'Wheels', val:P.wheels || '#dbe0e8'}
+      ];
+    case 'stairs':
+    case 'ramp':
+      return [
+        {key:'color', label:o.model === 'stairs' ? 'Steps' : 'Ramp', val:c === '#e85d2b' ? (o.model === 'stairs' ? '#94a3b8' : '#f59e0b') : c},
+        {key:'part:sec', label:'Rails', val:P.sec || '#475569'}
       ];
     case 'cat':
       return [
@@ -3702,12 +4267,12 @@ function colorSlotsForObject(o) {
 
 function renderObjects() {
   if (!$('objList')) return;
-  if ($('freeCamBtn')) $('freeCamBtn').setAttribute('aria-pressed', String(freeCamMode));
+  syncFreeCamRowUI();
   $('objList').innerHTML = V().objects.map(o => `<button class="objrow${selSet.has(o.id) && selSet.size > 1 ? ' multi-sel' : ''}" draggable="true" data-oid="${o.id}" aria-pressed="${isObjSelected(o.id)}" title="Click to select, double-click to edit name &amp; subject detail"><span class="sw" style="background:${escAttr(o.color)}"></span>${esc(o.label)}<span class="m">${MODELS[o.model] || o.model}${o.model === 'group' && o.children ? ` (${o.children.length})` : ''}</span></button>`).join('');
   bindDragToGroup($('objList'), 'data-oid');
   if ($('objMatchImg')) $('objMatchImg').hidden = !(AC.refs.length && AC.refs.some(r => r.subjects?.length));
   const o = objById(sel);
-  const key = ['vid', o ? o.id + o.model + (o.pose || '') : sel === 'camera' ? 'cam' : 'none', selSet.size, AC.refs.length, freeCamMode ? 'fc1' : 'fc0'].join(':');
+  const key = ['vid', o ? o.id + o.model + (o.pose || '') + (o.collideG === false ? ':cg0' : ':cg1') : sel === 'camera' ? 'cam' : 'none', selSet.size, AC.refs.length, freeCamMode ? 'fc1' : 'fc0'].join(':');
   if (key !== objPropsKey) {
     objPropsKey = key;
     if (sel === 'camera') {
@@ -3718,14 +4283,14 @@ function renderObjects() {
         ${camPosHtml}
         ${camRotHtml}
         ${camLensHtml}
-        <p class="hint">${freeCamMode ? 'Free Camera active: middle-mouse drag in viewport to orbit (Shift+middle-drag to pan), or drag the 3D Camera object gizmo.' : 'Tip: Click Free Camera above to inspect and move the 3D Camera object freely like Cinema 4D.'}</p>
-        <div class="row"><button class="btn ghost sm" id="openCamAngle" style="flex:none">Open Camera angle</button><button class="btn ghost sm" id="openCamLens" style="flex:none">Open Camera &amp; lens</button></div>`;
+        <p class="hint">${freeCamMode ? 'Free Camera active: middle-mouse drag in viewport to orbit (Shift+middle-drag to pan), or drag the 3D Camera object gizmo.' : 'Tip: Middle-mouse drag in viewport to orbit camera (Shift+middle-drag to pan), or switch Free Camera ON above.'}</p>`;
     } else if (!o) { $('objProps').innerHTML = ''; }
     else {
       const n = (k, label, step, min, max) => numField('op_' + k, label, `obj.${o.id}.${k}`, step, min, max, `data-ok="${k}"`);
       const poseMap = poseMapFor(o.model);
       const poseHtml = poseMap ? `<div class="field"><label for="op_pose">Pose (or right-click object)</label><select id="op_pose" data-ok="pose">${Object.entries(poseMap).map(([pk, pv]) => `<option value="${pk}">${pv.name}</option>`).join('')}</select></div>` : '';
-      const posHtml = `<div class="field"><div class="labrow"><label for="op_x">${kb(`obj.${o.id}.pos`, 'Position')}Position (X · Y · Z)</label></div><div class="grid3" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px"><input type="number" id="op_x" data-ok="x" step="0.05" min="-100" max="100" title="Position X" aria-label="Position X"><input type="number" id="op_y" data-ok="y" step="0.05" min="0" max="50" title="Position Y (Lift)" aria-label="Position Y"><input type="number" id="op_z" data-ok="z" step="0.05" min="-100" max="100" title="Position Z" aria-label="Position Z"></div></div>`;
+      const minYAttr = o.collideG === false ? -50 : 0;
+      const posHtml = `<div class="field"><div class="labrow"><label for="op_x">${kb(`obj.${o.id}.pos`, 'Position')}Position (X · Y · Z)</label></div><div class="grid3" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px"><input type="number" id="op_x" data-ok="x" step="0.05" min="-100" max="100" title="Position X" aria-label="Position X"><input type="number" id="op_y" data-ok="y" step="0.05" min="${minYAttr}" max="50" title="Position Y (Lift)" aria-label="Position Y"><input type="number" id="op_z" data-ok="z" step="0.05" min="-100" max="100" title="Position Z" aria-label="Position Z"></div></div>`;
       const rotHtml = `<div class="field"><div class="labrow"><label for="op_rx">${kb(`obj.${o.id}.rot`, 'Rotation')}Rotation (X · Y · Z)</label></div><div class="grid3" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px"><input type="number" id="op_rx" data-ok="rx" step="1" min="-180" max="180" title="Rotation X (Pitch)" aria-label="Rotation X"><input type="number" id="op_ry" data-ok="ry" step="1" min="-720" max="720" title="Rotation Y (Heading)" aria-label="Rotation Y"><input type="number" id="op_rz" data-ok="rz" step="1" min="-180" max="180" title="Rotation Z (Roll)" aria-label="Rotation Z"></div></div>`;
       const scaleHtml = `<div class="field"><div class="labrow"><label for="op_sx">${kb(`obj.${o.id}.scale`, 'Scale')}Scale (X · Y · Z)</label></div><div class="grid3" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px"><input type="number" id="op_sx" data-ok="sx" step="0.05" min="0.05" max="20" title="Scale X" aria-label="Scale X"><input type="number" id="op_sy" data-ok="sy" step="0.05" min="0.05" max="20" title="Scale Y" aria-label="Scale Y"><input type="number" id="op_sz" data-ok="sz" step="0.05" min="0.05" max="20" title="Scale Z" aria-label="Scale Z"></div></div>`;
       const colorSlots = colorSlotsForObject(o).slice(0, 3);
@@ -3777,7 +4342,7 @@ function syncObjProps() {
   if (sel !== 'camera') {
     const o = objById(sel); if (!o || !$('op_label')) return;
     set('op_label', o.label); set('op_h', rnd(o.h, 3)); set('op_w', rnd(o.w, 3)); set('op_x', rnd(o.x, 3)); set('op_z', rnd(o.z, 3));
-    set('op_y', rnd(Math.max(0, o.y || 0), 3)); set('op_ry', Math.round(o.ry));
+    set('op_y', rnd(o.collideG === false ? (o.y || 0) : Math.max(0, o.y || 0), 3)); set('op_ry', Math.round(o.ry));
     set('op_rx', Math.round(o.rx || 0)); set('op_rz', Math.round(o.rz || 0));
     set('op_sx', rnd(o.sx ?? 1, 2)); set('op_sy', rnd(o.sy ?? 1, 2)); set('op_sz', rnd(o.sz ?? 1, 2));
     const slots = colorSlotsForObject(o).slice(0, 3);
@@ -3884,10 +4449,18 @@ $('objProps').addEventListener('input', e => {
   else if (k !== 'model' && k !== 'img' && k !== 'pose' && k !== 'clip') {
     const v = parseFloat(e.target.value);
     if (isFinite(v)) {
-      o[k] = k === 'h' || k === 'w' ? Math.max(.01, v) : k === 'sx' || k === 'sy' || k === 'sz' ? clamp(v, .05, 20) : k === 'y' ? Math.max(0, v) : v;
+      o[k] = k === 'h' || k === 'w' ? Math.max(.01, v) : k === 'sx' || k === 'sy' || k === 'sz' ? clamp(v, .05, 20) : k === 'y' ? (o.collideG === false ? clamp(v, -50, 50) : Math.max(0, v)) : v;
       o.userMoved = true;
       if (k === 'ry') { o._manualRotDirty = true; o._baseRy = o.ry; }
-      if ((k === 'x' || k === 'z') && o.model === 'person') checkAutoSitOnChair(o, false);
+      if (k === 'x' || k === 'z') {
+        if (o.model === 'person') {
+          checkAutoSitOnBike(o, false);
+          if (o.pose !== 'riding_bike' && o.pose !== 'riding_bike_back') checkAutoSitOnChair(o, false);
+        } else if (o.model === 'bike') {
+          syncSeatedBikeRiders(o);
+        }
+        enforceObjectCollisions(o);
+      }
     }
   }
   o.placed = true; AC.changed();
@@ -4448,10 +5021,17 @@ function openObjCtx(x, y, targetObj) {
   const m = document.createElement('div'); m.className = 'ctx'; m.setAttribute('role', 'menu');
   const rows = [];
   if (targetObj) {
+    if (targetObj.collideG === undefined) targetObj.collideG = true;
+    if (targetObj.collideObj === undefined) targetObj.collideObj = false;
+    if (!Array.isArray(targetObj.collideIds)) targetObj.collideIds = [];
     rows.push(['lbl', 'C4D Transform Tool']);
     rows.push(['tool:move', (gizmoMode === 'move' ? '✓ ' : '') + 'Move (X, Y, Z)', 'E']);
     rows.push(['tool:rotate', (gizmoMode === 'rotate' ? '✓ ' : '') + 'Rotate (X, Y, Z)', 'R']);
     rows.push(['tool:scale', (gizmoMode === 'scale' ? '✓ ' : '') + 'Scale (X, Y, Z)', 'T']);
+    rows.push(['sep']);
+    rows.push(['lbl', 'Physics Collider']);
+    rows.push(['collideG', 'Collide with "G"', targetObj.collideG !== false ? 'ON' : 'OFF', targetObj.collideG !== false ? 'ctx-on-green' : '']);
+    rows.push(['collideObjSub']);
     rows.push(['sep']);
     const poseMap = poseMapFor(targetObj.model);
     if (poseMap) {
@@ -4479,13 +5059,85 @@ function openObjCtx(x, y, targetObj) {
     if (clipboardObjs.length) rows.push(['paste', 'Paste Object', 'Ctrl+V']);
   }
   if (!rows.length) return;
-  m.innerHTML = rows.map(([id, n, k]) => id === 'sep' ? '<div class="sepl"></div>' : id === 'lbl' ? `<div style="padding:4px 10px;font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase">${esc(n)}</div>` : `<button role="menuitem" data-oce="${escAttr(id)}">${esc(n)}<span>${esc(k || '')}</span></button>`).join('');
+  const renderCollideSubHtml = () => {
+    const others = (V().objects || []).filter(o => o.id !== targetObj.id);
+    const colOn = Boolean(targetObj.collideObj);
+    const colSet = new Set(targetObj.collideIds || []);
+    const subItems = others.length
+      ? others.map(other => {
+          const ticked = colSet.has(other.id);
+          return `<button role="menuitemcheckbox" aria-checked="${ticked}" class="${ticked ? 'ctx-on-green' : ''}" data-oce-colid="${escAttr(other.id)}"><span style="display:inline-flex;align-items:center;gap:7px"><span class="tick-box">${ticked ? '✓' : ''}</span><span class="sw" style="width:8px;height:8px;border-radius:2px;background:${escAttr(other.color)};display:inline-block"></span>${esc(other.label)}</span><span>${esc(MODELS[other.model] || other.model)}</span></button>`;
+        }).join('')
+      : `<div style="padding:6px 10px;font-size:11px;color:var(--muted)">No other objects in scene</div>`;
+    return `<div class="ctx-sub-wrap" id="ctxCollideObjWrap">
+      <button role="menuitem" data-oce="collideObj" class="${colOn ? 'ctx-on-green' : ''}">Collide with "Obj"<span>${colOn ? `ON (${colSet.size || others.length})` : 'OFF'} ▸</span></button>
+      <div class="ctx-sub" role="menu">
+        <div class="ctx-sub-head">Select Objects to Collide With</div>
+        ${subItems}
+      </div>
+    </div>`;
+  };
+  m.innerHTML = rows.map(([id, n, k, cls]) => {
+    if (id === 'sep') return '<div class="sepl"></div>';
+    if (id === 'lbl') return `<div style="padding:4px 10px;font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase">${esc(n)}</div>`;
+    if (id === 'collideObjSub') return renderCollideSubHtml();
+    return `<button role="menuitem" class="${escAttr(cls || '')}" data-oce="${escAttr(id)}">${esc(n)}<span>${esc(k || '')}</span></button>`;
+  }).join('');
   document.body.appendChild(m); ctxEl = m;
   const r = m.getBoundingClientRect();
-  m.style.left = clamp(x, 8, innerWidth - r.width - 8) + 'px'; m.style.top = clamp(y, 8, innerHeight - r.height - 8) + 'px';
+  const leftPx = clamp(x, 8, innerWidth - r.width - 8);
+  m.style.left = leftPx + 'px'; m.style.top = clamp(y, 8, innerHeight - r.height - 8) + 'px';
+  const subEl = m.querySelector('.ctx-sub');
+  if (subEl && leftPx + r.width + 215 > innerWidth) subEl.classList.add('flip-left');
   m.addEventListener('click', e => {
+    const colTargetBtn = e.target.closest('[data-oce-colid]');
+    if (colTargetBtn && targetObj) {
+      e.stopPropagation();
+      const cid = colTargetBtn.getAttribute('data-oce-colid');
+      if (!Array.isArray(targetObj.collideIds)) targetObj.collideIds = [];
+      const idx = targetObj.collideIds.indexOf(cid);
+      if (idx >= 0) targetObj.collideIds.splice(idx, 1);
+      else targetObj.collideIds.push(cid);
+      targetObj.collideObj = targetObj.collideIds.length > 0;
+      if (targetObj.collideObj) enforceObjectCollisions(targetObj);
+      const tickedNow = targetObj.collideIds.includes(cid);
+      colTargetBtn.setAttribute('aria-checked', String(tickedNow));
+      colTargetBtn.classList.toggle('ctx-on-green', tickedNow);
+      const tickBox = colTargetBtn.querySelector('.tick-box');
+      if (tickBox) tickBox.textContent = tickedNow ? '✓' : '';
+      const mainObjBtn = m.querySelector('[data-oce="collideObj"]');
+      if (mainObjBtn) {
+        const colOn = Boolean(targetObj.collideObj);
+        mainObjBtn.classList.toggle('ctx-on-green', colOn);
+        const sp = mainObjBtn.querySelector('span');
+        const othersCnt = (V().objects || []).filter(o => o.id !== targetObj.id).length;
+        if (sp) sp.textContent = `${colOn ? `ON (${targetObj.collideIds.length || othersCnt})` : 'OFF'} ▸`;
+      }
+      objPropsKey = ''; renderObjects(); renderVP(); AC.drawAll(); AC.save(); AC.changed();
+      return;
+    }
     const b = e.target.closest('[data-oce]'); if (!b) return;
-    const act = b.dataset.oce; closeCtx();
+    const act = b.dataset.oce;
+    if (act === 'collideG' && targetObj) {
+      targetObj.collideG = targetObj.collideG === false ? true : false;
+      if (targetObj.collideG) targetObj.y = Math.max(0, targetObj.y || 0);
+      closeCtx();
+      objPropsKey = ''; renderObjects(); renderVP(); AC.drawAll(); AC.save(); AC.changed();
+      AC.toast(`${targetObj.label}: Collide with "G" ${targetObj.collideG ? 'ON (Ground Lock)' : 'OFF (Can go below ground)'}`);
+      return;
+    }
+    if (act === 'collideObj' && targetObj) {
+      targetObj.collideObj = !targetObj.collideObj;
+      if (targetObj.collideObj && (!Array.isArray(targetObj.collideIds) || !targetObj.collideIds.length)) {
+        targetObj.collideIds = (V().objects || []).filter(o => o.id !== targetObj.id).map(o => o.id);
+      }
+      if (targetObj.collideObj) enforceObjectCollisions(targetObj);
+      closeCtx();
+      objPropsKey = ''; renderObjects(); renderVP(); AC.drawAll(); AC.save(); AC.changed();
+      AC.toast(`${targetObj.label}: Collide with "Obj" ${targetObj.collideObj ? 'ON' : 'OFF'}`);
+      return;
+    }
+    closeCtx();
     if (act === 'tool:move') {
       gizmoMode = 'move'; renderVP(); AC.toast('Tool: Move (X, Y, Z)');
     } else if (act === 'tool:rotate') {
@@ -4570,7 +5222,7 @@ document.addEventListener('contextmenu', e => {
       return;
     }
   }
-  if (e.target.closest('#vpWrap') && !e.target.closest('button, input, select')) {
+  if (e.target.closest('#vpWrap, #top, #side') && !e.target.closest('button, input, select')) {
     e.preventDefault();
     // In Main Viewport Top/Side view, check if right-clicking an Object Animation Path knot or Bezier handle
     if (isVideo() && (vpViewMode === 'top' || vpViewMode === 'side') && vpOverlayView) {

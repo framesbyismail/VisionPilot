@@ -1,7 +1,7 @@
 // VisionPilot Service Worker (sw.js)
 // Defines the files to cache and the serving rules for instant loading & offline support.
 
-const CACHE_VERSION = 'v39';
+const CACHE_VERSION = 'v40';
 const APP_CACHE_NAME = `visionpilot-app-${CACHE_VERSION}`;
 const MODEL_CACHE_NAME = `visionpilot-models-${CACHE_VERSION}`;
 
@@ -9,8 +9,10 @@ const MODEL_CACHE_NAME = `visionpilot-models-${CACHE_VERSION}`;
 const CORE_ASSETS = [
   './',
   './index.html',
+  './splash.html',
   './privacy.html',
   './style.css',
+  './visionpilotbgremover.js',
   './detect.js',
   './ai-bridge.js',
   './core.js',
@@ -27,11 +29,16 @@ const CORE_ASSETS = [
   './logo/visionpilot-logo-full-dark.svg',
   './logo/visionpilot-logo-full-light.svg',
   './logo/visionpilot-wordmark-dark.svg',
-  './logo/visionpilot-wordmark-light.svg'
+  './logo/visionpilot-wordmark-light.svg',
+  'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js'
 ];
 
 // Heavy ONNX / WASM / ML model & tokenizer files cached with Cache-First rules
 const MODEL_ASSET_PATHS = [
+  '/visionpilotbackgroundremovermodel/vision_bundle.mjs',
+  '/visionpilotbackgroundremovermodel/vision_wasm_internal.js',
+  '/visionpilotbackgroundremovermodel/vision_wasm_internal.wasm',
+  '/visionpilotbackgroundremovermodel/selfie_segmenter.tflite',
   '/models/ort.min.js',
   '/models/ort.webgpu.min.js',
   '/models/ort-wasm-simd-threaded.mjs',
@@ -92,9 +99,9 @@ self.addEventListener('install', event => {
       await Promise.allSettled(
         CORE_ASSETS.map(async assetUrl => {
           try {
-            const req = new Request(assetUrl, { cache: 'reload' });
+            const req = new Request(assetUrl, { cache: 'default' });
             const res = await fetch(req);
-            if (res && res.ok) {
+            if (res && (res.ok || res.type === 'opaque')) {
               await cache.put(assetUrl, res);
             }
           } catch (_) {
@@ -158,7 +165,7 @@ self.addEventListener('fetch', event => {
     event.respondWith(
       (async () => {
         const cache = await caches.open(MODEL_CACHE_NAME);
-        const cached = await cache.match(request, { ignoreSearch: false });
+        const cached = await cache.match(request, { ignoreSearch: true }) || await caches.match(request, { ignoreSearch: true });
         if (cached) return cached;
         try {
           const networkRes = await fetch(request);
@@ -176,37 +183,42 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // Rule B: Stale-While-Revalidate for core app shell (HTML, CSS, JS)
-  // Serves cached response immediately for zero-lag startup while updating cache in the background
+  // Rule B: Instant Cache-First with deferred background revalidation for core app shell (HTML, CSS, JS)
+  // Serves cached response in <2ms with zero startup network contention
   event.respondWith(
     (async () => {
       const cache = await caches.open(APP_CACHE_NAME);
       const cached = await cache.match(request, { ignoreSearch: true });
 
-      const networkPromise = fetch(request)
-        .then(networkRes => {
-          if (networkRes && networkRes.status === 200 && networkRes.type === 'basic') {
-            cache.put(request, networkRes.clone()).catch(() => {});
-          }
-          return networkRes;
-        })
-        .catch(() => null);
-
       if (cached) {
-        // Trigger background cache update without blocking response
-        event.waitUntil(networkPromise);
+        // Defer background revalidation so initial page render & scripts run at full speed
+        event.waitUntil(
+          new Promise(resolve => setTimeout(resolve, 2200)).then(() =>
+            fetch(request)
+              .then(networkRes => {
+                if (networkRes && networkRes.status === 200 && networkRes.type === 'basic') {
+                  return cache.put(request, networkRes.clone());
+                }
+              })
+              .catch(() => {})
+          )
+        );
         return cached;
       }
 
-      const networkRes = await networkPromise;
-      if (networkRes) return networkRes;
-
-      // Offline navigation fallback to index.html
-      if (request.mode === 'navigate') {
-        const indexFallback = await cache.match('./index.html') || await cache.match('./');
-        if (indexFallback) return indexFallback;
+      try {
+        const networkRes = await fetch(request);
+        if (networkRes && networkRes.status === 200 && networkRes.type === 'basic') {
+          cache.put(request, networkRes.clone()).catch(() => {});
+        }
+        return networkRes;
+      } catch (_) {
+        if (request.mode === 'navigate') {
+          const indexFallback = await cache.match('./index.html') || await cache.match('./');
+          if (indexFallback) return indexFallback;
+        }
+        return new Response('Offline', { status: 503, statusText: 'Offline' });
       }
-      return new Response('Offline', { status: 503, statusText: 'Offline' });
     })()
   );
 });
