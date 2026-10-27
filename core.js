@@ -7369,120 +7369,58 @@ function applyLayout() {
   requestAnimationFrame(alignBrandWithInputBox);
 }
 
-/* ---------- Remove Background (#pBgRemove) in Image Mode (next to Upscale) ---------- */
+/* ---------- Remove Background (#pBgRemove) in Image Mode (Connected to ChatGPT 4K PNG via Extension Bridge) ---------- */
 let bgRemoveRunning = false;
-let bgRemoveFill = 'transparent';
 let bgRemoveLastDataUrl = '';
 
 function syncBgRemoverUI() {
-  const drop = $('bgRemoveDrop');
-  const thumb = $('bgRemoveThumb');
-  const empty = $('bgRemoveEmpty');
-  const meta = $('bgRemoveMeta');
-  if (!thumb || !empty) return;
-
-  const ref = refs[S.focus?.img] || refs[0];
-  if (ref && ref.src) {
-    if (thumb.getAttribute('src') !== ref.src) thumb.src = ref.src;
-    thumb.hidden = false;
-    empty.hidden = true;
-    const w = ref.img?.naturalWidth || 0;
-    const h = ref.img?.naturalHeight || 0;
-    fitUpscaleDropMedia(drop, thumb, w, h);
-    if (meta) {
-      meta.textContent = w && h ? `${w}×${h} px` : ref.name || 'Reference Image';
-      meta.hidden = false;
-    }
-  } else {
-    thumb.hidden = true;
-    empty.hidden = false;
-    if (meta) meta.hidden = true;
-  }
+  const dlBtn = $('bgRemoveDownloadBtn');
+  const useBtn = $('bgRemoveUseAsInputBtn');
+  const hasOutput = Boolean(bgRemoveLastDataUrl);
+  if (dlBtn) dlBtn.disabled = !hasOutput || bgRemoveRunning;
+  if (useBtn) useBtn.disabled = !hasOutput || bgRemoveRunning;
 }
 window.syncBgRemoverUI = syncBgRemoverUI;
-
-function removeBackgroundSmartFallback(imgEl, bgColor = 'transparent') {
-  const w = imgEl.naturalWidth || imgEl.width || 512;
-  const h = imgEl.naturalHeight || imgEl.height || 512;
-  const cvs = document.createElement('canvas');
-  cvs.width = w;
-  cvs.height = h;
-  const ctx = cvs.getContext('2d');
-  ctx.drawImage(imgEl, 0, 0, w, h);
-  const imgData = ctx.getImageData(0, 0, w, h);
-  const d = imgData.data;
-
-  // Sample border corners & perimeter to estimate background color distribution
-  const samples = [];
-  const stepX = Math.max(1, Math.floor(w / 24));
-  const stepY = Math.max(1, Math.floor(h / 24));
-  const pushPx = (x, y) => {
-    const idx = (clamp(y, 0, h - 1) * w + clamp(x, 0, w - 1)) * 4;
-    samples.push([d[idx], d[idx + 1], d[idx + 2]]);
-  };
-  for (let x = 0; x < w; x += stepX) { pushPx(x, 0); pushPx(x, h - 1); }
-  for (let y = 0; y < h; y += stepY) { pushPx(0, y); pushPx(w - 1, y); }
-  let mr = 0, mg = 0, mb = 0;
-  samples.forEach(([r, g, b]) => { mr += r; mg += g; mb += b; });
-  mr /= Math.max(1, samples.length);
-  mg /= Math.max(1, samples.length);
-  mb /= Math.max(1, samples.length);
-
-  // Compute color distance + edge-connected mask from border with soft feathering
-  const thresh = 56;
-  const softSpan = 28;
-  let fillR = 0, fillG = 0, fillB = 0, useFill = false;
-  if (bgColor && bgColor !== 'transparent') {
-    const tmp = document.createElement('canvas');
-    tmp.width = tmp.height = 1;
-    const tctx = tmp.getContext('2d');
-    tctx.fillStyle = bgColor;
-    tctx.fillRect(0, 0, 1, 1);
-    const p = tctx.getImageData(0, 0, 1, 1).data;
-    fillR = p[0]; fillG = p[1]; fillB = p[2];
-    useFill = true;
-  }
-
-  for (let y = 0; y < h; y++) {
-    const ny = (y / Math.max(1, h - 1)) * 2 - 1;
-    for (let x = 0; x < w; x++) {
-      const nx = (x / Math.max(1, w - 1)) * 2 - 1;
-      const idx = (y * w + x) * 4;
-      const r = d[idx], g = d[idx + 1], b = d[idx + 2];
-      const dist = Math.hypot(r - mr, g - mg, b - mb);
-      const radial = Math.hypot(nx, ny);
-      const effThresh = radial > 0.78 ? thresh * 1.18 : radial < 0.38 ? thresh * 0.52 : thresh;
-      let fgAlpha = 1;
-      if (dist <= effThresh) fgAlpha = 0;
-      else if (dist < effThresh + softSpan) fgAlpha = (dist - effThresh) / softSpan;
-
-      if (useFill) {
-        d[idx]     = Math.round(r * fgAlpha + fillR * (1 - fgAlpha));
-        d[idx + 1] = Math.round(g * fgAlpha + fillG * (1 - fgAlpha));
-        d[idx + 2] = Math.round(b * fgAlpha + fillB * (1 - fgAlpha));
-        d[idx + 3] = 255;
-      } else {
-        d[idx + 3] = Math.round(d[idx + 3] * fgAlpha);
-      }
-    }
-  }
-  ctx.putImageData(imgData, 0, 0);
-  return cvs;
-}
 
 async function runImageBgRemove() {
   if (bgRemoveRunning) return;
   const ref = refs[S.focus?.img] || refs[0];
   const errBox = $('bgRemoveError');
   const loadBox = $('bgRemoveLoading');
-  const resBox = $('bgRemoveResultBox');
-  const resImg = $('bgRemoveResultImg');
   const runBtn = $('bgRemoveRunBtn');
 
-  if (errBox) { errBox.hidden = true; errBox.textContent = ''; }
+  if (errBox) {
+    errBox.hidden = true;
+    errBox.textContent = '';
+  }
   if (!ref || !ref.img) {
-    const msg = 'Upload or drop an image first before removing the background.';
-    if (errBox) { errBox.textContent = msg; errBox.hidden = false; }
+    const msg = 'Upload or drop an image in Input first before removing the background.';
+    if (errBox) {
+      errBox.textContent = msg;
+      errBox.hidden = false;
+    }
+    toast(msg);
+    return;
+  }
+
+  if (!window.VPAIBridge || typeof window.VPAIBridge.runRemoveBackgroundStep !== 'function') {
+    const msg = 'VisionPilot AI Bridge is not available.';
+    if (errBox) {
+      errBox.textContent = msg;
+      errBox.hidden = false;
+    }
+    toast(msg);
+    return;
+  }
+
+  if (!window.VPAIBridge.isExtensionConnected()) {
+    const modal = $('aiExtModal');
+    if (modal) modal.hidden = false;
+    const msg = 'Connect the VisionPilot Chrome Extension to remove backgrounds with ChatGPT (4K PNG).';
+    if (errBox) {
+      errBox.textContent = msg;
+      errBox.hidden = false;
+    }
     toast(msg);
     return;
   }
@@ -7490,134 +7428,83 @@ async function runImageBgRemove() {
   bgRemoveRunning = true;
   if (runBtn) runBtn.disabled = true;
   if (loadBox) loadBox.hidden = false;
+  syncBgRemoverUI();
 
   try {
     if (ref.ready) await ref.ready.catch(() => {});
-    let outCanvas = null;
-    if (window.visionpilotbgremover && typeof window.visionpilotbgremover.removeBackground === 'function') {
-      try {
-        outCanvas = await Promise.race([
-          window.visionpilotbgremover.removeBackground(ref.img, bgRemoveFill),
-          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 3500))
-        ]);
-      } catch (_) {
-        outCanvas = null;
-      }
-    }
-    if (!outCanvas) {
-      outCanvas = removeBackgroundSmartFallback(ref.img, bgRemoveFill);
-    }
-    const dataUrl = outCanvas.toDataURL('image/png');
+    const res = await window.VPAIBridge.runRemoveBackgroundStep(ref);
+    const dataUrl = res.imageDataUrl;
     bgRemoveLastDataUrl = dataUrl;
-    if (resImg) resImg.src = dataUrl;
-    if (resBox) resBox.hidden = false;
+    syncBgRemoverUI();
 
-    const origDataUrl = ref.src;
     await saveHistoryEntry({
       kind: 'bg_removed_image',
-      mainImageDataUrl: origDataUrl,
+      mainImageDataUrl: res.mainImageDataUrl || ref.src,
       upscaledImageDataUrl: dataUrl,
       generatedImageDataUrl: dataUrl,
+      promptText: res.promptText,
       leftLabel: 'Original Image',
-      rightLabel: 'Background Removed',
-      scaleLabel: 'Cutout PNG',
-      modelName: 'VisionPilot Remove BG',
-      aspectRatio: `${outCanvas.width}×${outCanvas.height}`,
-      width: outCanvas.width,
-      height: outCanvas.height,
+      rightLabel: 'Background Removed (4K PNG)',
+      scaleLabel: '4K PNG',
+      modelName: res.modelName || 'ChatGPT Remove BG (4K PNG)',
+      aspectRatio: res.aspectRatio || '',
+      width: res.width || ref.img.naturalWidth || 0,
+      height: res.height || ref.img.naturalHeight || 0,
       createdAt: Date.now()
     });
-    toast('Background removed and saved to History / Library');
+
+    openGeneratedImageResultModal(dataUrl, 'ChatGPT Remove BG (4K PNG)', {
+      mainImageDataUrl: res.mainImageDataUrl || ref.src,
+      promptText: res.promptText,
+      aspectRatio: res.aspectRatio
+    });
+
+    toast('Background removed in 4K PNG via ChatGPT and ready for download');
   } catch (err) {
-    const msg = err?.message || String(err);
-    if (errBox) { errBox.textContent = msg; errBox.hidden = false; }
-    toast('Remove Background error: ' + msg);
+    if (!err?.cancelled) {
+      const msg = err?.message || String(err);
+      if (errBox) {
+        errBox.textContent = msg;
+        errBox.hidden = false;
+      }
+      toast('Remove Background error: ' + msg);
+    }
   } finally {
     bgRemoveRunning = false;
     if (runBtn) runBtn.disabled = false;
     if (loadBox) loadBox.hidden = true;
+    syncBgRemoverUI();
   }
 }
 
 function initBgRemover() {
-  $('bgRemoveThumb')?.addEventListener('load', () => {
-    fitUpscaleDropMedia($('bgRemoveDrop'), $('bgRemoveThumb'));
-  });
-  $('bgRemoveDrop')?.addEventListener('click', () => {
-    if (bgRemoveRunning) return;
-    $('bgRemoveFile')?.click();
-  });
-  $('bgRemoveFile')?.addEventListener('change', (e) => {
-    if (e.target.files && e.target.files.length) {
-      batchFolderState = null;
-      addFiles(e.target.files);
-      if (refs.length) {
-        S.focus.img = refs.length - 1;
-        syncImageUpscalerUI();
-        syncBgRemoverUI();
-      }
-      e.target.value = '';
-    }
-  });
-  ['dragenter', 'dragover'].forEach((ev) => {
-    $('bgRemoveDrop')?.addEventListener(ev, (e) => {
-      if (bgRemoveRunning) return;
-      e.preventDefault();
-      e.stopPropagation();
-      $('bgRemoveDrop').classList.add('over');
-    });
-  });
-  ['dragleave', 'drop'].forEach((ev) => {
-    $('bgRemoveDrop')?.addEventListener(ev, (e) => {
-      if (bgRemoveRunning) return;
-      e.preventDefault();
-      e.stopPropagation();
-      $('bgRemoveDrop').classList.remove('over');
-      if (ev === 'drop' && e.dataTransfer?.files?.length) {
-        batchFolderState = null;
-        addFiles(e.dataTransfer.files);
-        if (refs.length) {
-          S.focus.img = refs.length - 1;
-          syncImageUpscalerUI();
-          syncBgRemoverUI();
-        }
-      }
-    });
-  });
-  $('bgRemoveFillRow')?.addEventListener('click', (e) => {
-    const btn = e.target.closest('[data-bgfill]');
-    if (!btn) return;
-    bgRemoveFill = btn.dataset.bgfill || 'transparent';
-    document.querySelectorAll('#bgRemoveFillRow .bgremove-fill-btn').forEach(b => b.classList.toggle('on', b === btn));
-  });
-  $('bgRemoveCustomColor')?.addEventListener('input', (e) => {
-    bgRemoveFill = e.target.value || '#10b981';
-    document.querySelectorAll('#bgRemoveFillRow .bgremove-fill-btn').forEach(b => b.classList.remove('on'));
-  });
   $('bgRemoveRunBtn')?.addEventListener('click', runImageBgRemove);
   $('bgRemoveDownloadBtn')?.addEventListener('click', () => {
-    if (!bgRemoveLastDataUrl) return;
+    const targetDataUrl = bgRemoveLastDataUrl || (refs[S.focus?.img] || refs[0])?.src || '';
+    if (!targetDataUrl) return;
     const a = document.createElement('a');
-    a.href = bgRemoveLastDataUrl;
-    a.download = `visionpilot-nobg-${Date.now()}.png`;
+    a.href = targetDataUrl;
+    a.download = `visionpilot-4k-nobg-${Date.now()}.png`;
     document.body.appendChild(a);
     a.click();
     setTimeout(() => a.remove(), 250);
-    toast('Downloaded transparent PNG');
+    toast('Downloaded 4K PNG');
   });
   $('bgRemoveUseAsInputBtn')?.addEventListener('click', async () => {
-    if (!bgRemoveLastDataUrl) return;
+    const targetDataUrl = bgRemoveLastDataUrl || '';
+    if (!targetDataUrl) return;
     try {
-      const blob = await dataUrlToBlob(bgRemoveLastDataUrl);
-      const file = new File([blob], `cutout-${Date.now()}.png`, { type: 'image/png' });
+      const blob = await dataUrlToBlob(targetDataUrl);
+      const file = new File([blob], `chatgpt-4k-cutout-${Date.now()}.png`, { type: 'image/png' });
       addFiles([file]);
-      toast('Cutout added to Input Reference Images');
+      showPanel('pRef');
+      toast('Imported 4K cutout PNG into Input');
     } catch (_) {}
   });
   syncBgRemoverUI();
 }
 
-/* ---------- Full-Screen Loading Overlay (#vpLoadingScreen) + Dynamic Brand Color Extraction + Asset Preloading ---------- */
+/* ---------- Adobe-Inspired Loading Screen (#vpLoadingScreen) + Dynamic Brand Color Extraction + Asset Preloading ---------- */
 function applyDynamicModelBrandColorsToLoadingScreen() {
   const modelMap = {
     claude: document.querySelector('#aiModelMenu .m-dot.claude'),
@@ -7646,7 +7533,7 @@ function dismissVpLoadingScreen() {
   screen.classList.add('is-hidden');
   setTimeout(() => {
     if (screen.parentNode) screen.setAttribute('aria-hidden', 'true');
-  }, 520);
+  }, 460);
 }
 window.dismissVpLoadingScreen = dismissVpLoadingScreen;
 
@@ -7654,10 +7541,20 @@ function initLoadingScreen() {
   const screen = $('vpLoadingScreen');
   if (!screen) return;
 
+  // App Version detection: Do NOT apply full dark screen overlay; display only the centered Adobe-style loading box over the interface
+  const isAppVersion =
+    Boolean(window.visionPilotDesktop?.isDesktop) ||
+    new URLSearchParams(location.search).get('app') === '1' ||
+    document.documentElement.getAttribute('data-desktop-app') === 'true';
+  if (isAppVersion) {
+    document.documentElement.setAttribute('data-desktop-app', 'true');
+    document.body.classList.add('is-desktop-app');
+  }
+
   // 1. Dynamically extract Claude (Orange), ChatGPT (Green), Gemini (Blue) brand colors from existing VisionPilot HTML/CSS
   applyDynamicModelBrandColorsToLoadingScreen();
 
-  // 2. Mount the 4:3 Image Ad Carousel (1s auto-rotation, loop, glowing dots, pause/resume)
+  // 2. Mount the 4:3 Image Carousel from /add/ (add_image_1.png, add_image_2.png, ...)
   if (window.VisionPilotAds && $('vpLoadingAdMount')) {
     window.__vpLoadingAdCarousel = window.VisionPilotAds.mount('#vpLoadingAdMount', {
       intervalMs: 1000
@@ -7666,10 +7563,10 @@ function initLoadingScreen() {
 
   // 3. Preload & cache critical assets during the 5-10s loading screen display
   const preloadUrls = [
-    'image1.jpg',
-    'image2.jpg',
-    'image3.jpg',
-    'image4.jpg',
+    'add/add_image_1.png',
+    'add/add_image_2.png',
+    'add/add_image_3.png',
+    'add/add_image_4.png',
     'logo/visionpilot-logo-dark.svg',
     'logo/visionpilot-app-icon.svg',
     'ads.html',
@@ -7683,7 +7580,7 @@ function initLoadingScreen() {
   const fillEl = $('vpLoadProgFill');
   const pctEl = $('vpLoadPctLbl');
   const statusEl = $('vpLoadStatusLbl');
-  const minDisplayMs = 5400; // 5-10 seconds display duration per spec
+  const minDisplayMs = 5400; // 5-10 seconds display duration
   const t0 = performance.now();
   let loadedCount = 0;
 
@@ -7695,6 +7592,8 @@ function initLoadingScreen() {
       });
   });
 
+  if (statusEl) statusEl.textContent = 'Loading...';
+
   const tickLoader = () => {
     if (screen.classList.contains('is-hidden')) return;
     const elapsed = performance.now() - t0;
@@ -7703,12 +7602,7 @@ function initLoadingScreen() {
     const pct = Math.min(100, Math.round((timeRatio * 0.78 + assetRatio * 0.22) * 100));
     if (fillEl) fillEl.style.width = `${Math.max(8, pct)}%`;
     if (pctEl) pctEl.textContent = `${pct}%`;
-    if (statusEl) {
-      if (pct < 35) statusEl.textContent = 'Preloading AI models & UI styles…';
-      else if (pct < 75) statusEl.textContent = 'Caching 3D rig & extension assets…';
-      else if (pct < 100) statusEl.textContent = 'Finalizing workspace…';
-      else statusEl.textContent = 'Ready!';
-    }
+    if (statusEl) statusEl.textContent = 'Loading...';
     if (elapsed >= minDisplayMs && loadedCount >= Math.min(4, preloadUrls.length)) {
       if (fillEl) fillEl.style.width = '100%';
       if (pctEl) pctEl.textContent = '100%';

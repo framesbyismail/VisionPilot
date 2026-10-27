@@ -1027,6 +1027,73 @@
     };
   }
 
+  const REMOVE_BG_CHATGPT_PROMPT =
+    'Accurately isolate the main subject (person or object) with 100% precision. Remove all background elements completely and return the isolated subject as a high-quality PNG image. Upscale the final output resolution to 4K.';
+
+  // Remove Background via ChatGPT (uploads image in the exact same manner as generate_image and sends the 4K cutout prompt)
+  async function runRemoveBackgroundStep(ref) {
+    const imgModel = IMAGE_GEN_MODELS.gpt;
+    if (!isExtensionConnected()) {
+      throw new Error(
+        'Chrome Extension is not connected. Install and enable the VisionPilot Chrome Extension to remove backgrounds with ChatGPT.'
+      );
+    }
+    if (!ref || !ref.img) {
+      throw new Error('Please upload or drop a reference image in Input first before removing the background.');
+    }
+
+    const mainImageDataUrl = renderOriginalImageDataUrl(ref.img);
+    const aspectInfo = getImageAspectRatioInfo(ref.img);
+
+    const res = await sendExtensionRequest(
+      {
+        action: 'generate_image',
+        step: 'remove_background',
+        refId: ref.id || null,
+        model: 'gpt',
+        imageModelId: 'gpt',
+        imageModelName: imgModel.fullName,
+        freshChat: true,
+        aspectRatio: aspectInfo.ratio,
+        width: aspectInfo.width,
+        height: aspectInfo.height,
+        images: [
+          {
+            dataUrl: mainImageDataUrl,
+            name: 'main-source-image.png',
+            mimeType: 'image/png'
+          }
+        ],
+        instruction: REMOVE_BG_CHATGPT_PROMPT
+      },
+      240000
+    );
+
+    if (res?.cancelled || ref.cancelled) {
+      const err = new Error('Background removal cancelled.');
+      err.cancelled = true;
+      throw err;
+    }
+    if (!res || !res.ok || !res.imageDataUrl) {
+      throw new Error(
+        res?.error || 'ChatGPT failed to process or return the background-removed PNG image.'
+      );
+    }
+
+    return {
+      ok: true,
+      imageDataUrl: res.imageDataUrl,
+      mainImageDataUrl,
+      promptText: REMOVE_BG_CHATGPT_PROMPT,
+      modelId: 'gpt',
+      modelName: 'ChatGPT Remove BG (4K PNG)',
+      aspectRatio: aspectInfo.ratio,
+      width: aspectInfo.width,
+      height: aspectInfo.height,
+      createdAt: Date.now()
+    };
+  }
+
   // Minimal CRC32 + Uncompressed ZIP generator for downloading the real extension files
   function crc32(buf) {
     let c = -1;
@@ -1168,6 +1235,7 @@
     STEP_1_REFERENCE_INSTRUCTION,
     STEP_2_SINGLE_FOCUS_INSTRUCTION,
     STEP_3_MULTI_FOCUS_INSTRUCTION,
+    REMOVE_BG_CHATGPT_PROMPT,
     getModelInfo: (id) => AI_MODELS[id] || AI_MODELS.visionpilot,
     getImageModelInfo: (id) => IMAGE_GEN_MODELS[id] || IMAGE_GEN_MODELS.gemini,
     getImageAspectRatioInfo,
@@ -1181,6 +1249,7 @@
     runSingleFocusStep,
     runMultiFocusStep,
     runImageGenerationStep,
+    runRemoveBackgroundStep,
     renderOriginalImageDataUrl,
     renderMarkerScreenshotDataUrl,
     renderLabeledBoxesScreenshotDataUrl,

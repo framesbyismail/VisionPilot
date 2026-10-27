@@ -1,7 +1,7 @@
 // VisionPilot Service Worker (sw.js)
 // Defines the files to cache and the serving rules for instant loading & offline support.
 
-const CACHE_VERSION = 'v41';
+const CACHE_VERSION = 'v42';
 const APP_CACHE_NAME = `visionpilot-app-${CACHE_VERSION}`;
 const MODEL_CACHE_NAME = `visionpilot-models-${CACHE_VERSION}`;
 
@@ -12,13 +12,12 @@ const CORE_ASSETS = [
   './splash.html',
   './ads.html',
   './ads.js',
-  './image1.jpg',
-  './image2.jpg',
-  './image3.jpg',
-  './image4.jpg',
+  './add/add_image_1.png',
+  './add/add_image_2.png',
+  './add/add_image_3.png',
+  './add/add_image_4.png',
   './privacy.html',
   './style.css',
-  './visionpilotbgremover.js',
   './detect.js',
   './ai-bridge.js',
   './core.js',
@@ -42,10 +41,6 @@ const CORE_ASSETS = [
 
 // Heavy ONNX / WASM / ML model & tokenizer files cached with Cache-First rules
 const MODEL_ASSET_PATHS = [
-  '/visionpilotbackgroundremovermodel/vision_bundle.mjs',
-  '/visionpilotbackgroundremovermodel/vision_wasm_internal.js',
-  '/visionpilotbackgroundremovermodel/vision_wasm_internal.wasm',
-  '/visionpilotbackgroundremovermodel/selfie_segmenter.tflite',
   '/models/ort.min.js',
   '/models/ort.webgpu.min.js',
   '/models/ort-wasm-simd-threaded.mjs',

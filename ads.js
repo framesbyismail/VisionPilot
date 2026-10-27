@@ -1,30 +1,59 @@
-// VisionPilot 4:3 Ad Box Carousel (ads.js)
-// Supports any number of images, 1000ms auto-rotation, smooth slide transitions,
-// clickable & draggable glowing dot navigation, and manual pause/resume.
+// VisionPilot 4:3 Image Carousel (ads.js)
+// Dynamically loads sequential images from /add/ (add/add_image_1.png, add/add_image_2.png, ...),
+// auto-scrolls continuously, and locks onto a specific image when a pagination dot is selected.
 (() => {
-  const DEFAULT_IMAGES = [
-    { src: 'image1.jpg', title: 'Direct Claude, ChatGPT & Gemini Simultaneously', badge: 'AI DIRECTOR' },
-    { src: 'image2.jpg', title: '3D Camera Rig, Path Memory & Pose Keyframing', badge: '3D & MOTION' },
-    { src: 'image3.jpg', title: 'Smart Image Detection & Precision Focus Pointing', badge: 'VISION AI' },
-    { src: 'image4.jpg', title: 'In-Browser 4K Upscaler & Instant Background Remover', badge: 'LOCAL ENGINE' }
+  const DEFAULT_ADD_IMAGES = [
+    'add/add_image_1.png',
+    'add/add_image_2.png',
+    'add/add_image_3.png',
+    'add/add_image_4.png'
   ];
 
   function normalizeSlides(input) {
-    const raw = Array.isArray(input) && input.length ? input : (window.VP_AD_IMAGES || DEFAULT_IMAGES);
+    const raw =
+      Array.isArray(input) && input.length
+        ? input
+        : Array.isArray(window.VP_AD_IMAGES) && window.VP_AD_IMAGES.length
+        ? window.VP_AD_IMAGES
+        : DEFAULT_ADD_IMAGES;
     return raw.map((item, idx) => {
       if (typeof item === 'string') {
-        return { src: item, title: `VisionPilot Showcase ${idx + 1}`, badge: `SLIDE ${idx + 1}` };
+        return {
+          src: item,
+          title: `VisionPilot Showcase ${idx + 1}`
+        };
       }
       return {
-        src: item.src || `image${idx + 1}.jpg`,
-        title: item.title || `VisionPilot Showcase ${idx + 1}`,
-        badge: item.badge || `SLIDE ${idx + 1}`
+        src: item.src || `add/add_image_${idx + 1}.png`,
+        title: item.title || `VisionPilot Showcase ${idx + 1}`
       };
     });
   }
 
+  // Probe sequential /add/add_image_N.png files beyond the initial set so any number of images in /add/ is supported
+  function probeAdditionalSequentialImages(startIndex, onFound) {
+    let idx = startIndex;
+    const maxProbe = 50;
+    const tryNext = () => {
+      if (idx > maxProbe) return;
+      const candidate = `add/add_image_${idx}.png`;
+      const tester = new Image();
+      tester.onload = () => {
+        onFound({ src: candidate, title: `VisionPilot Showcase ${idx}` });
+        idx++;
+        tryNext();
+      };
+      tester.onerror = () => {
+        // Stop probing at first missing sequential file
+      };
+      tester.src = candidate;
+    };
+    tryNext();
+  }
+
   function initAdCarousel(container, options = {}) {
-    if (!container || container.dataset.vpCarouselInit === '1') return null;
+    if (!container) return null;
+    if (container.__vpCarouselApi) return container.__vpCarouselApi;
     container.dataset.vpCarouselInit = '1';
 
     let slides = normalizeSlides(options.images);
@@ -33,90 +62,82 @@
         const parsed = JSON.parse(container.dataset.images);
         if (Array.isArray(parsed) && parsed.length) slides = normalizeSlides(parsed);
       } catch (_) {
-        const csv = container.dataset.images.split(',').map(s => s.trim()).filter(Boolean);
+        const csv = container.dataset.images
+          .split(',')
+          .map(s => s.trim())
+          .filter(Boolean);
         if (csv.length) slides = normalizeSlides(csv);
       }
     }
 
     const intervalMs = Number(options.intervalMs) || 1000;
     let currentIndex = 0;
-    let isPaused = false;
+    let lockedIndex = null;
     let timerId = null;
-    let isDraggingDots = false;
 
-    container.innerHTML = `
-      <div class="vp-ad-shell">
-        <div class="vp-ad-viewport" id="vpAdViewport">
-          <div class="vp-ad-track" id="vpAdTrack">
-            ${slides.map((s, i) => `
-              <div class="vp-ad-slide" data-slide-index="${i}" aria-hidden="${i === 0 ? 'false' : 'true'}">
-                <img src="${s.src}" alt="${s.title}" draggable="false" loading="eager">
-                <div class="vp-ad-caption">
-                  <span class="vp-ad-badge">${s.badge}</span>
-                  <strong class="vp-ad-title">${s.title}</strong>
+    function renderMarkup() {
+      container.innerHTML = `
+        <div class="vp-ad-shell">
+          <div class="vp-ad-viewport" id="vpAdViewport">
+            <div class="vp-ad-track" id="vpAdTrack">
+              ${slides
+                .map(
+                  (s, i) => `
+                <div class="vp-ad-slide" data-slide-index="${i}" aria-hidden="${i === currentIndex ? 'false' : 'true'}">
+                  <img src="${s.src}" alt="${s.title}" draggable="false" loading="eager">
                 </div>
-              </div>
-            `).join('')}
+              `
+                )
+                .join('')}
+            </div>
+          </div>
+          <div class="vp-ad-controls">
+            <div class="vp-ad-dots" id="vpAdDots" role="tablist" aria-label="Image carousel pagination">
+              ${slides
+                .map(
+                  (s, i) => `
+                <button type="button" class="vp-ad-dot${i === currentIndex ? ' active' : ''}${lockedIndex === i ? ' locked' : ''}" role="tab" aria-selected="${i === currentIndex ? 'true' : 'false'}" aria-pressed="${lockedIndex === i ? 'true' : 'false'}" aria-label="Select image ${i + 1}" title="Click to lock image ${i + 1}" data-dot-index="${i}">
+                  <span class="vp-ad-dot-core"></span>
+                </button>
+              `
+                )
+                .join('')}
+            </div>
           </div>
         </div>
-        <div class="vp-ad-controls">
-          <div class="vp-ad-dots" id="vpAdDots" role="tablist" aria-label="Ad slide navigation">
-            ${slides.map((s, i) => `
-              <button type="button" class="vp-ad-dot${i === 0 ? ' active' : ''}" role="tab" aria-selected="${i === 0 ? 'true' : 'false'}" aria-label="Go to slide ${i + 1}" data-dot-index="${i}">
-                <span class="vp-ad-dot-core"></span>
-              </button>
-            `).join('')}
-          </div>
-          <button type="button" class="vp-ad-pause-btn" id="vpAdPauseBtn" aria-pressed="false" title="Pause / Resume carousel">
-            <span class="vp-ad-pause-ico" id="vpAdPauseIco">❚❚</span>
-            <span class="vp-ad-pause-lbl" id="vpAdPauseLbl">Auto · 1s</span>
-          </button>
-        </div>
-      </div>
-    `;
+      `;
+    }
 
-    const track = container.querySelector('#vpAdTrack');
-    const dotsWrap = container.querySelector('#vpAdDots');
-    const dotBtns = [...container.querySelectorAll('.vp-ad-dot')];
-    const slideEls = [...container.querySelectorAll('.vp-ad-slide')];
-    const pauseBtn = container.querySelector('#vpAdPauseBtn');
-    const pauseIco = container.querySelector('#vpAdPauseIco');
-    const pauseLbl = container.querySelector('#vpAdPauseLbl');
-    const viewport = container.querySelector('#vpAdViewport');
+    renderMarkup();
+
+    function getElements() {
+      return {
+        track: container.querySelector('#vpAdTrack'),
+        dotsWrap: container.querySelector('#vpAdDots'),
+        dotBtns: [...container.querySelectorAll('.vp-ad-dot')],
+        slideEls: [...container.querySelectorAll('.vp-ad-slide')]
+      };
+    }
 
     function goToSlide(idx) {
       const count = slides.length;
       if (!count) return;
       currentIndex = ((idx % count) + count) % count;
+      const { track, dotBtns, slideEls } = getElements();
       if (track) {
         track.style.transform = `translate3d(-${currentIndex * 100}%, 0, 0)`;
       }
       dotBtns.forEach((btn, i) => {
         const active = i === currentIndex;
+        const locked = lockedIndex === i;
         btn.classList.toggle('active', active);
+        btn.classList.toggle('locked', locked);
         btn.setAttribute('aria-selected', active ? 'true' : 'false');
+        btn.setAttribute('aria-pressed', locked ? 'true' : 'false');
       });
       slideEls.forEach((el, i) => {
         el.setAttribute('aria-hidden', i === currentIndex ? 'false' : 'true');
       });
-    }
-
-    function updatePauseUI() {
-      if (!pauseBtn) return;
-      pauseBtn.setAttribute('aria-pressed', isPaused ? 'true' : 'false');
-      pauseBtn.classList.toggle('paused', isPaused);
-      if (pauseIco) pauseIco.textContent = isPaused ? '▶' : '❚❚';
-      if (pauseLbl) pauseLbl.textContent = isPaused ? 'Paused' : 'Auto · 1s';
-    }
-
-    function startTimer() {
-      stopTimer();
-      if (isPaused || slides.length <= 1) return;
-      timerId = window.setInterval(() => {
-        if (!isPaused && !isDraggingDots) {
-          goToSlide(currentIndex + 1);
-        }
-      }, intervalMs);
     }
 
     function stopTimer() {
@@ -126,118 +147,124 @@
       }
     }
 
-    function setPaused(paused) {
-      isPaused = Boolean(paused);
-      updatePauseUI();
-      if (isPaused) stopTimer();
-      else startTimer();
+    function startTimer() {
+      stopTimer();
+      if (lockedIndex !== null || slides.length <= 1) return;
+      timerId = window.setInterval(() => {
+        if (lockedIndex === null) {
+          goToSlide(currentIndex + 1);
+        }
+      }, intervalMs);
     }
 
-    // Click or drag across dots to navigate manually
-    function pickDotFromClientX(clientX) {
-      if (!dotsWrap || !dotBtns.length) return;
-      let bestIdx = currentIndex;
-      let bestDist = Infinity;
-      dotBtns.forEach((btn, i) => {
-        const r = btn.getBoundingClientRect();
-        const cx = r.left + r.width / 2;
-        const d = Math.abs(clientX - cx);
-        if (d < bestDist) {
-          bestDist = d;
-          bestIdx = i;
-        }
-      });
-      if (bestIdx !== currentIndex) {
-        goToSlide(bestIdx);
+    function selectAndLockDot(index) {
+      const count = slides.length;
+      if (!count) return;
+      const normIdx = ((index % count) + count) % count;
+      if (lockedIndex === normIdx) {
+        // Clicking the already locked dot unlocks and resumes auto-scroll
+        lockedIndex = null;
+        goToSlide(normIdx);
+        startTimer();
+      } else {
+        // Selecting a dot locks that image
+        lockedIndex = normIdx;
+        stopTimer();
+        goToSlide(normIdx);
       }
     }
 
-    dotBtns.forEach(btn => {
-      btn.addEventListener('click', e => {
-        e.stopPropagation();
-        const idx = Number(btn.dataset.dotIndex);
+    function bindEvents() {
+      const { dotsWrap } = getElements();
+      if (!dotsWrap) return;
+      dotsWrap.addEventListener('click', e => {
+        const dot = e.target.closest('.vp-ad-dot');
+        if (!dot) return;
+        const idx = Number(dot.dataset.dotIndex);
         if (Number.isFinite(idx)) {
-          goToSlide(idx);
-          if (!isPaused) startTimer();
-        }
-      });
-    });
-
-    if (dotsWrap) {
-      dotsWrap.addEventListener('pointerdown', e => {
-        isDraggingDots = true;
-        try { dotsWrap.setPointerCapture(e.pointerId); } catch (_) {}
-        pickDotFromClientX(e.clientX);
-      });
-      dotsWrap.addEventListener('pointermove', e => {
-        if (!isDraggingDots) return;
-        pickDotFromClientX(e.clientX);
-      });
-      const endDotDrag = () => {
-        if (!isDraggingDots) return;
-        isDraggingDots = false;
-        if (!isPaused) startTimer();
-      };
-      dotsWrap.addEventListener('pointerup', endDotDrag);
-      dotsWrap.addEventListener('pointercancel', endDotDrag);
-    }
-
-    // Swipe / drag support on the 4:3 viewport itself
-    let swipeStartX = null;
-    if (viewport) {
-      viewport.addEventListener('pointerdown', e => {
-        if (e.target.closest('#vpAdPauseBtn')) return;
-        swipeStartX = e.clientX;
-      });
-      viewport.addEventListener('pointerup', e => {
-        if (swipeStartX === null) return;
-        const dx = e.clientX - swipeStartX;
-        swipeStartX = null;
-        if (Math.abs(dx) > 28) {
-          goToSlide(currentIndex + (dx < 0 ? 1 : -1));
-          if (!isPaused) startTimer();
+          selectAndLockDot(idx);
         }
       });
     }
 
-    if (pauseBtn) {
-      pauseBtn.addEventListener('click', e => {
-        e.stopPropagation();
-        setPaused(!isPaused);
-      });
-    }
-
+    bindEvents();
     startTimer();
 
-    return {
+    // Dynamically discover any extra sequential images in /add/ (e.g. add_image_5.png, add_image_6.png, ...)
+    if (!options.images && !container.dataset.images) {
+      probeAdditionalSequentialImages(slides.length + 1, newSlide => {
+        slides.push(newSlide);
+        renderMarkup();
+        bindEvents();
+        goToSlide(currentIndex);
+      });
+    }
+
+    const api = {
       goToSlide,
-      setPaused,
-      isPaused: () => isPaused,
+      selectAndLockDot,
+      unlock() {
+        lockedIndex = null;
+        goToSlide(currentIndex);
+        startTimer();
+      },
+      pause() {
+        lockedIndex = currentIndex;
+        stopTimer();
+        goToSlide(currentIndex);
+      },
+      play() {
+        lockedIndex = null;
+        goToSlide(currentIndex);
+        startTimer();
+      },
+      setImages(newImages) {
+        slides = normalizeSlides(newImages);
+        currentIndex = 0;
+        lockedIndex = null;
+        renderMarkup();
+        bindEvents();
+        goToSlide(0);
+        startTimer();
+      },
       getCurrentIndex: () => currentIndex,
+      getLockedIndex: () => lockedIndex,
+      isLocked: () => lockedIndex !== null,
       getSlideCount: () => slides.length,
-      destroy: () => stopTimer()
+      destroy() {
+        stopTimer();
+        delete container.__vpCarouselApi;
+        delete container.dataset.vpCarouselInit;
+      }
     };
+
+    container.__vpCarouselApi = api;
+    if (container.id === 'vpLoadingAdMount') {
+      window.__vpLoadingAdCarousel = api;
+    }
+    return api;
   }
 
-  const api = {
-    init: initAdCarousel,
-    mount: (target, opts) => {
-      const el = typeof target === 'string' ? document.querySelector(target) : target;
-      return initAdCarousel(el, opts);
-    },
-    DEFAULT_IMAGES
-  };
-  window.VisionPilotAdsCarousel = api;
-  window.VisionPilotAds = api;
+  function mountAdCarousel(target, options = {}) {
+    const el = typeof target === 'string' ? document.querySelector(target) : target;
+    return initAdCarousel(el, options);
+  }
 
-  const mountAll = () => {
+  window.VisionPilotAdsCarousel = {
+    init: initAdCarousel,
+    mount: mountAdCarousel,
+    DEFAULT_IMAGES: DEFAULT_ADD_IMAGES
+  };
+  window.VisionPilotAds = window.VisionPilotAdsCarousel;
+
+  function bootStandalone() {
     document.querySelectorAll('[data-vp-ad-carousel]').forEach(el => {
       initAdCarousel(el);
     });
-  };
+  }
+
+  bootStandalone();
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', mountAll, { once: true });
-  } else {
-    mountAll();
+    document.addEventListener('DOMContentLoaded', bootStandalone, { once: true });
   }
 })();
