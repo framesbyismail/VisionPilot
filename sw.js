@@ -1,7 +1,7 @@
 // VisionPilot Service Worker (sw.js)
 // Defines the files to cache and the serving rules for instant loading & offline support.
 
-const CACHE_VERSION = 'v40';
+const CACHE_VERSION = 'v41';
 const APP_CACHE_NAME = `visionpilot-app-${CACHE_VERSION}`;
 const MODEL_CACHE_NAME = `visionpilot-models-${CACHE_VERSION}`;
 
@@ -10,6 +10,12 @@ const CORE_ASSETS = [
   './',
   './index.html',
   './splash.html',
+  './ads.html',
+  './ads.js',
+  './image1.jpg',
+  './image2.jpg',
+  './image3.jpg',
+  './image4.jpg',
   './privacy.html',
   './style.css',
   './visionpilotbgremover.js',
@@ -30,6 +36,7 @@ const CORE_ASSETS = [
   './logo/visionpilot-logo-full-light.svg',
   './logo/visionpilot-wordmark-dark.svg',
   './logo/visionpilot-wordmark-light.svg',
+  './visionpilot-ai-bridge-extension.zip',
   'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js'
 ];
 

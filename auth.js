@@ -89,6 +89,14 @@ function advRender() {
 }
 const signIn = p => {
   if (!configured) { AC.toast('Sign-in is not set up yet'); return; }
+  if (window.visionPilotDesktop?.isDesktop && typeof window.visionPilotDesktop.openExternalSignIn === 'function') {
+    const returnUrl = `${location.origin}/api/auth-callback`;
+    const authUrl = `${API}/login/${p}?return=${encodeURIComponent(returnUrl)}`;
+    window.visionPilotDesktop.openExternalSignIn(authUrl);
+    AC.toast('Browser opened for sign-in — will sync automatically once signed in');
+    startDesktopAuthSyncPoll();
+    return;
+  }
   location.href = `${API}/login/${p}?return=${encodeURIComponent(location.href.split('#')[0])}`;
 };
 async function request() {
@@ -128,9 +136,77 @@ async function refresh() {
     else if (r.ok) {
       const was = me?.approved; me = await r.json(); AC.setPro(me.approved);
       if (me.approved && was === false) { AC.hideAdv(); AC.toast('Advanced mode is open. Enjoy!'); }
+      pushSharedSyncState();
     }
   } catch (e) { /* offline: keep the last known state */ }
   render(); advRender();
+}
+function pushSharedSyncState() {
+  try {
+    const payload = {
+      token: token || null,
+      user: me || null,
+      pro: store.get('vp-pro') || null,
+      history: store.get('vp_gen_history_v1') || null,
+      settings: store.get('vp-v4') || null,
+      updatedAt: Date.now()
+    };
+    window.dispatchEvent(new CustomEvent('vp-sync-state-push', { detail: payload }));
+    fetch('http://127.0.0.1:45780/api/sync-state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    }).catch(() => {});
+  } catch (e) {}
+}
+async function pullSharedSyncState() {
+  try {
+    const resp = await fetch('http://127.0.0.1:45780/api/sync-state', { method: 'GET' });
+    if (!resp || !resp.ok) return false;
+    const data = await resp.json();
+    if (!data) return false;
+    let changed = false;
+    if (data.token && data.token !== token) {
+      token = data.token;
+      store.set(KEY, token);
+      changed = true;
+    }
+    if (data.user && (!me || me.email !== data.user.email)) {
+      me = data.user;
+      if (me.approved) AC.setPro(true);
+      changed = true;
+    }
+    if (data.history && !store.get('vp_gen_history_v1')) {
+      store.set('vp_gen_history_v1', data.history);
+    }
+    if (changed) {
+      render();
+      advRender();
+      await refresh();
+      return true;
+    }
+  } catch (e) {}
+  return false;
+}
+let desktopSyncTimer = null;
+function startDesktopAuthSyncPoll() {
+  clearInterval(desktopSyncTimer);
+  let tries = 0;
+  desktopSyncTimer = setInterval(async () => {
+    tries++;
+    const got = await pullSharedSyncState();
+    if (got || tries > 90) clearInterval(desktopSyncTimer);
+  }, 2000);
+}
+if (window.visionPilotDesktop?.onAuthToken) {
+  window.visionPilotDesktop.onAuthToken(newTok => {
+    if (newTok && newTok !== token) {
+      token = newTok;
+      store.set(KEY, token);
+      refresh();
+      AC.toast('Account signed in & synced with browser!');
+    }
+  });
 }
 // while a request waits, check now and then so Advanced opens without a reload
 let pollT;
@@ -154,7 +230,8 @@ hooks.afterSync = () => {
 };
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && token) refresh(); });
 render(); advRender();
-refresh().then(() => {
+pullSharedSyncState().then(() => refresh()).then(() => {
+  if (token) pushSharedSyncState();
   poll();
   if (store.get(AFTER)) { store.set(AFTER, null); if (me && !me.approved) AC.needAdv(); }
 });

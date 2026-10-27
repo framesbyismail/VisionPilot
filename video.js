@@ -8,6 +8,11 @@ const is3D = () => isVideo();
 const V = () => S.video;
 const focusSt = () => S.focus;
 let vpViewMode = 'orbit';
+let pathMemoryMode = false;
+const vpOrthoCam = {
+  top: { panX: 0, panZ: 0, zoom: 1 },
+  side: { panZ: 0, panY: 0.85, zoom: 1 }
+};
 
 /* ---------- easing (animation principles) ---------- */
 const back = 1.70158, back2 = back * 1.525;
@@ -918,6 +923,17 @@ function props() {
       mk('rx', 'Tilt (pitch)', 'num', v => Math.round(v ?? 0) + '°'), mk('rz', 'Roll (lean)', 'num', v => Math.round(v ?? 0) + '°'),
       mk('sx', 'Scale X', 'num', v => rnd(v ?? 1, 2) + '×'), mk('sy', 'Scale Y', 'num', v => rnd(v ?? 1, 2) + '×'), mk('sz', 'Scale Z', 'num', v => rnd(v ?? 1, 2) + '×'),
       mk('h', 'Height', 'num', v => rnd(v, 2) + ' m'), mk('w', 'Width', 'num', v => rnd(v, 2) + ' m'), mk('color', 'Color', 'color', v => v));
+    if (hasPoseModel(o.model)) {
+      P.push({
+        path:`obj.${o.id}.pose`,
+        group:g,
+        name:'Pose',
+        kind:'pose',
+        get:() => o.pose || 'standing',
+        set:v => { o.pose = v || 'standing'; },
+        fmt:v => poseMapFor(o.model)?.[v]?.name || v || 'Standing'
+      });
+    }
   });
   return P;
 }
@@ -986,7 +1002,7 @@ function valueAt(path, t, kind, base) {
   if (!keys || !keys.length) return base;
   const {a, b, e, i, u} = seg(keys, t);
   if (a === b) return a.v;
-  if (kind === 'target') return e < .5 ? a.v : b.v;
+  if (kind === 'target' || kind === 'pose') return e < .5 ? a.v : b.v;
   if (kind === 'color') { const x = hexToRgb(a.v), y = hexToRgb(b.v); return rgbToHex(x.map((v, j) => v + (y[j] - v) * e)); }
   if (a.e !== 'hold' && (a.curve || b.curve || typeof a.cOut === 'number' || typeof b.cIn === 'number')) {
     const p0 = a.v, p3 = b.v;
@@ -1156,12 +1172,159 @@ function recordAll() {
     labels.push('Camera');
   }
   objTargets.forEach(o => {
-    ['x', 'z', 'y', 'ry', 'rx', 'rz', 'sx', 'sy', 'sz'].forEach(k => recPath(`obj.${o.id}.${k}`, k === 'ry' && !!o._manualRotDirty));
+    const keysToRec = ['x', 'z', 'y', 'ry', 'rx', 'rz', 'sx', 'sy', 'sz'].concat(hasPoseModel(o.model) ? ['pose'] : []);
+    keysToRec.forEach(k => recPath(`obj.${o.id}.${k}`, k === 'ry' && !!o._manualRotDirty));
     o._manualRotDirty = false;
+    o._pathMemAnchorT = snap(T);
     labels.push(o.label);
   });
   buildTimeline(); AC.save(); AC.changed();
   AC.toast(`${labels.join(' + ') || 'Camera'} keyed at frame ${frameOf(T)}`);
+}
+function startPathMemorySample(o) {
+  if (!pathMemoryMode || !isVideo() || !o) return;
+  o._pathMemSamples = [{
+    x: rnd(o.x || 0, 3),
+    y: rnd(o.y || 0, 3),
+    z: rnd(o.z || 0, 3),
+    ry: rnd(o.ry || 0, 1),
+    tWall: performance.now()
+  }];
+}
+function pushPathMemorySample(o) {
+  if (!pathMemoryMode || !isVideo() || !o) return;
+  if (!Array.isArray(o._pathMemSamples) || !o._pathMemSamples.length) {
+    startPathMemorySample(o);
+    return;
+  }
+  const last = o._pathMemSamples[o._pathMemSamples.length - 1];
+  const dist = Math.hypot((o.x || 0) - last.x, (o.y || 0) - last.y, (o.z || 0) - last.z);
+  const dRy = Math.abs(signed((o.ry || 0) - last.ry));
+  if (dist >= 0.012 || dRy >= 2.0) {
+    o._pathMemSamples.push({
+      x: rnd(o.x || 0, 3),
+      y: rnd(o.y || 0, 3),
+      z: rnd(o.z || 0, 3),
+      ry: rnd(o.ry || 0, 1),
+      tWall: performance.now()
+    });
+  }
+}
+function commitPathMemorySamples(o) {
+  if (!pathMemoryMode || !isVideo() || !o || !Array.isArray(o._pathMemSamples) || o._pathMemSamples.length < 2) {
+    if (o) delete o._pathMemSamples;
+    return false;
+  }
+  const raw = o._pathMemSamples.slice();
+  delete o._pathMemSamples;
+  const finalPt = {
+    x: rnd(o.x || 0, 3),
+    y: rnd(o.y || 0, 3),
+    z: rnd(o.z || 0, 3),
+    ry: rnd(o.ry || 0, 1),
+    tWall: performance.now()
+  };
+  const lastRaw = raw[raw.length - 1];
+  if (Math.hypot(finalPt.x - lastRaw.x, finalPt.y - lastRaw.y, finalPt.z - lastRaw.z) > 1e-4) {
+    raw.push(finalPt);
+  }
+  let tEnd = snap(T);
+  if (tEnd <= frameDur() * 0.5) {
+    tEnd = snap(Math.min(S.video.duration || 5, Math.max(1.5, S.video.duration || 5)));
+    T = tEnd;
+  }
+  let tStart = 0;
+  const existingTimes = new Set();
+  ['x', 'y', 'z'].forEach(ax => {
+    (tracks()[`obj.${o.id}.${ax}`] || []).forEach(k => {
+      if (k.t < tEnd - frameDur() * 0.5) existingTimes.add(rnd(k.t, 4));
+    });
+  });
+  if (typeof o._pathMemAnchorT === 'number' && o._pathMemAnchorT < tEnd - frameDur() * 0.5) {
+    tStart = o._pathMemAnchorT;
+  } else if (existingTimes.size) {
+    tStart = Math.max(...existingTimes);
+  }
+  const span = Math.max(frameDur(), tEnd - tStart);
+  const totalFrames = Math.max(2, Math.round(span * fps()));
+  const maxKeys = clamp(totalFrames + 1, 2, 36);
+  // Check which axes actually changed during this drag stroke
+  let dxSpan = 0, dySpan = 0, dzSpan = 0;
+  for (let i = 1; i < raw.length; i++) {
+    dxSpan = Math.max(dxSpan, Math.abs(raw[i].x - raw[0].x));
+    dySpan = Math.max(dySpan, Math.abs(raw[i].y - raw[0].y));
+    dzSpan = Math.max(dzSpan, Math.abs(raw[i].z - raw[0].z));
+  }
+  const onlyY = dySpan > 0.005 && dxSpan < 0.004 && dzSpan < 0.004;
+  const axesToBake = onlyY ? ['y'] : (dySpan > 0.005 ? ['x', 'y', 'z', 'ry'] : ['x', 'z', 'ry']);
+  // Compute cumulative arc length (with small time weight so pauses/reversals stay faithful)
+  const cum = [0];
+  for (let i = 1; i < raw.length; i++) {
+    const dSpace = Math.hypot(raw[i].x - raw[i - 1].x, raw[i].y - raw[i - 1].y, raw[i].z - raw[i - 1].z);
+    const dRot = Math.abs(signed(raw[i].ry - raw[i - 1].ry)) * 0.003;
+    cum.push(cum[i - 1] + Math.max(0.002, dSpace + dRot));
+  }
+  const totalLen = cum[cum.length - 1] || 1;
+  const numSamples = Math.min(raw.length, maxKeys);
+  const baked = [];
+  for (let s = 0; s < numSamples; s++) {
+    const u = numSamples === 1 ? 1 : s / (numSamples - 1);
+    const targetL = u * totalLen;
+    let idx = 0;
+    while (idx < cum.length - 2 && cum[idx + 1] < targetL) idx++;
+    const segLen = Math.max(1e-6, cum[idx + 1] - cum[idx]);
+    const f = clamp((targetL - cum[idx]) / segLen, 0, 1);
+    const A = raw[idx], B = raw[idx + 1] || A;
+    const kt = snap(tStart + u * span);
+    if (baked.length && Math.abs(baked[baked.length - 1].t - kt) < frameDur() * 0.45) {
+      if (s === numSamples - 1) baked[baked.length - 1] = { t: kt, x: B.x, y: B.y, z: B.z, ry: B.ry };
+      continue;
+    }
+    baked.push({
+      t: kt,
+      x: rnd(A.x + (B.x - A.x) * f, 3),
+      y: rnd(A.y + (B.y - A.y) * f, 3),
+      z: rnd(A.z + (B.z - A.z) * f, 3),
+      ry: rnd(A.ry + signed(B.ry - A.ry) * f, 1)
+    });
+  }
+  if (baked.length < 2) {
+    baked.unshift({ t: snap(tStart), x: raw[0].x, y: raw[0].y, z: raw[0].z, ry: raw[0].ry });
+  }
+  baked[0].t = snap(tStart);
+  baked[baked.length - 1].t = snap(tEnd);
+  baked[baked.length - 1].x = finalPt.x;
+  baked[baked.length - 1].y = finalPt.y;
+  baked[baked.length - 1].z = finalPt.z;
+  baked[baked.length - 1].ry = finalPt.ry;
+
+  axesToBake.forEach(ax => {
+    const path = `obj.${o.id}.${ax}`;
+    const existing = tracks()[path] || [];
+    tracks()[path] = existing.filter(k => k.t < tStart - frameDur() * 0.45 || k.t > tEnd + frameDur() * 0.45);
+    baked.forEach(pt => {
+      const k = upsertKey(path, pt.t, pt[ax], 'linear');
+      if (ax === 'ry') k.userRot = true;
+    });
+    lastApplied[path] = o[ax];
+  });
+  if (!onlyY && !(tracks()[`obj.${o.id}.y`]?.length)) {
+    upsertKey(`obj.${o.id}.y`, snap(tStart), raw[0].y, 'linear');
+    upsertKey(`obj.${o.id}.y`, snap(tEnd), finalPt.y, 'linear');
+    lastApplied[`obj.${o.id}.y`] = o.y;
+  }
+  if (typeof pathCache !== 'undefined') pathCache.delete(o.id);
+  V().path = true;
+  $('vpPath')?.setAttribute('aria-pressed', 'true');
+  buildTimeline();
+  apply(T);
+  updateTimeUI();
+  renderVP();
+  AC.drawAll();
+  AC.save();
+  AC.changed();
+  AC.toast(`Path Memory recorded (${baked.length} keys, frame ${frameOf(tStart)} → ${frameOf(tEnd)})`);
+  return true;
 }
 const allKeyTimes = () => [...new Set(Object.values(tracks()).flat().map(k => rnd(k.t, 4)))].sort((a, b) => a - b);
 const groupOfPath = p => p.startsWith('cam.') ? 'Camera' : p === 'focus' || p.startsWith('focus.') ? 'Focus' : p.startsWith('obj.') ? 'obj:' + p.split('.')[1] : p;
@@ -1836,8 +1999,10 @@ hooks.dragViewObj = (name, v, objId, x, y, isEnd) => {
     }
     if (o.model === 'bike') syncSeatedBikeRiders(o);
     enforceObjectCollisions(o);
-    autoKey();
-    AC.save();
+    if (!commitPathMemorySamples(o)) {
+      autoKey();
+      AC.save();
+    }
     return;
   }
   const tg = v.T || targetAt(T);
@@ -1845,6 +2010,9 @@ hooks.dragViewObj = (name, v, objId, x, y, isEnd) => {
     if (activePathDrag.kind === 'pathLine') return;
     dragPathKnotOrHandleInView(name, v, activePathDrag, x, y);
     return;
+  }
+  if (pathMemoryMode && isVideo() && (!Array.isArray(o._pathMemSamples) || !o._pathMemSamples.length)) {
+    startPathMemorySample(o);
   }
   if (name === 'top') {
     const prevX = o.x || 0, prevZ = o.z || 0;
@@ -1862,6 +2030,7 @@ hooks.dragViewObj = (name, v, objId, x, y, isEnd) => {
   }
   if (o.model === 'bike') syncSeatedBikeRiders(o);
   enforceObjectCollisions(o);
+  if (pathMemoryMode && isVideo()) pushPathMemorySample(o);
   o.placed = true;
   o.userMoved = true;
   syncObjProps();
@@ -1973,6 +2142,12 @@ function initThree() {
   new ResizeObserver(() => renderVP()).observe($('vpWrap'));
   $('vpWrap').addEventListener('wheel', e => {
     e.preventDefault();
+    if (vpViewMode === 'top' || vpViewMode === 'side') {
+      const nav = vpOrthoCam[vpViewMode];
+      nav.zoom = clamp((nav.zoom || 1) * Math.exp(-e.deltaY * .0012), 0.2, 8);
+      renderVP();
+      return;
+    }
     if (freeCamMode && vpViewMode === 'orbit') {
       freeCam.dist = clamp(freeCam.dist * Math.exp(e.deltaY * .0012), .4, 80);
       renderVP();
@@ -3058,87 +3233,138 @@ function updateRigPoseAndMotion(o, g, t) {
       checkAutoSitOnBike(o, false);
       if (o.pose !== 'riding_bike' && o.pose !== 'riding_bike_back') checkAutoSitOnChair(o, false);
       g.rotation.y = rad(o.ry || 0);
-      switch (o.pose || 'standing') {
-        case 'riding_bike': {
-          const bk = (o._bikeId ? objById(o._bikeId) : null) || findAlignedBikeForPerson(o)?.bike || (V().objects || []).find(b => b.model === 'bike');
-          const bkH = bk ? (bk.h || 1.12) : 1.12;
-          const bkY = bk ? (bk.y || 0) : 0;
-          const seatTopY = bkY + bkH * .50;
-          root.position.y = (seatTopY - (o.y || 0)) - h * .435;
-          torsoGrp.rotation.x = .32;
-          headGrp.rotation.x = -.26;
-          leftLeg.hip.rotation.x = -1.08; leftLeg.hip.rotation.z = -.24; leftLeg.knee.rotation.x = 1.48;
-          rightLeg.hip.rotation.x = -1.08; rightLeg.hip.rotation.z = .24; rightLeg.knee.rotation.x = 1.48;
-          leftArm.sh.rotation.x = -1.05; leftArm.sh.rotation.z = -.14; leftArm.elbow.rotation.x = -.32;
-          rightArm.sh.rotation.x = -1.05; rightArm.sh.rotation.z = .14; rightArm.elbow.rotation.x = -.32;
-          rig.seatedChair = true;
-          break;
-        }
-        case 'riding_bike_back': {
-          const bk = (o._bikeId ? objById(o._bikeId) : null) || findAlignedBikeForPerson(o)?.bike || (V().objects || []).find(b => b.model === 'bike');
-          const bkH = bk ? (bk.h || 1.12) : 1.12;
-          const bkY = bk ? (bk.y || 0) : 0;
-          const seatTopY = bkY + bkH * .55;
-          root.position.y = (seatTopY - (o.y || 0)) - h * .435;
-          torsoGrp.rotation.x = .18;
-          headGrp.rotation.x = -.14;
-          leftLeg.hip.rotation.x = -1.12; leftLeg.hip.rotation.z = -.25; leftLeg.knee.rotation.x = 1.52;
-          rightLeg.hip.rotation.x = -1.12; rightLeg.hip.rotation.z = .25; rightLeg.knee.rotation.x = 1.52;
-          leftArm.sh.rotation.x = -.78; leftArm.sh.rotation.z = .16; leftArm.elbow.rotation.x = -.55;
-          rightArm.sh.rotation.x = -.78; rightArm.sh.rotation.z = -.16; rightArm.elbow.rotation.x = -.55;
-          rig.seatedChair = true;
-          break;
-        }
-        case 'sitting_chair': {
-          const aligned = findAlignedChairForPerson(o);
-          const ch = aligned?.chair || (V().objects || []).find(c => c.model === 'chair');
-          const chH = ch ? (ch.h || .86) : .86;
-          const chY = ch ? Math.max(0, ch.y || 0) : 0;
-          const seatTopY = chY + chH * .48 + Math.max(.03, chH * .05) / 2;
-          root.position.y = (seatTopY - Math.max(0, o.y || 0)) - h * .422;
-          if (aligned) {
-            const targetLocalX = clamp(aligned.localX, -aligned.W * .12, aligned.W * .12);
-            const targetLocalZ = -aligned.D * .12;
-            root.position.x = (targetLocalX - aligned.localX) / (g.scale.x || 1);
-            root.position.z = targetLocalZ - aligned.localZ;
-          } else {
-            root.position.z = 0;
+      const evalPersonPoseTarget = poseName => {
+        const S0 = {
+          rx: 0, ry: 0, rz: 0,
+          tx: 0, ty: 0, tz: 0,
+          hx: 0, hy: 0, hz: 0,
+          lShX: 0, lShY: 0, lShZ: -.09, lElX: 0, lElY: 0, lElZ: 0,
+          rShX: 0, rShY: 0, rShZ: .09, rElX: 0, rElY: 0, rElZ: 0,
+          lHipX: 0, lHipY: 0, lHipZ: 0, lKneeX: 0,
+          rHipX: 0, rHipY: 0, rHipZ: 0, rKneeX: 0,
+          seatedChair: false
+        };
+        switch (poseName || 'standing') {
+          case 'riding_bike': {
+            const bk = (o._bikeId ? objById(o._bikeId) : null) || findAlignedBikeForPerson(o)?.bike || (V().objects || []).find(b => b.model === 'bike');
+            const bkH = bk ? (bk.h || 1.12) : 1.12;
+            const bkY = bk ? (bk.y || 0) : 0;
+            const seatTopY = bkY + bkH * .50;
+            S0.ry = (seatTopY - (o.y || 0)) - h * .435;
+            S0.tx = .32; S0.hx = -.26;
+            S0.lHipX = -1.08; S0.lHipZ = -.24; S0.lKneeX = 1.48;
+            S0.rHipX = -1.08; S0.rHipZ = .24; S0.rKneeX = 1.48;
+            S0.lShX = -1.05; S0.lShZ = -.14; S0.lElX = -.32;
+            S0.rShX = -1.05; S0.rShZ = .14; S0.rElX = -.32;
+            S0.seatedChair = true;
+            break;
           }
-          const hipWorldY = seatTopY + h * .048;
-          const alpha = Math.asin(clamp((hipWorldY - h * .2405) / (h * .23), -.35, .65));
-          const bend = Math.PI / 2 - alpha;
-          leftLeg.hip.rotation.x = -bend; leftLeg.knee.rotation.x = bend;
-          rightLeg.hip.rotation.x = -bend; rightLeg.knee.rotation.x = bend;
-          leftArm.sh.rotation.x = -.28; leftArm.elbow.rotation.x = -.85;
-          rightArm.sh.rotation.x = -.28; rightArm.elbow.rotation.x = -.85;
-          rig.seatedChair = true;
-          break;
+          case 'riding_bike_back': {
+            const bk = (o._bikeId ? objById(o._bikeId) : null) || findAlignedBikeForPerson(o)?.bike || (V().objects || []).find(b => b.model === 'bike');
+            const bkH = bk ? (bk.h || 1.12) : 1.12;
+            const bkY = bk ? (bk.y || 0) : 0;
+            const seatTopY = bkY + bkH * .55;
+            S0.ry = (seatTopY - (o.y || 0)) - h * .435;
+            S0.tx = .18; S0.hx = -.14;
+            S0.lHipX = -1.12; S0.lHipZ = -.25; S0.lKneeX = 1.52;
+            S0.rHipX = -1.12; S0.rHipZ = .25; S0.rKneeX = 1.52;
+            S0.lShX = -.78; S0.lShZ = .16; S0.lElX = -.55;
+            S0.rShX = -.78; S0.rShZ = -.16; S0.rElX = -.55;
+            S0.seatedChair = true;
+            break;
+          }
+          case 'sitting_chair': {
+            const aligned = findAlignedChairForPerson(o);
+            const ch = aligned?.chair || (V().objects || []).find(c => c.model === 'chair');
+            const chH = ch ? (ch.h || .86) : .86;
+            const chY = ch ? Math.max(0, ch.y || 0) : 0;
+            const seatTopY = chY + chH * .48 + Math.max(.03, chH * .05) / 2;
+            S0.ry = (seatTopY - Math.max(0, o.y || 0)) - h * .422;
+            if (aligned) {
+              const targetLocalX = clamp(aligned.localX, -aligned.W * .12, aligned.W * .12);
+              const targetLocalZ = -aligned.D * .12;
+              S0.rx = (targetLocalX - aligned.localX) / (g.scale.x || 1);
+              S0.rz = targetLocalZ - aligned.localZ;
+            }
+            const hipWorldY = seatTopY + h * .048;
+            const alpha = Math.asin(clamp((hipWorldY - h * .2405) / (h * .23), -.35, .65));
+            const bend = Math.PI / 2 - alpha;
+            S0.lHipX = -bend; S0.lKneeX = bend;
+            S0.rHipX = -bend; S0.rKneeX = bend;
+            S0.lShX = -.28; S0.lElX = -.85;
+            S0.rShX = -.28; S0.rElX = -.85;
+            S0.seatedChair = true;
+            break;
+          }
+          case 'sitting_ground':
+            S0.ry = -h * .38;
+            S0.lHipX = -1.35; S0.lHipZ = -.25; S0.lKneeX = 1.6;
+            S0.rHipX = -1.35; S0.rHipZ = .25; S0.rKneeX = 1.6;
+            S0.lShX = -.2; S0.lElX = -.5;
+            S0.rShX = -.2; S0.rElX = -.5;
+            break;
+          case 'crouch_prep':
+            S0.ry = -h * .12;
+            S0.tx = .34; S0.hx = -.22;
+            S0.lHipX = -.78; S0.lKneeX = 1.32;
+            S0.rHipX = -.78; S0.rKneeX = 1.32;
+            S0.lShX = .58; S0.lElX = -.42;
+            S0.rShX = .58; S0.rElX = -.42;
+            break;
+          case 'jumping_pose':
+            S0.tx = -.08;
+            S0.lShX = -2.1; S0.lShZ = -.35; S0.lElX = -.35;
+            S0.rShX = -2.1; S0.rShZ = .35; S0.rElX = -.35;
+            S0.lHipX = -.55; S0.lKneeX = .95;
+            S0.rHipX = .25; S0.rKneeX = .65;
+            break;
+          case 'waving':
+            S0.rShZ = 2.35; S0.rShX = -.25; S0.rElZ = .45;
+            S0.lShZ = -.12;
+            break;
+          case 'arms_crossed':
+            S0.lShX = -.65; S0.lShZ = .38; S0.lElY = .85; S0.lElX = -1.1;
+            S0.rShX = -.65; S0.rShZ = -.38; S0.rElY = -.85; S0.rElX = -1.1;
+            break;
+          case 'pointing':
+            S0.rShX = -1.48; S0.rElX = -.08;
+            S0.hy = -.08;
+            break;
+          case 'thinking':
+            S0.rShX = -.95; S0.rShZ = -.25; S0.rElX = -1.65;
+            S0.lShX = -.45; S0.lElX = -1.15;
+            S0.hx = .12;
+            break;
         }
-        case 'sitting_ground':
-          root.position.y = -h * .38;
-          leftLeg.hip.rotation.x = -1.35; leftLeg.hip.rotation.z = -.25; leftLeg.knee.rotation.x = 1.6;
-          rightLeg.hip.rotation.x = -1.35; rightLeg.hip.rotation.z = .25; rightLeg.knee.rotation.x = 1.6;
-          leftArm.sh.rotation.x = -.2; leftArm.elbow.rotation.x = -.5;
-          rightArm.sh.rotation.x = -.2; rightArm.elbow.rotation.x = -.5;
-          break;
-        case 'waving':
-          rightArm.sh.rotation.z = 2.35; rightArm.sh.rotation.x = -.25; rightArm.elbow.rotation.z = .45;
-          leftArm.sh.rotation.z = -.12;
-          break;
-        case 'arms_crossed':
-          leftArm.sh.rotation.x = -.65; leftArm.sh.rotation.z = .38; leftArm.elbow.rotation.y = .85; leftArm.elbow.rotation.x = -1.1;
-          rightArm.sh.rotation.x = -.65; rightArm.sh.rotation.z = -.38; rightArm.elbow.rotation.y = -.85; rightArm.elbow.rotation.x = -1.1;
-          break;
-        case 'pointing':
-          rightArm.sh.rotation.x = -1.48; rightArm.elbow.rotation.x = -.08;
-          headGrp.rotation.y = -.08;
-          break;
-        case 'thinking':
-          rightArm.sh.rotation.x = -.95; rightArm.sh.rotation.z = -.25; rightArm.elbow.rotation.x = -1.65;
-          leftArm.sh.rotation.x = -.45; leftArm.elbow.rotation.x = -1.15;
-          headGrp.rotation.x = .12;
-          break;
+        return S0;
+      };
+      const poseTrack = isVideo() ? tracks()[`obj.${o.id}.pose`] : null;
+      let PState = null;
+      if (poseTrack && poseTrack.length >= 2) {
+        const {a: pkA, b: pkB, e: pkE} = seg(poseTrack, t);
+        if (pkA !== pkB && pkA.v !== pkB.v && pkA.e !== 'hold') {
+          const SA = evalPersonPoseTarget(pkA.v);
+          const SB = evalPersonPoseTarget(pkB.v);
+          PState = {};
+          Object.keys(SA).forEach(k => {
+            if (typeof SA[k] === 'number') PState[k] = SA[k] + (SB[k] - SA[k]) * pkE;
+            else PState[k] = pkE < .5 ? SA[k] : SB[k];
+          });
+        }
       }
+      if (!PState) PState = evalPersonPoseTarget(o.pose || 'standing');
+      root.position.set(PState.rx, PState.ry, PState.rz);
+      torsoGrp.rotation.set(PState.tx, PState.ty, PState.tz);
+      headGrp.rotation.set(PState.hx, PState.hy, PState.hz);
+      leftArm.sh.rotation.set(PState.lShX, PState.lShY, PState.lShZ);
+      leftArm.elbow.rotation.set(PState.lElX, PState.lElY, PState.lElZ);
+      rightArm.sh.rotation.set(PState.rShX, PState.rShY, PState.rShZ);
+      rightArm.elbow.rotation.set(PState.rElX, PState.rElY, PState.rElZ);
+      leftLeg.hip.rotation.set(PState.lHipX, PState.lHipY, PState.lHipZ);
+      leftLeg.knee.rotation.x = PState.lKneeX;
+      rightLeg.hip.rotation.set(PState.rHipX, PState.rHipY, PState.rHipZ);
+      rightLeg.knee.rotation.x = PState.rKneeX;
+      rig.seatedChair = Boolean(PState.seatedChair);
     }
     if (airBlend > .001) {
       const mix = (a, b) => a + (b - a) * airBlend;
@@ -3482,25 +3708,24 @@ function renderVP(sizeOverride) {
   if (R.sizeKey !== sizeKey) { R.renderer.setSize(Math.round(w), Math.round(h), !sizeOverride); R.sizeKey = sizeKey; }
   const k = AC.calc(), tg = targetAt(T), a = rad(S.az), e = rad(S.el);
   if (!sizeOverride && vpViewMode === 'top') {
-    const ext = hooks.sceneExtent?.('top') || 1.6;
-    const dTop = Math.max(2.2, S.dist * 1.15, ext * 2.2);
-    const camH = tg.y + dTop;
+    const topX = vpOrthoCam.top.panX || 0, topZ = vpOrthoCam.top.panZ || 0;
+    const camH = 5.4 / clamp(vpOrthoCam.top.zoom || 1, 0.2, 8);
     R.camera.fov = 38; R.camera.aspect = w / h; R.camera.near = .01; R.camera.updateProjectionMatrix();
-    R.camera.position.set(tg.x, camH, tg.z);
+    R.camera.position.set(topX, camH, topZ);
     R.camera.up.set(0, 0, -1);
-    R.camera.lookAt(tg.x, 0, tg.z);
+    R.camera.lookAt(topX, 0, topZ);
     const s = h / (2 * Math.max(.2, camH) * Math.tan(rad(19)));
-    vpOverlayView = {kind:'top', cx:w / 2, cy:h / 2, s, T:tg, w, h};
+    vpOverlayView = {kind:'top', cx:w / 2, cy:h / 2, s, T:{x:topX, y:0, z:topZ}, w, h};
   } else if (!sizeOverride && vpViewMode === 'side') {
-    const ext = hooks.sceneExtent?.('side') || 1.6;
-    const dSide = Math.max(2.2, S.dist * 1.15, ext * 2.2);
-    const lookY = Math.max(.65, tg.y);
+    const sideZ = vpOrthoCam.side.panZ || 0;
+    const lookY = vpOrthoCam.side.panY ?? 0.85;
+    const dSide = 5.4 / clamp(vpOrthoCam.side.zoom || 1, 0.2, 8);
     R.camera.fov = 38; R.camera.aspect = w / h; R.camera.near = .01; R.camera.updateProjectionMatrix();
-    R.camera.position.set(tg.x + dSide, lookY, tg.z);
+    R.camera.position.set(dSide, lookY, sideZ);
     R.camera.up.set(0, 1, 0);
-    R.camera.lookAt(tg.x, lookY, tg.z);
+    R.camera.lookAt(0, lookY, sideZ);
     const s = h / (2 * Math.max(.2, dSide) * Math.tan(rad(19)));
-    vpOverlayView = {kind:'side', cx:w / 2, cy:h / 2, s, T:tg, lookY, w, h};
+    vpOverlayView = {kind:'side', cx:w / 2, cy:h / 2, s, T:{x:0, y:lookY, z:sideZ}, lookY, w, h};
   } else if (!sizeOverride && freeCamMode && vpViewMode === 'orbit') {
     vpOverlayView = null;
     const fa = rad(freeCam.az), fe = rad(clamp(freeCam.el, -88, 88)), fDist = Math.max(.4, freeCam.dist || 5.5);
@@ -3751,12 +3976,23 @@ function bindViewportPicking() {
   wrap.addEventListener('auxclick', e => { if (e.button === 1) e.preventDefault(); });
   wrap.addEventListener('pointerdown', e => {
     if (e.target.closest('button, input, select')) return;
-    // Middle mouse button (or Alt+Left-click) orbits/pans Free Camera OR Scene Camera in 3D mode
+    // Middle mouse button (or Alt+Left-click) orbits/pans Free Camera OR Scene Camera in 3D mode, or pans Top/Side View freely
     if (e.button === 1 || (e.button === 0 && e.altKey && !raycastGizmoAt(e.clientX, e.clientY))) {
       e.preventDefault(); e.stopPropagation();
       try { wrap.setPointerCapture(e.pointerId); } catch (err) {}
       activeVpDrag = true;
-      if (freeCamMode) {
+      if (vpViewMode === 'top' || vpViewMode === 'side') {
+        vpDrag = {
+          mode:'vpOrthoPan',
+          viewMode:vpViewMode,
+          x0:e.clientX, y0:e.clientY,
+          panX0:vpOrthoCam.top.panX || 0,
+          panZ0:vpOrthoCam.top.panZ || 0,
+          sideZ0:vpOrthoCam.side.panZ || 0,
+          sideY0:vpOrthoCam.side.panY ?? 0.85,
+          moved:false
+        };
+      } else if (freeCamMode) {
         vpDrag = {
           mode:e.shiftKey ? 'freeCamPan' : 'freeCamOrbit',
           x0:e.clientX, y0:e.clientY,
@@ -3839,6 +4075,7 @@ function bindViewportPicking() {
         hoverGizmoAxis = gAxis;
         wrap.setPointerCapture(e.pointerId);
         activeVpDrag = true;
+        if (pathMemoryMode && isVideo()) startPathMemorySample(cur);
         vpDrag = {
           id:cur.id, axis:gAxis, mode:gizmoMode,
           x0:e.clientX, y0:e.clientY,
@@ -3882,6 +4119,7 @@ function bindViewportPicking() {
     renderObjects(); buildTimeline(); renderVP(); AC.changed();
     wrap.setPointerCapture(e.pointerId);
     activeVpDrag = true;
+    if (pathMemoryMode && isVideo()) startPathMemorySample(hit);
     vpDrag = {
       id:hit.id, axis:'free', mode:gizmoMode,
       x0:e.clientX, y0:e.clientY,
@@ -3903,6 +4141,21 @@ function bindViewportPicking() {
       }
       const hObj = gAx || hPath ? true : !!raycastObjectAt(e.clientX, e.clientY);
       wrap.style.cursor = hObj ? 'grab' : '';
+      return;
+    }
+    if (vpDrag.mode === 'vpOrthoPan') {
+      const dx = e.clientX - vpDrag.x0, dy = e.clientY - vpDrag.y0;
+      if (Math.hypot(dx, dy) > 1) vpDrag.moved = true;
+      wrap.style.cursor = 'grabbing';
+      const s = vpOverlayView?.s || 80;
+      if (vpDrag.viewMode === 'top') {
+        vpOrthoCam.top.panX = rnd(vpDrag.panX0 - dx / s, 3);
+        vpOrthoCam.top.panZ = rnd(vpDrag.panZ0 - dy / s, 3);
+      } else {
+        vpOrthoCam.side.panZ = rnd(vpDrag.sideZ0 + dx / s, 3);
+        vpOrthoCam.side.panY = rnd(clamp(vpDrag.sideY0 + dy / s, -15, 25), 3);
+      }
+      renderVP();
       return;
     }
     if (vpDrag.mode === 'freeCamOrbit' || vpDrag.mode === 'freeCamPan') {
@@ -4073,13 +4326,15 @@ function bindViewportPicking() {
       o.z = rnd(vpDrag.oz + axZ.z * d, 3);
       smoothTurnRiggedOnDrag(o, prevX, prevZ, o.x, o.z);
     } else if (vpViewMode === 'top') {
+      const orthoScale = vpOverlayView?.s ? 1 / vpOverlayView.s : scale;
       const prevX = o.x || 0, prevZ = o.z || 0;
-      o.x = rnd(vpDrag.ox + dx * scale, 3);
-      o.z = rnd(vpDrag.oz + dy * scale, 3);
+      o.x = rnd(vpDrag.ox + dx * orthoScale, 3);
+      o.z = rnd(vpDrag.oz + dy * orthoScale, 3);
       smoothTurnRiggedOnDrag(o, prevX, prevZ, o.x, o.z);
     } else if (vpViewMode === 'side') {
-      o.z = rnd(vpDrag.oz - dx * scale, 3);
-      o.y = rnd(clampObjY(vpDrag.oy - dy * scale), 3);
+      const orthoScale = vpOverlayView?.s ? 1 / vpOverlayView.s : scale;
+      o.z = rnd(vpDrag.oz - dx * orthoScale, 3);
+      o.y = rnd(clampObjY(vpDrag.oy - dy * orthoScale), 3);
     } else {
       const prevX = o.x || 0, prevZ = o.z || 0;
       const va = rad(freeCamMode ? freeCam.az : S.az);
@@ -4095,11 +4350,17 @@ function bindViewportPicking() {
       syncSeatedBikeRiders(o);
     }
     enforceObjectCollisions(o);
+    if (pathMemoryMode && isVideo()) pushPathMemorySample(o);
     o.placed = true; o.userMoved = true;
     syncObjProps(); renderVP(); AC.drawAll();
   });
   const endVpDrag = () => {
     if (!vpDrag) return;
+    if (vpDrag.mode === 'vpOrthoPan') {
+      vpDrag = null; activeVpDrag = false; wrap.style.cursor = '';
+      renderVP();
+      return;
+    }
     if (vpDrag.mode === 'freeCamOrbit' || vpDrag.mode === 'freeCamPan') {
       vpDrag = null; activeVpDrag = false; wrap.style.cursor = '';
       renderVP();
@@ -4149,7 +4410,13 @@ function bindViewportPicking() {
     }
     if (moved && o) enforceObjectCollisions(o);
     renderVP(); AC.drawAll();
-    if (moved) { autoKey(); AC.save(); AC.changed(); }
+    if (moved) {
+      if (!commitPathMemorySamples(o)) {
+        autoKey(); AC.save(); AC.changed();
+      }
+    } else if (o) {
+      delete o._pathMemSamples;
+    }
   };
   wrap.addEventListener('pointerup', endVpDrag);
   wrap.addEventListener('pointercancel', endVpDrag);
@@ -4288,7 +4555,7 @@ function renderObjects() {
     else {
       const n = (k, label, step, min, max) => numField('op_' + k, label, `obj.${o.id}.${k}`, step, min, max, `data-ok="${k}"`);
       const poseMap = poseMapFor(o.model);
-      const poseHtml = poseMap ? `<div class="field"><label for="op_pose">Pose (or right-click object)</label><select id="op_pose" data-ok="pose">${Object.entries(poseMap).map(([pk, pv]) => `<option value="${pk}">${pv.name}</option>`).join('')}</select></div>` : '';
+      const poseHtml = poseMap ? `<div class="field"><div class="labrow"><label for="op_pose">${kb(`obj.${o.id}.pose`, 'Pose')}Pose (or right-click object)</label></div><select id="op_pose" data-ok="pose">${Object.entries(poseMap).map(([pk, pv]) => `<option value="${pk}">${pv.name}</option>`).join('')}</select></div>` : '';
       const minYAttr = o.collideG === false ? -50 : 0;
       const posHtml = `<div class="field"><div class="labrow"><label for="op_x">${kb(`obj.${o.id}.pos`, 'Position')}Position (X · Y · Z)</label></div><div class="grid3" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px"><input type="number" id="op_x" data-ok="x" step="0.05" min="-100" max="100" title="Position X" aria-label="Position X"><input type="number" id="op_y" data-ok="y" step="0.05" min="${minYAttr}" max="50" title="Position Y (Lift)" aria-label="Position Y"><input type="number" id="op_z" data-ok="z" step="0.05" min="-100" max="100" title="Position Z" aria-label="Position Z"></div></div>`;
       const rotHtml = `<div class="field"><div class="labrow"><label for="op_rx">${kb(`obj.${o.id}.rot`, 'Rotation')}Rotation (X · Y · Z)</label></div><div class="grid3" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px"><input type="number" id="op_rx" data-ok="rx" step="1" min="-180" max="180" title="Rotation X (Pitch)" aria-label="Rotation X"><input type="number" id="op_ry" data-ok="ry" step="1" min="-720" max="720" title="Rotation Y (Heading)" aria-label="Rotation Y"><input type="number" id="op_rz" data-ok="rz" step="1" min="-180" max="180" title="Rotation Z (Roll)" aria-label="Rotation Z"></div></div>`;
@@ -4479,6 +4746,7 @@ $('objProps').addEventListener('change', e => {
   if (k === 'pose') {
     o.pose = e.target.value; o.userPosed = true;
     applyPoseSideEffects(o);
+    autoKey();
     syncObjProps();
     if (isRiggedChar(o.model) && (o.pose === 'walking_still' || o.pose === 'running_still')) ensureLiveRigLoop();
     renderVP(); AC.changed();
@@ -5147,6 +5415,7 @@ function openObjCtx(x, y, targetObj) {
     } else if (act.startsWith('pose:') && targetObj) {
       targetObj.pose = act.slice(5); targetObj.userPosed = true;
       applyPoseSideEffects(targetObj);
+      autoKey();
       if (isRiggedChar(targetObj.model) && (targetObj.pose === 'walking_still' || targetObj.pose === 'running_still')) ensureLiveRigLoop();
       objPropsKey = ''; renderObjects(); renderVP(); AC.save(); AC.changed();
       const pm = poseMapFor(targetObj.model);
@@ -5578,6 +5847,25 @@ document.addEventListener('keydown', e => {
 $('vpGuidesBtn').addEventListener('click', () => { V().guides = !V().guides; $('vpGuidesBtn').setAttribute('aria-pressed', V().guides); AC.save(); renderVP(); });
 $('vpGround').addEventListener('click', () => { V().ground = V().ground === false; $('vpGround').setAttribute('aria-pressed', V().ground); AC.save(); renderVP(); });
 $('vpPath').addEventListener('click', () => { V().path = !V().path; $('vpPath').setAttribute('aria-pressed', V().path); AC.save(); AC.drawAll(); });
+function syncPathMemoryUI() {
+  $('vpPathMemory')?.setAttribute('aria-pressed', String(pathMemoryMode));
+  document.body.classList.toggle('path-memory-on', pathMemoryMode);
+  $('pTimeline')?.classList.toggle('path-memory-on', pathMemoryMode);
+}
+$('vpPathMemory')?.addEventListener('click', () => {
+  pathMemoryMode = !pathMemoryMode;
+  if (pathMemoryMode) {
+    V().path = true;
+    $('vpPath')?.setAttribute('aria-pressed', 'true');
+    (V().objects || []).forEach(o => { o._pathMemAnchorT = snap(T); });
+  }
+  syncPathMemoryUI();
+  AC.drawAll();
+  renderVP();
+  AC.toast(pathMemoryMode
+    ? 'Path Memory ON — Place timeline cursor at target frame and drag any object to record its full trajectory'
+    : 'Path Memory OFF');
+});
 
 /* ---------- export (PNG image / MP4 video) ---------- */
 let dl = null;
@@ -5867,6 +6155,7 @@ function go() {
   setVpViewMode(vpViewMode || 'orbit');
   $('tlLoop').setAttribute('aria-pressed', S.video.loop); $('tlAuto').setAttribute('aria-pressed', S.video.autokey !== false);
   $('vpGuidesBtn').setAttribute('aria-pressed', V().guides); $('vpPath').setAttribute('aria-pressed', V().path); $('vpGround').setAttribute('aria-pressed', V().ground !== false);
+  syncPathMemoryUI();
   objPropsKey = ''; vfOptsKey = ''; renderObjects(); buildTimeline(); renderPresets(); renderAnimPresets(); setTime(0);
   AC.changed();
   requestAnimationFrame(() => { renderVP(); AC.drawAll(); drawPower(); });
@@ -6017,6 +6306,15 @@ function describeSegment(t0, t1, cm) {
     }
     if (Math.abs(dh - 1) > .05) subj.push(`${o.label} ${dh > 1 ? 'grows' : 'shrinks'} to ${Math.round(dh * 100)}% size`);
     if (g('color', t0) !== g('color', t1)) subj.push(`${o.label} changes color from ${g('color', t0)} to ${g('color', t1)}`);
+    if (hasPoseModel(o.model) && tracks()[`obj.${o.id}.pose`]?.length) {
+      const p0 = valueAt(`obj.${o.id}.pose`, t0, 'pose', o.pose || 'standing');
+      const p1 = valueAt(`obj.${o.id}.pose`, t1, 'pose', o.pose || 'standing');
+      if (p0 !== p1) {
+        const pm = poseMapFor(o.model) || {};
+        const d0 = pm[p0]?.prompt || p0, d1 = pm[p1]?.prompt || p1;
+        subj.push(`${o.label} transitions pose from ${d0} to ${d1}`);
+      }
+    }
   });
   let ease = null;
   for (const [path, keys] of Object.entries(tracks())) {

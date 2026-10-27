@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-gated>
+<html lang="en" data-gated data-mode="night" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
@@ -7,10 +7,124 @@
 <title>VisionPilot</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preload" href="style.css" as="style">
+<link rel="preload" href="logo/visionpilot-logo-dark.svg" as="image">
+<link rel="preload" href="image1.jpg" as="image">
+<link rel="preload" href="ads.js" as="script">
+<link rel="preload" href="core.js" as="script">
+<link rel="preload" href="video.js" as="script">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style id="vpCriticalCss">
+  /* Critical above-the-fold Night Mode & Loading Overlay CSS */
+  :root, html, html[data-mode="night"], html[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0c0d10;
+    --card: #15171c;
+    --ink: #eef0f5;
+  }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #0b0c10;
+    color: #eef0f5;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+  .vp-loading-screen {
+    position: fixed;
+    inset: 0;
+    z-index: 99999;
+    background: #090a0f;
+    color: #f1f5f9;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 28px;
+    transition: opacity 0.48s cubic-bezier(0.22, 1, 0.36, 1), visibility 0.48s ease;
+  }
+  .vp-loading-screen.is-hidden {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+  }
+  .vp-ad-viewport {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    overflow: hidden;
+  }
+  .vp-ad-track {
+    display: flex;
+    width: 100%;
+    height: 100%;
+  }
+  .vp-ad-slide {
+    flex: 0 0 100%;
+    width: 100%;
+    height: 100%;
+  }
+</style>
 <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body class="night-mode-only">
+<!-- FULL SCREEN LOADING OVERLAY (NIGHT MODE DEFAULT) -->
+<div class="vp-loading-screen" id="vpLoadingScreen" role="dialog" aria-label="VisionPilot Loading Screen">
+  <div class="vpl-shell">
+    <!-- Left Column: Branding Box + Purple Description/Models Box + Loading Progress -->
+    <div class="vpl-left-col">
+      <!-- Logo & Branding Box -->
+      <div class="vpl-brand-box" id="vpLoadBrandBox">
+        <div class="vpl-logo-row">
+          <img class="vpl-logo-img" src="logo/visionpilot-logo-dark.svg" alt="VisionPilot">
+        </div>
+        <div class="vpl-tagline-glow">Become an AI Director</div>
+        <div class="vpl-maker-row">
+          <a class="vpl-maker-link" href="https://framesbyismail.github.io/framesbyismail/" target="_blank" rel="noopener" title="Visit framesbyismail">
+            <span>Made by <b>framesbyismail</b></span>
+            <svg class="vpl-mouse-ico" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M6 5.2v9l2.3-2.2 1.7 3.6 1.6-.7-1.7-3.5 3.2-.3z" fill="currentColor"/>
+              <path d="M3.6 3.6 2.2 2.2M6.2 2.6V.9M2.6 6.2H.9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            </svg>
+          </a>
+        </div>
+      </div>
+
+      <!-- Purple Description Box + Models Section + Copyright -->
+      <div class="vpl-purple-box" id="vpLoadDescBox">
+        <p class="vpl-desc-text">
+          Designed for creative professionals who want to harness the power of AI. Vision Pilot lets you direct multiple AI models simultaneously, giving you complete control to accelerate your design, animation, and content creation workflow.
+        </p>
+        <div class="vpl-models-pill">AI Models: <span data-vp-model-color="claude">Claude</span> &bull; <span data-vp-model-color="gpt">ChatGPT</span> &bull; <span data-vp-model-color="gemini">Gemini</span></div>
+
+        <div class="vpl-connect-sec">
+          <div class="vpl-connect-line">
+            Connect with <b class="vpl-m-name" data-vp-model-color="claude">Claude</b>, <b class="vpl-m-name" data-vp-model-color="gpt">ChatGPT</b>, <b class="vpl-m-name" data-vp-model-color="gemini">Gemini</b>
+          </div>
+          <div class="vpl-models-sub">Models</div>
+        </div>
+
+        <div class="vpl-copy-row">&copy; 2026 VisionPilot</div>
+      </div>
+
+      <!-- Loading Progress Bar -->
+      <div class="vpl-loadbar-box" id="vpLoadBarBox">
+        <div class="vpl-loadbar-top">
+          <span class="vpl-loadbar-lbl">Loading</span>
+          <span class="vpl-loadbar-status" id="vpLoadStatusLbl">Preloading assets &amp; caching workspace…</span>
+          <span class="vpl-loadbar-pct" id="vpLoadPctLbl">0%</span>
+        </div>
+        <div class="vpl-loadbar-track">
+          <div class="vpl-loadbar-fill" id="vpLoadProgFill" style="width:8%"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Column: 4:3 Image Ad Box Section -->
+    <div class="vpl-right-col">
+      <div class="vpl-ad-mount" id="vpLoadingAdMount" data-ads-url="ads.html"></div>
+    </div>
+  </div>
+</div>
+
 <nav class="nav">
   <div class="nav-in">
     <div class="brand"><h1><img class="vp-logo" src="logo/visionpilot-logo-dark.svg" alt="VisionPilot"></h1><div class="tagline"><span>Become an AI Director</span><small>Made by <a class="fbi" href="https://framesbyismail.github.io/framesbyismail/" target="_blank" rel="noopener" title="Open framesbyismail in a new tab"><b>framesbyismail</b><svg class="cur" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 5.2v9l2.3-2.2 1.7 3.6 1.6-.7-1.7-3.5 3.2-.3z" fill="currentColor"/><path d="M3.6 3.6 2.2 2.2M6.2 2.6V.9M2.6 6.2H.9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></a></small></div></div>
@@ -406,6 +520,7 @@
         <button class="tb" id="vpGuidesBtn" aria-pressed="true" title="Rule of thirds">Guides</button>
         <button class="tb" id="vpGround" aria-pressed="true" title="Show or hide the ground">Ground</button>
         <button class="tb vonly" id="vpPath" aria-pressed="true" title="Show the camera path in the top and side views">Path</button>
+        <button class="tb vonly path-mem-btn" id="vpPathMemory" aria-pressed="false" title="Path Memory: record your exact continuous object movement path across the timeline">Path Memory</button>
         <button class="btn ghost sm vonly" id="expFrame" style="flex:none">Export Image</button>
         <button class="btn ghost sm vonly" id="expVideo" style="flex:none">Export video (MP4)</button>
       </div>
@@ -563,6 +678,61 @@
 
       <div class="upscale-err-box" id="imgUpscaleError" hidden></div>
       <p class="hint">Runs locally in your browser with WebGPU / WASM tiled blending. Output opens in the centered comparison window and saves to History / Library.</p>
+    </div>
+  </div>
+
+  <!-- PART 3B: IN-BROWSER BACKGROUND REMOVER (IMAGE MODE ONLY, NEXT TO UPSCALE) -->
+  <div class="card ionly" id="pBgRemove" data-name="Remove BG"><button class="tag tag-bgremove" type="button">Remove BG</button>
+    <div class="cbody upscaler-cbody" id="bgRemoveBody">
+      <div class="upscale-dropzone bgremove-dropzone" id="bgRemoveDrop" title="Click or drop an image to remove background">
+        <img id="bgRemoveThumb" alt="Image for background removal" hidden>
+        <div class="upscale-drop-empty" id="bgRemoveEmpty">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2M12 4v12m0-12-4 4m4-4 4 4"/></svg>
+          <span>Drop image here or click to browse</span>
+          <small>Connected with Input &amp; Upscale image</small>
+        </div>
+        <div class="upscale-meta-pill" id="bgRemoveMeta" hidden></div>
+      </div>
+      <input type="file" id="bgRemoveFile" accept="image/*" hidden>
+
+      <div class="field upscale-controls-field bgremove-controls-field">
+        <span class="lbl">Background Fill</span>
+        <div class="bgremove-fill-row" id="bgRemoveFillRow">
+          <button type="button" class="btn bgremove-fill-btn on" data-bgfill="transparent" title="Transparent PNG cutout">Transparent</button>
+          <button type="button" class="btn bgremove-fill-btn" data-bgfill="#ffffff" title="Solid White Background">White</button>
+          <button type="button" class="btn bgremove-fill-btn" data-bgfill="#000000" title="Solid Black Background">Black</button>
+          <label class="bgremove-color-lbl" title="Custom background color">
+            <input type="color" id="bgRemoveCustomColor" value="#10b981">
+          </label>
+        </div>
+        <button type="button" class="btn primary bgremove-run-btn" id="bgRemoveRunBtn">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true" style="width:15px;height:15px"><path d="M4 4l12 12M14 4a2 2 0 1 1 2 2M6 14a2 2 0 1 1-2 2" stroke-linecap="round"/></svg>
+          <span>Remove Background</span>
+        </button>
+      </div>
+
+      <div class="upscale-loading-box" id="bgRemoveLoading" hidden>
+        <div class="upscale-loading-top">
+          <span class="spin"></span>
+          <span class="upscale-loading-lbl" id="bgRemoveLoadingLbl">Removing background…</span>
+        </div>
+        <div class="upscale-prog-track">
+          <div class="upscale-prog-bar" id="bgRemoveProgBar" style="width:45%"></div>
+        </div>
+      </div>
+
+      <div class="bgremove-result-box" id="bgRemoveResultBox" hidden>
+        <div class="bgremove-result-checker">
+          <img id="bgRemoveResultImg" alt="Background removed output">
+        </div>
+        <div class="bgremove-result-actions">
+          <button type="button" class="btn sm primary" id="bgRemoveDownloadBtn">Download PNG</button>
+          <button type="button" class="btn sm ghost" id="bgRemoveUseAsInputBtn" title="Set cutout as active Input Reference image">Use in Input</button>
+        </div>
+      </div>
+
+      <div class="upscale-err-box" id="bgRemoveError" hidden></div>
+      <p class="hint">Removes image background locally using VisionPilot AI Segmentation + edge refinement. Synced with Input &amp; Upscale.</p>
     </div>
   </div>
 
@@ -839,6 +1009,7 @@
 
 <script src="models/ort.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="ads.js"></script>
 <script src="visionpilotbgremover.js"></script>
 <script src="detect.js"></script>
 <script src="clip-text/clip-writer.js" data-vp-text="clip-text" data-vp-image="clip-image"></script>

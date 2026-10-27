@@ -7,6 +7,9 @@
         document.documentElement.setAttribute('data-vp-extension', 'installed');
         document.documentElement.setAttribute('data-vp-extension-version', '2.0.0');
       }
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local && location.href.startsWith('http')) {
+        try { chrome.storage.local.set({ vpLastUrl: location.href }); } catch (e) {}
+      }
       window.dispatchEvent(new CustomEvent('vp-ai-extension-ready', {
         detail: { installed: true, version: '2.0.0', models: ['claude', 'gpt', 'gemini'] }
       }));
@@ -23,6 +26,9 @@
       if (document.documentElement) {
         document.documentElement.setAttribute('data-vp-extension', 'installed');
         document.documentElement.setAttribute('data-vp-extension-version', '2.0.0');
+      }
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local && location.href.startsWith('http')) {
+        try { chrome.storage.local.set({ vpLastUrl: location.href }); } catch (e) {}
       }
       window.dispatchEvent(new CustomEvent('vp-ai-extension-ready', {
         detail: { installed: true, version: '2.0.0', models: ['claude', 'gpt', 'gemini'] }

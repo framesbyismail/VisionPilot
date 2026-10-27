@@ -138,8 +138,13 @@
   }
   window.addEventListener('load', pingExtension, { once: true });
 
-  // Strict check: only true when the real Chrome Extension content script is active on this page
+  // Strict check: true when the Chrome Extension content script is active OR when running inside the Electron Desktop Software silent backend
   function isExtensionConnected() {
+    if (window.visionPilotDesktop?.isDesktop && typeof window.visionPilotDesktop.runSilentAiBridge === 'function') {
+      extInstalled = true;
+      try { document.documentElement.setAttribute('data-vp-extension', 'installed'); } catch (e) {}
+      return true;
+    }
     try {
       if (document.documentElement.getAttribute('data-vp-extension') === 'installed') {
         extInstalled = true;
@@ -160,6 +165,10 @@
         pendingRequests.delete(reqId);
       }
     }
+    if (window.visionPilotDesktop?.isDesktop && typeof window.visionPilotDesktop.runSilentAiBridge === 'function') {
+      window.visionPilotDesktop.runSilentAiBridge({ action: 'cancel_requests', refId: refId || null }).catch(() => {});
+      return;
+    }
     if (isExtensionConnected()) {
       try {
         const cancelReqId = 'vp_cancel_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
@@ -170,9 +179,12 @@
     }
   }
 
-  // Send a message to the Chrome Extension content.js -> background.js and await the real result
+  // Send a message to the Chrome Extension content.js -> background.js (or silent Electron backend) and await the real result
   // No timeout while AI is generating (timeoutMs <= 0 or omitted for run_prompt / generate_image)
   function sendExtensionRequest(payload, timeoutMs = 0) {
+    if (window.visionPilotDesktop?.isDesktop && typeof window.visionPilotDesktop.runSilentAiBridge === 'function') {
+      return window.visionPilotDesktop.runSilentAiBridge(payload);
+    }
     return new Promise((resolve) => {
       if (!isExtensionConnected()) {
         resolve({

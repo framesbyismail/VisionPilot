@@ -11,16 +11,13 @@ const joinList = a => a.length < 2 ? (a[0] || '') : a.slice(0, -1).join(', ') + 
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const escAttr = s => esc(s).replace(/"/g, '&quot;');
 
-/* ---------- day / night ---------- */
+/* ---------- night mode default (no auto day/night switching) ---------- */
 const root = document.documentElement;
 function initialMode() {
-  try { const m = localStorage.getItem('anglecraft-mode'); if (m === 'day' || m === 'night') return m; } catch (e) {}
-  const t = root.getAttribute('data-theme');
-  if (t === 'dark') return 'night';
-  if (t === 'light') return 'day';
-  return matchMedia('(prefers-color-scheme: dark)').matches ? 'night' : 'day';
+  return 'night';
 }
-root.setAttribute('data-mode', initialMode());
+root.setAttribute('data-mode', 'night');
+root.setAttribute('data-theme', 'dark');
 
 /* ---------- data ---------- */
 const BODIES = [
@@ -267,15 +264,15 @@ const IMG_PRESETS = [
    prompt:'Centered symmetrical shot: subject positioned in the exact center of the frame with balanced mirrored geometry and formal harmony.'}
 ];
 let S = null;
-// panels that can be docked in each mode; Presets sits as a tab beside Output, Animation presets beside Presets in Video & 3D, Object beside Reference in Video & 3D, Upscale beside Reference/Object
-const DOCKABLE = {image:['pRef', 'pImgUpscale', 'pAngle', 'pCam', 'pLight', 'pOutput', 'pPresets', 'pPrompt'], video:['pRef', 'pObjects', 'pVidUpscale', 'pAngle', 'pCam', 'pLight', 'pOutput', 'pPresets', 'pAnimPresets', 'pPrompt']};
+// panels that can be docked in each mode; Presets sits as a tab beside Output, Animation presets beside Presets in Video & 3D, Object beside Reference in Video & 3D, Upscale & Remove BG beside Input
+const DOCKABLE = {image:['pRef', 'pImgUpscale', 'pBgRemove', 'pAngle', 'pCam', 'pLight', 'pOutput', 'pPresets', 'pPrompt'], video:['pRef', 'pObjects', 'pVidUpscale', 'pAngle', 'pCam', 'pLight', 'pOutput', 'pPresets', 'pAnimPresets', 'pPrompt']};
 const dockableFor = m => m === 'video' ? DOCKABLE.video : DOCKABLE.image;
 const DOCK_COLS = {image:{L:'iLeft', R:'iRight'}, video:{L:'vLeft', R:'vRight'}};
 const DEFAULT_DOCK = mode => mode === 'video' ? {
   L:[{tabs:['pRef', 'pObjects', 'pVidUpscale'], active:'pRef'}, {tabs:['pAngle', 'pCam'], active:'pAngle'}, {tabs:['pLight'], active:'pLight'}],
   R:[{tabs:['pOutput', 'pPresets', 'pAnimPresets'], active:'pOutput'}, {tabs:['pPrompt'], active:'pPrompt'}]
 } : {
-  L:[{tabs:['pRef', 'pImgUpscale'], active:'pRef'}, {tabs:['pAngle', 'pCam'], active:'pAngle'}, {tabs:['pLight'], active:'pLight'}],
+  L:[{tabs:['pRef', 'pImgUpscale', 'pBgRemove'], active:'pRef'}, {tabs:['pAngle', 'pCam'], active:'pAngle'}, {tabs:['pLight'], active:'pLight'}],
   R:[{tabs:['pOutput', 'pPresets'], active:'pOutput'}, {tabs:['pPrompt'], active:'pPrompt'}]
 };
 
@@ -423,13 +420,13 @@ const detailActive = () => S.focus.on && S.focus.detail;
 const GATED = document.documentElement.hasAttribute('data-gated');
 const LOCKED_PANELS = ['pLight', 'pCam'];
 let PRO = !GATED || (() => { try { return localStorage.getItem('vp-pro') === '1'; } catch (e) { return false; } })();
-// put every Advanced-only setting back to its Normal value
+// put every Advanced-only setting back to its Normal value (Note: S.focus.on is allowed in Normal mode when an image is dropped per Bug Fix 2)
 function enforce() {
   if (!PRO) {
-    S.mode = 'normal'; S.lightOn = false; S.focus.on = false;
+    S.mode = 'normal'; S.lightOn = false;
     S.light = 'match'; S.bg = 'keep';
   } else if (S.mode !== 'adv') {
-    S.focus.on = false; S.lightOn = false;
+    S.lightOn = false;
   }
 }
 // If the user has Advanced mode (PRO) and clicks an off/locked control while in Normal mode, automatically switch to Advanced mode
@@ -1704,9 +1701,13 @@ function addFiles(list) {
   const files = arr.filter(f => f.type && f.type.startsWith('image/'));
   if (!files.length) { toast('Choose image files (JPG, PNG or WebP)'); return; }
   batchFolderState = null;
-  // New image upload allows AI auto-description to populate #subjDesc (Part 7), without auto-pinning
+  // Bug Fix 2: When an image is dropped/added, "Image Detection and Focus" button automatically turns ON,
+  // while Focus pointer/marker controls below the button remain DISABLED (locked) until the user enables them via the button.
   S.descUserEdited = false;
   S.focus.desc = '';
+  S.focus.on = true;
+  S.focus.showMark = false;
+  S.focus.markerControlsUnlocked = false;
   setDescLoading(true);
   files.slice(0, 12).forEach(file => {
     const ref = {id:'r' + (++refId), file, src:'', img:new Image(), name:file.name || `pasted-${refId}.png`, status:'wait', subjects:[], view:'front', alpha:false, cancelled:false};
@@ -1723,14 +1724,23 @@ function addFiles(list) {
         if (refs[0] === ref || refs.length === 1) {
           autoSelectAspectFromImage(ref.img);
         }
-        renderRefs(); drawAll(); hooks.refsChanged?.(); changed();
+        renderRefs(); drawAll(); hooks.refsChanged?.();
+        if (typeof syncImageUpscalerUI === 'function') syncImageUpscalerUI();
+        if (typeof syncBgRemoverUI === 'function') syncBgRemoverUI();
+        changed();
       };
-      ref.img.src = fr.result; renderRefs();
+      ref.img.src = fr.result;
+      renderRefs();
+      if (typeof syncImageUpscalerUI === 'function') syncImageUpscalerUI();
+      if (typeof syncBgRemoverUI === 'function') syncBgRemoverUI();
     };
     fr.readAsDataURL(file);
     queue.push(ref);
   });
-  renderRefs(); runQueue();
+  renderRefs();
+  if (typeof syncImageUpscalerUI === 'function') syncImageUpscalerUI();
+  if (typeof syncBgRemoverUI === 'function') syncBgRemoverUI();
+  runQueue();
 }
 // CHANGE 2: Clicking the cross removes the image, stops loading immediately, and cancels any pending AI request so no late reply is pasted afterwards.
 function removeRef(id) {
@@ -1973,7 +1983,9 @@ function syncFocus() {
   S.focus.activeSubjs = S.focus.activeSubjs.filter(k => S.focus.subjectItems.some(it => it.key === k));
   S.focus.activeSubj = S.focus.activeSubjs[S.focus.activeSubjs.length - 1] || '';
   S.focus.zoom = clamp(+S.focus.zoom || 1, 1, 8);
+  const markerLocked = Boolean(S.focus.on && S.focus.markerControlsUnlocked === false);
   $('pFocus').classList.toggle('off', !S.focus.on);
+  $('pFocus').classList.toggle('marker-controls-locked', markerLocked);
   $('focusOn').setAttribute('aria-checked', S.focus.on);
   if ($('focusMarkOn')) $('focusMarkOn').setAttribute('aria-checked', String(!!S.focus.showMark));
   $('detailOn').setAttribute('aria-checked', !!S.focus.detail); $('detailRow').hidden = !S.focus.detail;
@@ -2890,30 +2902,33 @@ function drawGlobe() {
   if (!behind) { line(); drawCam(ctx, cam[0], cam[1], ang, u, false, 1); }
 }
 
-/* top & side views share an interaction model; both are centered on the camera target */
+/* top & side views share an interaction model; manual pan (Shift+Middle-Click) & wheel zoom without moving camera or auto-moving on object drag */
 const views = {
-  top: {c:$('top'), handles:[], cam:null, frozen:null},
-  side:{c:$('side'), handles:[], cam:null, frozen:null}
+  top: {c:$('top'), handles:[], cam:null, frozen:null, panX:0, panY:0, zoom:1},
+  side:{c:$('side'), handles:[], cam:null, frozen:null, panX:0, panY:0, zoom:1}
 };
 function drawTop() {
-  const v = views.top, {ctx, w, h} = fit(v.c), k = calc(), T = rigTarget();
+  const v = views.top, {ctx, w, h} = fit(v.c), k = calc(), rigT = rigTarget();
   if (w < 40 || h < 40) return;
   const cx = w / 2, cy = h / 2, el = rad(S.el), hd = S.dist * Math.cos(el), az = rad(S.az);
-  const rawExt = hooks.sceneExtent?.('top');
-  const ext = (isFinite(rawExt) && rawExt > 0) ? rawExt : (isFinite(k.fp) && k.fp > 0 ? k.fp * .75 : .6);
-  const s = v.frozen ?? (Math.min(w, h) / 2 - 48) / Math.max(hd, ext, .05);
+  const T = S.app === 'video'
+    ? {x: v.panX || 0, y: 0.85, z: v.panY || 0}
+    : {x: (rigT.x || 0) + (v.panX || 0), y: rigT.y || 0.85, z: (rigT.z || 0) + (v.panY || 0)};
+  const baseSpan = S.app === 'video' ? 3.2 : Math.max(hd, isFinite(k.fp) && k.fp > 0 ? k.fp * .75 : .6, .05);
+  const s = (v.frozen ?? ((Math.min(w, h) / 2 - 48) / baseSpan)) * (v.zoom || 1);
   Object.assign(v, {cx, cy, s, T});
-  const step = drawGrid(ctx, w, h, cx, cy, s, C['ax-x'], C['ax-z'], cy + T.z * s, cx - T.x * s);
+  const step = drawGrid(ctx, w, h, cx, cy, s, C['ax-x'], C['ax-z'], cy - T.z * s, cx - T.x * s);
   $('topScale').textContent = `grid ${fmtStep(step)} · ${mStr(hd)}`;
   if (hooks.drawTopScene?.(ctx, v)) { /* video scene drawn */ }
   else {
     const sz = clamp(k.fp * s, 20, Math.min(38, Math.max(20, hd * s * .55)));
     v.thumbSz = sz;
-    drawThumb(ctx, cx - sz / 2, cy - sz / 2, sz, sz, 3);
+    drawThumb(ctx, cx + (rigT.x - T.x) * s - sz / 2, cy + (rigT.z - T.z) * s - sz / 2, sz, sz, 3);
     ctx.fillStyle = C.fg; ctx.beginPath(); ctx.moveTo(cx - 5, cy + sz / 2 + 4); ctx.lineTo(cx + 5, cy + sz / 2 + 4); ctx.lineTo(cx, cy + sz / 2 + 10); ctx.fill();
   }
-  const px = cx + Math.sin(az) * hd * s, py = cy + Math.cos(az) * hd * s;
-  let ux = cx - px, uy = cy - py, L = Math.hypot(ux, uy);
+  const aimX = cx + (rigT.x - T.x) * s, aimY = cy + (rigT.z - T.z) * s;
+  const px = aimX + Math.sin(az) * hd * s, py = aimY + Math.cos(az) * hd * s;
+  let ux = aimX - px, uy = aimY - py, L = Math.hypot(ux, uy);
   if (L < 1) { ux = -Math.sin(az); uy = -Math.cos(az); } else { ux /= L; uy /= L; }
   drawFrustum(ctx, px, py, ux, uy, Math.max(L, 40), rad(k.hfov / 2));
   drawCam(ctx, px, py, Math.atan2(uy, ux), 7, false);
@@ -2928,13 +2943,15 @@ function drawTop() {
   v.handles.forEach(hd2 => drawArrow(ctx, hd2, drag && drag.view === v && drag.dir === hd2.dir));
 }
 function drawSide() {
-  const v = views.side, {ctx, w, h} = fit(v.c), k = calc(), T = rigTarget();
+  const v = views.side, {ctx, w, h} = fit(v.c), k = calc(), rigT = rigTarget();
   if (w < 40 || h < 40) return;
   const cx = w / 2 + 20, cy = h / 2, el = rad(S.el);
   const hd = S.dist * Math.cos(el), hy = S.dist * Math.sin(el);
-  const rawExt = hooks.sceneExtent?.('side');
-  const ext = (isFinite(rawExt) && rawExt > 0) ? rawExt : (isFinite(k.subjH) && k.subjH > 0 ? k.subjH * .6 : .6);
-  const s = v.frozen ?? (Math.min(w, h) / 2 - 48) / Math.max(S.dist, ext, .05);
+  const T = S.app === 'video'
+    ? {x: 0, y: 0.85 + (v.panY || 0), z: v.panX || 0}
+    : {x: rigT.x || 0, y: (rigT.y || 0.85) + (v.panY || 0), z: (rigT.z || 0) + (v.panX || 0)};
+  const baseSpan = S.app === 'video' ? 3.2 : Math.max(S.dist, isFinite(k.subjH) && k.subjH > 0 ? k.subjH * .6 : .6, .05);
+  const s = (v.frozen ?? ((Math.min(w, h) / 2 - 48) / baseSpan)) * (v.zoom || 1);
   Object.assign(v, {cx, cy, s, T});
   const groundY = cy + T.y * s;
   const step = drawGrid(ctx, w, h, cx, cy, s, C['ax-z'], C['ax-y'], groundY);
@@ -2944,8 +2961,9 @@ function drawSide() {
     const sz = views.top.thumbSz || clamp(k.fp * s, 20, 38);
     drawThumb(ctx, cx - sz / 2, cy - sz / 2, sz, sz, 3);
   }
-  const px = cx - hd * s, py = cy - hy * s;
-  let ux = cx - px, uy = cy - py; const L = Math.hypot(ux, uy); ux /= L || 1; uy /= L || 1;
+  const aimX = cx - (T.z - (rigT.z || 0)) * s, aimY = cy + (T.y - (rigT.y || 0.85)) * s;
+  const px = aimX - hd * s, py = aimY - hy * s;
+  let ux = aimX - px, uy = aimY - py; const L = Math.hypot(ux, uy); ux /= L || 1; uy /= L || 1;
   drawFrustum(ctx, px, py, ux, uy, Math.max(L, 40), rad(k.vfov / 2));
   drawCam(ctx, px, py, Math.atan2(uy, ux), 7, true);
   const upx = uy, upy = -ux;
@@ -2960,7 +2978,7 @@ function drawSide() {
 }
 function drawAll() { readTokens(); drawGlobe(); drawTop(); drawSide(); drawDial(); }
 
-/* ---------- rig interaction (no scroll-zoom here: in video mode the camera view zooms) ---------- */
+/* ---------- rig interaction (scroll zooms only Top/Side view, Shift+Middle-Click pans Top/Side view freely) ---------- */
 const STEP = {
   top:{fwd:() => setDist(S.dist * .93), back:() => setDist(S.dist / .93), left:() => setAz(S.az - 3), right:() => setAz(S.az + 3)},
   side:{fwd:() => setDist(S.dist * .93), back:() => setDist(S.dist / .93), up:() => setEl(S.el + 3), down:() => setEl(S.el - 3)}
@@ -2990,12 +3008,28 @@ function hit(view, x, y, name) {
 }
 for (const [name, view] of Object.entries(views)) {
   const c = view.c;
+  c.addEventListener('wheel', e => {
+    e.preventDefault();
+    e.stopPropagation();
+    const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+    view.zoom = clamp((view.zoom || 1) * factor, 0.2, 8);
+    drawAll();
+  }, {passive:false});
   c.addEventListener('pointerdown', e => {
-    const [x, y] = local(e, c), h = hit(view, x, y, name);
+    const [x, y] = local(e, c);
+    // Shift + Middle-Click (or Middle-Click) pans Top/Side view freely without affecting the camera
+    if (e.button === 1 || (e.shiftKey && (e.button === 1 || e.button === 0))) {
+      e.preventDefault();
+      try { c.setPointerCapture(e.pointerId); } catch (_) {}
+      drag = {view, name, kind:'pan', x0:x, y0:y, panX0:view.panX || 0, panY0:view.panY || 0, s0:view.s || 40, moved:true, repeated:false};
+      c.style.cursor = 'grabbing';
+      return;
+    }
+    const h = hit(view, x, y, name);
     if (!h) return;
     c.setPointerCapture(e.pointerId);
     drag = {view, name, ...h, x0:x, y0:y, moved:false, repeated:false};
-    view.frozen = view.s;
+    view.frozen = view.s / (view.zoom || 1);
     if (h.kind === 'obj') hooks.selectViewObj?.(h.objId);
     if (h.kind === 'arrow') drag.timer = setTimeout(() => { drag && (drag.iv = setInterval(() => { drag.repeated = true; STEP[name][h.dir](); changed(); }, 60)); }, 350);
     changed();
@@ -3003,6 +3037,19 @@ for (const [name, view] of Object.entries(views)) {
   c.addEventListener('pointermove', e => {
     const [x, y] = local(e, c);
     if (!drag || drag.view !== view) { const h = hit(view, x, y, name); c.style.cursor = h ? ((h.kind === 'body' || h.kind === 'obj') ? 'grab' : 'pointer') : 'default'; return; }
+    if (drag.kind === 'pan') {
+      const dx = x - drag.x0, dy = y - drag.y0;
+      const s = Math.max(10, drag.s0 || view.s || 40);
+      if (name === 'top') {
+        view.panX = drag.panX0 - dx / s;
+        view.panY = drag.panY0 - dy / s;
+      } else {
+        view.panX = drag.panX0 + dx / s;
+        view.panY = drag.panY0 + dy / s;
+      }
+      drawAll();
+      return;
+    }
     if (!drag.moved && Math.hypot(x - drag.x0, y - drag.y0) > 4) { drag.moved = true; clearTimeout(drag.timer); clearInterval(drag.iv); }
     if (drag.moved) {
       c.style.cursor = 'grabbing';
@@ -3014,6 +3061,12 @@ for (const [name, view] of Object.entries(views)) {
   const end = () => {
     if (!drag || drag.view !== view) return;
     clearTimeout(drag.timer); clearInterval(drag.iv);
+    if (drag.kind === 'pan') {
+      drag = null;
+      c.style.cursor = 'default';
+      drawAll();
+      return;
+    }
     if (drag.kind === 'arrow' && !drag.moved && !drag.repeated) STEP[name][drag.dir]();
     if (drag.kind === 'obj' && drag.moved) hooks.dragViewObj?.(name, view, drag.objId, 0, 0, true);
     drag = null; view.frozen = null; changed();
@@ -3349,21 +3402,32 @@ document.addEventListener('paste', e => {
 // Focus point (Image Mode): Single Mode, Multiple Mode, Focus Marker, Focus Detail & Focus Subject
 function handleFocusToggleClick(e) {
   if (e) e.stopPropagation();
-  if (S.mode !== 'adv') {
-    if (!ensureAdvMode('Image Detection & Focus')) return;
-    S.focus.on = true;
+  // Bug Fix 2: The button (#focusOn) stays clickable to toggle ON/OFF;
+  // when toggled OFF, the backend prompt also turns OFF;
+  // when user enables via the button, marker controls unlock.
+  if (S.focus.on) {
+    S.focus.on = false;
   } else {
-    S.focus.on = !S.focus.on;
+    S.focus.on = true;
+    S.focus.markerControlsUnlocked = true;
+    if (S.focus.mode !== 'multi') S.focus.showMark = true;
   }
+  const markerLocked = Boolean(S.focus.on && S.focus.markerControlsUnlocked === false);
   $('focusOn').setAttribute('aria-checked', String(!!S.focus.on));
   $('pFocus').classList.toggle('off', !S.focus.on);
+  $('pFocus').classList.toggle('marker-controls-locked', markerLocked);
+  if ($('focusMarkOn')) $('focusMarkOn').setAttribute('aria-checked', String(!!S.focus.showMark));
   const curRef = refs[S.focus.img] || refs[0];
   if (!S.focus.on) {
-    // Immediately release focus waiting state so the user never has to wait for detection/prompt
+    // Immediately release focus waiting state & stop backend focus prompt so the user never has to wait
     setFocusDetailLoading(false);
+    if (window.VPLocalWriter?.cancelAll) {
+      try { window.VPLocalWriter.cancelAll(); } catch (err) {}
+    }
     placeMark();
     updateAutoDescription(false);
     focusKey = '';
+    syncFocus();
     changed();
     return;
   }
@@ -3398,24 +3462,21 @@ $('focusOnWrap')?.addEventListener('click', e => {
   if (e.target.closest('#focusOn')) return;
   handleFocusToggleClick(e);
 });
-// CHANGE 4: In Multiple Mode, Focus Marker is off by default. When turned on, a glowing Marker button appears
-// at the front of the subject buttons row and the marker shows in the image preview. Nothing is sent when merely turned on.
-// When turned off, the Marker button goes away.
+// CHANGE 4 & Bug Fix 2: Focus Marker button (#focusMarkOn) unlocks marker controls and toggles the Focus Marker ON/OFF
 $('focusMarkOn')?.addEventListener('click', () => {
-  if (S.mode !== 'adv') {
-    if (!ensureAdvMode('Image Detection & Focus')) return;
+  S.focus.showMark = !S.focus.showMark;
+  if (S.focus.showMark) {
     S.focus.on = true;
-    S.focus.showMark = true;
-  } else {
-    S.focus.showMark = !S.focus.showMark;
-    if (S.focus.showMark && !S.focus.on) S.focus.on = true;
+    S.focus.markerControlsUnlocked = true;
   }
   if (!S.focus.showMark && S.focus.multiSel === '__marker') {
     S.focus.multiSel = '';
   }
+  const markerLocked = Boolean(S.focus.on && S.focus.markerControlsUnlocked === false);
   $('focusMarkOn').setAttribute('aria-checked', String(!!S.focus.showMark));
   $('focusOn').setAttribute('aria-checked', String(!!S.focus.on));
   $('pFocus').classList.toggle('off', !S.focus.on);
+  $('pFocus').classList.toggle('marker-controls-locked', markerLocked);
   focusKey = '';
   placeMark();
   syncFocus();
@@ -6622,6 +6683,8 @@ const panelName = id =>
     ? 'Object'
     : id === 'pImgUpscale' || id === 'pVidUpscale'
     ? 'Upscale'
+    : id === 'pBgRemove'
+    ? 'Remove BG'
     : id === 'pPrompt'
     ? 'Prompt and Image'
     : id === 'pFocus'
@@ -6653,6 +6716,11 @@ function dockOf(m = mode()) {
     let refGrp = null;
     cols.forEach(c => d[c].forEach(g => { if (g.tabs.includes('pRef')) refGrp = g; }));
     if (refGrp) { refGrp.tabs.push('pImgUpscale'); missing = missing.filter(id => id !== 'pImgUpscale'); }
+  }
+  if (missing.includes('pBgRemove')) {
+    let refGrp = null;
+    cols.forEach(c => d[c].forEach(g => { if (g.tabs.includes('pImgUpscale') || g.tabs.includes('pRef')) refGrp = g; }));
+    if (refGrp) { refGrp.tabs.push('pBgRemove'); missing = missing.filter(id => id !== 'pBgRemove'); }
   }
   if (missing.includes('pVidUpscale')) {
     let refGrp = null;
@@ -6689,7 +6757,7 @@ function measureRefBoxHeight() {
 function applyUpscalerExactBoxSize() {
   const m = mode();
   const targetH = cachedRefBoxHeight[m] || (m === 'video' ? 370 : 395);
-  ['pImgUpscale', 'pVidUpscale'].forEach(id => {
+  ['pImgUpscale', 'pBgRemove', 'pVidUpscale'].forEach(id => {
     const upEl = $(id);
     if (!upEl) return;
     const isCollapsed = upEl.classList.contains('min') || Boolean(upEl.closest('.tgroup')?.classList.contains('collapsed'));
@@ -6697,7 +6765,7 @@ function applyUpscalerExactBoxSize() {
       upEl.style.height = '';
       upEl.style.minHeight = '';
       upEl.style.maxHeight = '';
-    } else if ((m === 'video' && id === 'pVidUpscale') || (m !== 'video' && id === 'pImgUpscale')) {
+    } else if ((m === 'video' && id === 'pVidUpscale') || (m !== 'video' && (id === 'pImgUpscale' || id === 'pBgRemove'))) {
       upEl.style.height = targetH + 'px';
       upEl.style.minHeight = targetH + 'px';
       upEl.style.maxHeight = targetH + 'px';
@@ -6740,9 +6808,10 @@ function renderDock() {
         const isCamLocked = id === 'pCam' && S.mode !== 'adv';
         const isLocked = isCamLocked || (!PRO && LOCKED_PANELS.includes(id));
         const isUpscaleTab = id === 'pImgUpscale' || id === 'pVidUpscale';
+        const isBgRemoveTab = id === 'pBgRemove';
         const t = document.createElement('button');
         t.type = 'button';
-        t.className = 'tab' + (isUpscaleTab ? ' tab-upscale' : '') + (isLocked ? ' locked' : '');
+        t.className = 'tab' + (isUpscaleTab ? ' tab-upscale' : '') + (isBgRemoveTab ? ' tab-bgremove' : '') + (isLocked ? ' locked' : '');
         t.draggable = !isCamLocked;
         t.dataset.pid = id;
         t.setAttribute('role', 'tab'); t.setAttribute('aria-selected', id === g.active ? 'true' : 'false');
@@ -6764,6 +6833,7 @@ function renderDock() {
     measureRefBoxHeight();
     applyUpscalerExactBoxSize();
     syncImageUpscalerUI();
+    if (typeof syncBgRemoverUI === 'function') syncBgRemoverUI();
     hooks.syncVideoUpscalerUI?.();
     if (typeof alignBrandWithInputBox === 'function') alignBrandWithInputBox();
   });
@@ -7198,15 +7268,18 @@ async function handleGlobalPageDroppedPayload({ files = [], isFolder = false, fo
       // Load first image into Input (#pRef) and set folder batch in Image Upscale (#pImgUpscale)
       addFiles([imgFiles[0]]);
       selectBatchFolderFromFileList(imgFiles, folderName || 'Dropped_Folder');
+      showPanel('pImgUpscale');
     } else {
       batchFolderState = null;
       addFiles(imgFiles);
       if (refs.length) {
         S.focus.img = refs.length - 1;
       }
+      // Bug Fix 1: When an image is dropped in the input/reference box (or page), it stays there (does NOT auto-jump to Upscale).
+      // The image is also available in Upscale (#pImgUpscale) and Remove BG (#pBgRemove) when the user clicks those tabs.
     }
-    showPanel('pImgUpscale');
     syncImageUpscalerUI();
+    if (typeof syncBgRemoverUI === 'function') syncBgRemoverUI();
   }
 }
 window.handleGlobalPageDroppedPayload = handleGlobalPageDroppedPayload;
@@ -7296,7 +7369,360 @@ function applyLayout() {
   requestAnimationFrame(alignBrandWithInputBox);
 }
 
+/* ---------- Remove Background (#pBgRemove) in Image Mode (next to Upscale) ---------- */
+let bgRemoveRunning = false;
+let bgRemoveFill = 'transparent';
+let bgRemoveLastDataUrl = '';
+
+function syncBgRemoverUI() {
+  const drop = $('bgRemoveDrop');
+  const thumb = $('bgRemoveThumb');
+  const empty = $('bgRemoveEmpty');
+  const meta = $('bgRemoveMeta');
+  if (!thumb || !empty) return;
+
+  const ref = refs[S.focus?.img] || refs[0];
+  if (ref && ref.src) {
+    if (thumb.getAttribute('src') !== ref.src) thumb.src = ref.src;
+    thumb.hidden = false;
+    empty.hidden = true;
+    const w = ref.img?.naturalWidth || 0;
+    const h = ref.img?.naturalHeight || 0;
+    fitUpscaleDropMedia(drop, thumb, w, h);
+    if (meta) {
+      meta.textContent = w && h ? `${w}×${h} px` : ref.name || 'Reference Image';
+      meta.hidden = false;
+    }
+  } else {
+    thumb.hidden = true;
+    empty.hidden = false;
+    if (meta) meta.hidden = true;
+  }
+}
+window.syncBgRemoverUI = syncBgRemoverUI;
+
+function removeBackgroundSmartFallback(imgEl, bgColor = 'transparent') {
+  const w = imgEl.naturalWidth || imgEl.width || 512;
+  const h = imgEl.naturalHeight || imgEl.height || 512;
+  const cvs = document.createElement('canvas');
+  cvs.width = w;
+  cvs.height = h;
+  const ctx = cvs.getContext('2d');
+  ctx.drawImage(imgEl, 0, 0, w, h);
+  const imgData = ctx.getImageData(0, 0, w, h);
+  const d = imgData.data;
+
+  // Sample border corners & perimeter to estimate background color distribution
+  const samples = [];
+  const stepX = Math.max(1, Math.floor(w / 24));
+  const stepY = Math.max(1, Math.floor(h / 24));
+  const pushPx = (x, y) => {
+    const idx = (clamp(y, 0, h - 1) * w + clamp(x, 0, w - 1)) * 4;
+    samples.push([d[idx], d[idx + 1], d[idx + 2]]);
+  };
+  for (let x = 0; x < w; x += stepX) { pushPx(x, 0); pushPx(x, h - 1); }
+  for (let y = 0; y < h; y += stepY) { pushPx(0, y); pushPx(w - 1, y); }
+  let mr = 0, mg = 0, mb = 0;
+  samples.forEach(([r, g, b]) => { mr += r; mg += g; mb += b; });
+  mr /= Math.max(1, samples.length);
+  mg /= Math.max(1, samples.length);
+  mb /= Math.max(1, samples.length);
+
+  // Compute color distance + edge-connected mask from border with soft feathering
+  const thresh = 56;
+  const softSpan = 28;
+  let fillR = 0, fillG = 0, fillB = 0, useFill = false;
+  if (bgColor && bgColor !== 'transparent') {
+    const tmp = document.createElement('canvas');
+    tmp.width = tmp.height = 1;
+    const tctx = tmp.getContext('2d');
+    tctx.fillStyle = bgColor;
+    tctx.fillRect(0, 0, 1, 1);
+    const p = tctx.getImageData(0, 0, 1, 1).data;
+    fillR = p[0]; fillG = p[1]; fillB = p[2];
+    useFill = true;
+  }
+
+  for (let y = 0; y < h; y++) {
+    const ny = (y / Math.max(1, h - 1)) * 2 - 1;
+    for (let x = 0; x < w; x++) {
+      const nx = (x / Math.max(1, w - 1)) * 2 - 1;
+      const idx = (y * w + x) * 4;
+      const r = d[idx], g = d[idx + 1], b = d[idx + 2];
+      const dist = Math.hypot(r - mr, g - mg, b - mb);
+      const radial = Math.hypot(nx, ny);
+      const effThresh = radial > 0.78 ? thresh * 1.18 : radial < 0.38 ? thresh * 0.52 : thresh;
+      let fgAlpha = 1;
+      if (dist <= effThresh) fgAlpha = 0;
+      else if (dist < effThresh + softSpan) fgAlpha = (dist - effThresh) / softSpan;
+
+      if (useFill) {
+        d[idx]     = Math.round(r * fgAlpha + fillR * (1 - fgAlpha));
+        d[idx + 1] = Math.round(g * fgAlpha + fillG * (1 - fgAlpha));
+        d[idx + 2] = Math.round(b * fgAlpha + fillB * (1 - fgAlpha));
+        d[idx + 3] = 255;
+      } else {
+        d[idx + 3] = Math.round(d[idx + 3] * fgAlpha);
+      }
+    }
+  }
+  ctx.putImageData(imgData, 0, 0);
+  return cvs;
+}
+
+async function runImageBgRemove() {
+  if (bgRemoveRunning) return;
+  const ref = refs[S.focus?.img] || refs[0];
+  const errBox = $('bgRemoveError');
+  const loadBox = $('bgRemoveLoading');
+  const resBox = $('bgRemoveResultBox');
+  const resImg = $('bgRemoveResultImg');
+  const runBtn = $('bgRemoveRunBtn');
+
+  if (errBox) { errBox.hidden = true; errBox.textContent = ''; }
+  if (!ref || !ref.img) {
+    const msg = 'Upload or drop an image first before removing the background.';
+    if (errBox) { errBox.textContent = msg; errBox.hidden = false; }
+    toast(msg);
+    return;
+  }
+
+  bgRemoveRunning = true;
+  if (runBtn) runBtn.disabled = true;
+  if (loadBox) loadBox.hidden = false;
+
+  try {
+    if (ref.ready) await ref.ready.catch(() => {});
+    let outCanvas = null;
+    if (window.visionpilotbgremover && typeof window.visionpilotbgremover.removeBackground === 'function') {
+      try {
+        outCanvas = await Promise.race([
+          window.visionpilotbgremover.removeBackground(ref.img, bgRemoveFill),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 3500))
+        ]);
+      } catch (_) {
+        outCanvas = null;
+      }
+    }
+    if (!outCanvas) {
+      outCanvas = removeBackgroundSmartFallback(ref.img, bgRemoveFill);
+    }
+    const dataUrl = outCanvas.toDataURL('image/png');
+    bgRemoveLastDataUrl = dataUrl;
+    if (resImg) resImg.src = dataUrl;
+    if (resBox) resBox.hidden = false;
+
+    const origDataUrl = ref.src;
+    await saveHistoryEntry({
+      kind: 'bg_removed_image',
+      mainImageDataUrl: origDataUrl,
+      upscaledImageDataUrl: dataUrl,
+      generatedImageDataUrl: dataUrl,
+      leftLabel: 'Original Image',
+      rightLabel: 'Background Removed',
+      scaleLabel: 'Cutout PNG',
+      modelName: 'VisionPilot Remove BG',
+      aspectRatio: `${outCanvas.width}×${outCanvas.height}`,
+      width: outCanvas.width,
+      height: outCanvas.height,
+      createdAt: Date.now()
+    });
+    toast('Background removed and saved to History / Library');
+  } catch (err) {
+    const msg = err?.message || String(err);
+    if (errBox) { errBox.textContent = msg; errBox.hidden = false; }
+    toast('Remove Background error: ' + msg);
+  } finally {
+    bgRemoveRunning = false;
+    if (runBtn) runBtn.disabled = false;
+    if (loadBox) loadBox.hidden = true;
+  }
+}
+
+function initBgRemover() {
+  $('bgRemoveThumb')?.addEventListener('load', () => {
+    fitUpscaleDropMedia($('bgRemoveDrop'), $('bgRemoveThumb'));
+  });
+  $('bgRemoveDrop')?.addEventListener('click', () => {
+    if (bgRemoveRunning) return;
+    $('bgRemoveFile')?.click();
+  });
+  $('bgRemoveFile')?.addEventListener('change', (e) => {
+    if (e.target.files && e.target.files.length) {
+      batchFolderState = null;
+      addFiles(e.target.files);
+      if (refs.length) {
+        S.focus.img = refs.length - 1;
+        syncImageUpscalerUI();
+        syncBgRemoverUI();
+      }
+      e.target.value = '';
+    }
+  });
+  ['dragenter', 'dragover'].forEach((ev) => {
+    $('bgRemoveDrop')?.addEventListener(ev, (e) => {
+      if (bgRemoveRunning) return;
+      e.preventDefault();
+      e.stopPropagation();
+      $('bgRemoveDrop').classList.add('over');
+    });
+  });
+  ['dragleave', 'drop'].forEach((ev) => {
+    $('bgRemoveDrop')?.addEventListener(ev, (e) => {
+      if (bgRemoveRunning) return;
+      e.preventDefault();
+      e.stopPropagation();
+      $('bgRemoveDrop').classList.remove('over');
+      if (ev === 'drop' && e.dataTransfer?.files?.length) {
+        batchFolderState = null;
+        addFiles(e.dataTransfer.files);
+        if (refs.length) {
+          S.focus.img = refs.length - 1;
+          syncImageUpscalerUI();
+          syncBgRemoverUI();
+        }
+      }
+    });
+  });
+  $('bgRemoveFillRow')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-bgfill]');
+    if (!btn) return;
+    bgRemoveFill = btn.dataset.bgfill || 'transparent';
+    document.querySelectorAll('#bgRemoveFillRow .bgremove-fill-btn').forEach(b => b.classList.toggle('on', b === btn));
+  });
+  $('bgRemoveCustomColor')?.addEventListener('input', (e) => {
+    bgRemoveFill = e.target.value || '#10b981';
+    document.querySelectorAll('#bgRemoveFillRow .bgremove-fill-btn').forEach(b => b.classList.remove('on'));
+  });
+  $('bgRemoveRunBtn')?.addEventListener('click', runImageBgRemove);
+  $('bgRemoveDownloadBtn')?.addEventListener('click', () => {
+    if (!bgRemoveLastDataUrl) return;
+    const a = document.createElement('a');
+    a.href = bgRemoveLastDataUrl;
+    a.download = `visionpilot-nobg-${Date.now()}.png`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => a.remove(), 250);
+    toast('Downloaded transparent PNG');
+  });
+  $('bgRemoveUseAsInputBtn')?.addEventListener('click', async () => {
+    if (!bgRemoveLastDataUrl) return;
+    try {
+      const blob = await dataUrlToBlob(bgRemoveLastDataUrl);
+      const file = new File([blob], `cutout-${Date.now()}.png`, { type: 'image/png' });
+      addFiles([file]);
+      toast('Cutout added to Input Reference Images');
+    } catch (_) {}
+  });
+  syncBgRemoverUI();
+}
+
+/* ---------- Full-Screen Loading Overlay (#vpLoadingScreen) + Dynamic Brand Color Extraction + Asset Preloading ---------- */
+function applyDynamicModelBrandColorsToLoadingScreen() {
+  const modelMap = {
+    claude: document.querySelector('#aiModelMenu .m-dot.claude'),
+    gpt: document.querySelector('#aiModelMenu .m-dot.gpt'),
+    gemini: document.querySelector('#aiModelMenu .m-dot.gemini')
+  };
+  const extracted = {};
+  Object.entries(modelMap).forEach(([key, dotEl]) => {
+    if (dotEl) {
+      const bg = getComputedStyle(dotEl).backgroundColor;
+      if (bg && bg !== 'rgba(0, 0, 0, 0)') extracted[key] = bg;
+    }
+  });
+  document.querySelectorAll('[data-vp-model-color]').forEach(el => {
+    const k = el.getAttribute('data-vp-model-color');
+    if (extracted[k]) {
+      el.style.color = extracted[k];
+    }
+  });
+  return extracted;
+}
+
+function dismissVpLoadingScreen() {
+  const screen = $('vpLoadingScreen');
+  if (!screen || screen.classList.contains('is-hidden')) return;
+  screen.classList.add('is-hidden');
+  setTimeout(() => {
+    if (screen.parentNode) screen.setAttribute('aria-hidden', 'true');
+  }, 520);
+}
+window.dismissVpLoadingScreen = dismissVpLoadingScreen;
+
+function initLoadingScreen() {
+  const screen = $('vpLoadingScreen');
+  if (!screen) return;
+
+  // 1. Dynamically extract Claude (Orange), ChatGPT (Green), Gemini (Blue) brand colors from existing VisionPilot HTML/CSS
+  applyDynamicModelBrandColorsToLoadingScreen();
+
+  // 2. Mount the 4:3 Image Ad Carousel (1s auto-rotation, loop, glowing dots, pause/resume)
+  if (window.VisionPilotAds && $('vpLoadingAdMount')) {
+    window.__vpLoadingAdCarousel = window.VisionPilotAds.mount('#vpLoadingAdMount', {
+      intervalMs: 1000
+    });
+  }
+
+  // 3. Preload & cache critical assets during the 5-10s loading screen display
+  const preloadUrls = [
+    'image1.jpg',
+    'image2.jpg',
+    'image3.jpg',
+    'image4.jpg',
+    'logo/visionpilot-logo-dark.svg',
+    'logo/visionpilot-app-icon.svg',
+    'ads.html',
+    'ads.js',
+    'style.css',
+    'core.js',
+    'video.js',
+    'detect.js',
+    'ai-bridge.js'
+  ];
+  const fillEl = $('vpLoadProgFill');
+  const pctEl = $('vpLoadPctLbl');
+  const statusEl = $('vpLoadStatusLbl');
+  const minDisplayMs = 5400; // 5-10 seconds display duration per spec
+  const t0 = performance.now();
+  let loadedCount = 0;
+
+  preloadUrls.forEach(url => {
+    fetch(url, { cache: 'force-cache' })
+      .catch(() => {})
+      .finally(() => {
+        loadedCount++;
+      });
+  });
+
+  const tickLoader = () => {
+    if (screen.classList.contains('is-hidden')) return;
+    const elapsed = performance.now() - t0;
+    const timeRatio = clamp(elapsed / minDisplayMs, 0, 1);
+    const assetRatio = loadedCount / preloadUrls.length;
+    const pct = Math.min(100, Math.round((timeRatio * 0.78 + assetRatio * 0.22) * 100));
+    if (fillEl) fillEl.style.width = `${Math.max(8, pct)}%`;
+    if (pctEl) pctEl.textContent = `${pct}%`;
+    if (statusEl) {
+      if (pct < 35) statusEl.textContent = 'Preloading AI models & UI styles…';
+      else if (pct < 75) statusEl.textContent = 'Caching 3D rig & extension assets…';
+      else if (pct < 100) statusEl.textContent = 'Finalizing workspace…';
+      else statusEl.textContent = 'Ready!';
+    }
+    if (elapsed >= minDisplayMs && loadedCount >= Math.min(4, preloadUrls.length)) {
+      if (fillEl) fillEl.style.width = '100%';
+      if (pctEl) pctEl.textContent = '100%';
+      dismissVpLoadingScreen();
+    } else {
+      requestAnimationFrame(tickLoader);
+    }
+  };
+  requestAnimationFrame(tickLoader);
+}
+
 /* ---------- boot ---------- */
+initLoadingScreen();
+initBgRemover();
 readTokens();
 buildStatic();
 document.querySelectorAll('select').forEach(enhance);

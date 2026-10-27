@@ -1027,6 +1027,63 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  if (msg.type === 'VP_OPEN_VISION_PILOT') {
+    (async () => {
+      try {
+        const tabs = await chrome.tabs.query({});
+        const vpTab = tabs.find(t => isVisionPilotTab(t));
+        if (vpTab && vpTab.id) {
+          await chrome.tabs.update(vpTab.id, { active: true });
+          if (vpTab.windowId !== undefined) {
+            await chrome.windows.update(vpTab.windowId, { focused: true });
+          }
+          const stored = await chrome.storage.local.get(['vpLastUrl']);
+          if (!stored.vpLastUrl && vpTab.url) {
+            await chrome.storage.local.set({ vpLastUrl: vpTab.url });
+          }
+          sendResponse({ ok: true, tabId: vpTab.id, url: vpTab.url });
+          return;
+        }
+        const stored = await chrome.storage.local.get(['vpLastUrl']);
+        let targetUrl = stored?.vpLastUrl || 'https://framesbyismail.github.io/VisionPilot/';
+        try {
+          const pingResp = await fetch('http://127.0.0.1:45780/api/sync-state', { method: 'GET' });
+          if (pingResp && pingResp.ok) {
+            targetUrl = 'http://127.0.0.1:45780/index.html';
+          }
+        } catch (e) {}
+        const created = await chrome.tabs.create({ url: targetUrl, active: true });
+        if (created?.id) knownVisionPilotTabIds.add(created.id);
+        sendResponse({ ok: true, tabId: created?.id || null, url: targetUrl });
+      } catch (err) {
+        sendResponse({ ok: false, error: err?.message || String(err) });
+      }
+    })();
+    return true;
+  }
+
+  if (msg.type === 'VP_SYNC_STATE') {
+    (async () => {
+      try {
+        const incoming = msg.state || {};
+        const cur = await chrome.storage.local.get(['vpSyncedState']);
+        const merged = Object.assign({}, cur?.vpSyncedState || {}, incoming, { updatedAt: Date.now() });
+        await chrome.storage.local.set({ vpSyncedState: merged });
+        try {
+          await fetch('http://127.0.0.1:45780/api/sync-state', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(merged)
+          });
+        } catch (e) {}
+        sendResponse({ ok: true, state: merged });
+      } catch (e) {
+        sendResponse({ ok: false, error: e?.message || String(e) });
+      }
+    })();
+    return true;
+  }
+
   if (msg.type === 'VP_OPEN_PROVIDER_LOGIN') {
     (async () => {
       const prov = PROVIDERS[msg.model];
