@@ -15,19 +15,28 @@
 <link rel="preload" href="video.js" as="script">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style id="vpCriticalCss">
-  /* Critical above-the-fold Night Mode & Solid Adobe-Style Loading Box CSS (No Gradients, No Grid) */
-  :root, html, html[data-mode="night"], html[data-theme="dark"] {
+  /* Critical above-the-fold Theme & Solid Adobe-Style Loading Box CSS (No Gradients on Loading Box) */
+  :root, html[data-mode="night"] {
     color-scheme: dark;
     --bg: #0c0d10;
     --panel: #15171c;
     --card: #15171c;
+    --fg: #eef0f5;
     --ink: #eef0f5;
+  }
+  html[data-mode="day"] {
+    color-scheme: light;
+    --bg: #e6e2dc;
+    --panel: #f5f0e8;
+    --card: #f5f0e8;
+    --fg: #1a1a1a;
+    --ink: #1a1a1a;
   }
   html, body {
     margin: 0;
     padding: 0;
-    background: #0c0d10;
-    color: #eef0f5;
+    background-color: var(--bg);
+    color: var(--fg);
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   }
   .vp-loading-screen {
@@ -40,7 +49,19 @@
     align-items: center;
     justify-content: center;
     padding: 28px;
-    transition: opacity 0.42s ease, visibility 0.42s ease;
+    transition: opacity 0.36s ease, visibility 0.36s ease;
+  }
+  .vpl-logo-img {
+    height: 60px;
+    width: auto;
+    display: block;
+    margin-left: -11.2px;
+  }
+  html.vp-warm-reload .vp-loading-screen {
+    display: none !important;
+  }
+  html:not(.vp-warm-reload) .vp-skeleton-screen {
+    display: none !important;
   }
   html[data-desktop-app="true"] .vp-loading-screen,
   body.is-desktop-app .vp-loading-screen {
@@ -51,10 +72,89 @@
   body.is-desktop-app .vp-loading-screen .vpl-shell {
     pointer-events: auto;
   }
-  .vp-loading-screen.is-hidden {
+  .vp-loading-screen.is-hidden,
+  .vp-skeleton-screen.is-hidden {
     opacity: 0;
     visibility: hidden;
     pointer-events: none;
+  }
+  /* YouTube-Style Skeleton Loading Screen for Page Reloads (0.5s - 1.0s real initialization) */
+  .vp-skeleton-screen {
+    position: fixed;
+    inset: 0;
+    z-index: 99998;
+    background: var(--bg, #0c0d10);
+    color: var(--fg, #eef0f5);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    transition: opacity 0.18s ease, visibility 0.18s ease;
+  }
+  .vps-topbar-prog {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 3px;
+    width: 35%;
+    background: #e85d2b;
+    z-index: 2;
+    transition: width 0.18s ease;
+  }
+  .vps-nav {
+    height: 68px;
+    background: var(--panel, #15171c);
+    border-bottom: 1px solid rgba(128,128,128,0.22);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
+    flex: none;
+  }
+  .vps-nav-left, .vps-nav-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .vps-grid {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 330px minmax(0, 1fr) 395px;
+    gap: 12px;
+    padding: 12px 16px 20px;
+    min-height: 0;
+  }
+  .vps-col {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 0;
+  }
+  .vps-card {
+    background: var(--panel, #15171c);
+    border: 1px solid rgba(128,128,128,0.2);
+    border-radius: 12px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow: hidden;
+  }
+  .vps-bone {
+    background: rgba(148, 154, 166, 0.13);
+    border-radius: 8px;
+    position: relative;
+    overflow: hidden;
+  }
+  .vps-bone::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.07), transparent);
+    animation: vpsShimmer 1.15s infinite;
+  }
+  @keyframes vpsShimmer {
+    100% { transform: translateX(100%); }
   }
   .vp-ad-viewport {
     position: relative;
@@ -76,7 +176,7 @@
 </style>
 <link rel="stylesheet" href="style.css">
 </head>
-<body class="night-mode-only">
+<body>
 <!-- ADOBE-INSPIRED LOADING SCREEN (SOLID DARK, SINGLE MAIN CONTAINER, NO SUB-BOXES, NO GRADIENTS) -->
 <div class="vp-loading-screen" id="vpLoadingScreen" role="dialog" aria-label="VisionPilot Loading Screen">
   <div class="vpl-shell">
@@ -123,11 +223,98 @@
     </div>
   </div>
 </div>
+
+<!-- YOUTUBE-STYLE SKELETON LOADING SCREEN ON RELOADS (0.5s - 1.0s REAL READINESS, NO FAKE DELAY) -->
+<div class="vp-skeleton-screen" id="vpSkeletonScreen" role="status" aria-label="Loading interface">
+  <div class="vps-topbar-prog" id="vpSkeletonTopBar"></div>
+  <div class="vps-nav">
+    <div class="vps-nav-left">
+      <div class="vps-bone" style="width:148px;height:34px;border-radius:8px"></div>
+      <div class="vps-bone" style="width:170px;height:26px;border-radius:6px"></div>
+    </div>
+    <div class="vps-nav-right">
+      <div class="vps-bone" style="width:130px;height:32px;border-radius:8px"></div>
+      <div class="vps-bone" style="width:150px;height:32px;border-radius:8px"></div>
+      <div class="vps-bone" style="width:110px;height:32px;border-radius:8px"></div>
+      <div class="vps-bone" style="width:58px;height:30px;border-radius:999px"></div>
+    </div>
+  </div>
+  <div class="vps-grid">
+    <div class="vps-col">
+      <div class="vps-card" style="height:390px">
+        <div class="vps-bone" style="width:55%;height:22px"></div>
+        <div class="vps-bone" style="width:100%;height:140px;border-radius:10px"></div>
+        <div class="vps-bone" style="width:80%;height:18px"></div>
+        <div class="vps-bone" style="width:100%;height:96px;border-radius:8px;margin-top:auto"></div>
+      </div>
+      <div class="vps-card" style="flex:1">
+        <div class="vps-bone" style="width:48%;height:22px"></div>
+        <div class="vps-bone" style="width:100%;height:34px"></div>
+        <div class="vps-bone" style="width:100%;height:34px"></div>
+        <div class="vps-bone" style="width:100%;height:70px;margin-top:auto"></div>
+      </div>
+    </div>
+    <div class="vps-col">
+      <div class="vps-card" style="height:490px">
+        <div class="vps-bone" style="width:36%;height:22px"></div>
+        <div style="display:grid;grid-template-columns:1.35fr 1fr;gap:12px;flex:1">
+          <div class="vps-bone" style="width:100%;height:100%;border-radius:10px"></div>
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <div class="vps-bone" style="width:100%;flex:1;border-radius:10px"></div>
+            <div class="vps-bone" style="width:100%;flex:1;border-radius:10px"></div>
+          </div>
+        </div>
+      </div>
+      <div class="vps-card" style="flex:1">
+        <div class="vps-bone" style="width:42%;height:20px"></div>
+        <div class="vps-bone" style="width:100%;flex:1;border-radius:10px"></div>
+      </div>
+    </div>
+    <div class="vps-col">
+      <div class="vps-card" style="height:445px">
+        <div class="vps-bone" style="width:45%;height:22px"></div>
+        <div class="vps-bone" style="width:100%;height:32px"></div>
+        <div class="vps-bone" style="width:100%;height:64px"></div>
+        <div class="vps-bone" style="width:100%;height:125px;border-radius:8px"></div>
+        <div class="vps-bone" style="width:100%;height:82px;margin-top:auto"></div>
+      </div>
+      <div class="vps-card" style="flex:1">
+        <div class="vps-bone" style="width:52%;height:22px"></div>
+        <div class="vps-bone" style="width:100%;height:34px"></div>
+        <div class="vps-bone" style="width:100%;flex:1;border-radius:8px"></div>
+      </div>
+    </div>
+  </div>
+</div>
 <script>
   (() => {
-    if (window.visionPilotDesktop?.isDesktop || new URLSearchParams(location.search).get('app') === '1') {
+    const params = new URLSearchParams(location.search);
+    if (window.visionPilotDesktop?.isDesktop || params.get('app') === '1') {
       document.documentElement.setAttribute('data-desktop-app', 'true');
       document.body.classList.add('is-desktop-app');
+    }
+    const navEntry = (window.performance && performance.getEntriesByType) ? performance.getEntriesByType('navigation')[0] : null;
+    const isReloadNav = Boolean((navEntry && navEntry.type === 'reload') || (window.performance && performance.navigation && performance.navigation.type === 1));
+    let seenBoot = false;
+    try { seenBoot = sessionStorage.getItem('vp_boot_seen') === '1'; } catch (e) {}
+    const forceSplash = params.get('splash') === '1';
+    const forceSkeleton = params.get('skeleton') === '1';
+    if (((isReloadNav || seenBoot) && !forceSplash) || forceSkeleton) {
+      window.__vpIsReloadOrWarm = true;
+      document.documentElement.classList.add('vp-warm-reload');
+      const loadScr = document.getElementById('vpLoadingScreen');
+      if (loadScr) {
+        loadScr.classList.add('is-hidden');
+        loadScr.setAttribute('aria-hidden', 'true');
+      }
+    } else {
+      window.__vpIsReloadOrWarm = false;
+      try { sessionStorage.setItem('vp_boot_seen', '1'); } catch (e) {}
+      const skelScr = document.getElementById('vpSkeletonScreen');
+      if (skelScr) {
+        skelScr.classList.add('is-hidden');
+        skelScr.setAttribute('aria-hidden', 'true');
+      }
     }
     const rootStyle = getComputedStyle(document.documentElement);
     const colorMap = {
@@ -702,6 +889,17 @@
   <!-- PART 3B: CHATGPT 4K BACKGROUND REMOVER (IMAGE MODE ONLY, NEXT TO UPSCALE) -->
   <div class="card ionly" id="pBgRemove" data-name="Remove BG"><button class="tag tag-bgremove" type="button">Remove BG</button>
     <div class="cbody upscaler-cbody" id="bgRemoveBody">
+      <div class="upscale-dropzone img-upscale-dropzone" id="bgRemoveDrop" title="Click or drop an image to remove background">
+        <img id="bgRemoveThumb" alt="Image to remove background" hidden>
+        <div class="upscale-drop-empty" id="bgRemoveEmpty">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 16V4m0 0-4 4m4-4 4 4M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+          <span>Drop image here or click to browse</span>
+          <small>Connected with Input image</small>
+        </div>
+        <div class="upscale-meta-pill" id="bgRemoveMeta" hidden></div>
+      </div>
+      <input type="file" id="bgRemoveFile" accept="image/*" hidden>
+
       <div class="field upscale-controls-field bgremove-controls-field">
         <button type="button" class="btn primary bgremove-run-btn" id="bgRemoveRunBtn">
           <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true" style="width:15px;height:15px"><path d="M4 4l12 12M14 4a2 2 0 1 1 2 2M6 14a2 2 0 1 1-2 2" stroke-linecap="round"/></svg>
@@ -724,6 +922,7 @@
       </div>
 
       <div class="upscale-err-box" id="bgRemoveError" hidden></div>
+      <p class="hint">Connected to ChatGPT via Extension Bridge. Isolates the main subject with 100% precision and returns a 4K transparent PNG.</p>
     </div>
   </div>
 

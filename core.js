@@ -11,13 +11,21 @@ const joinList = a => a.length < 2 ? (a[0] || '') : a.slice(0, -1).join(', ') + 
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const escAttr = s => esc(s).replace(/"/g, '&quot;');
 
-/* ---------- night mode default (no auto day/night switching) ---------- */
+/* ---------- night mode default + day/night theme switcher ---------- */
 const root = document.documentElement;
+function applyThemeMode(m) {
+  const modeVal = m === 'day' ? 'day' : 'night';
+  root.setAttribute('data-mode', modeVal);
+  root.setAttribute('data-theme', modeVal === 'day' ? 'light' : 'dark');
+  const navLogo = document.querySelector('.nav .brand .vp-logo');
+  if (navLogo) {
+    navLogo.src = modeVal === 'day' ? 'logo/visionpilot-logo-light.svg' : 'logo/visionpilot-logo-dark.svg';
+  }
+}
 function initialMode() {
   return 'night';
 }
-root.setAttribute('data-mode', 'night');
-root.setAttribute('data-theme', 'dark');
+applyThemeMode(initialMode());
 
 /* ---------- data ---------- */
 const BODIES = [
@@ -968,6 +976,7 @@ function changed() {
       }, 160);
     }
     if (typeof syncImageUpscalerUI === 'function') syncImageUpscalerUI();
+    if (typeof syncBgRemoverUI === 'function') syncBgRemoverUI();
   });
   if (lastObj) { $('status').textContent = 'Settings changed · generate again'; $('status').classList.add('stale'); }
 }
@@ -3258,9 +3267,11 @@ $('extraAdd').addEventListener('click', () => {
 });
 $('themeBtn').addEventListener('click', () => {
   const m = root.getAttribute('data-mode') === 'night' ? 'day' : 'night';
-  root.setAttribute('data-mode', m);
+  applyThemeMode(m);
   try { localStorage.setItem('anglecraft-mode', m); } catch (e) {}
-  drawAll(); hooks.themeChanged?.();
+  readTokens();
+  drawAll();
+  hooks.themeChanged?.();
 });
 $('modeNormal').onclick = () => {
   S.mode = 'normal';
@@ -7328,7 +7339,7 @@ function measureNav() {
   if (n) root.style.setProperty('--navh', Math.ceil(n.getBoundingClientRect().height + 10) + 'px');
   alignBrandWithInputBox();
 }
-// in both image and video mode the prompt box takes the room under Output so its bottom aligns with Top & Front views (or Timeline)
+// in both image and video mode the Output box (top) and Prompt box (bottom) have fixed heights so both fit cleanly in the right column with zero outer scrollbar
 function fitPrompt() {
   const pre = $('json'), bar = $('genImgModelBar'), card = $('pPrompt'), col = $(S.app === 'video' ? 'vRight' : 'iRight');
   if (!pre || !card || !col) return;
@@ -7337,11 +7348,19 @@ function fitPrompt() {
   if (!col.contains(card) || innerWidth < 1251 || card.closest('.tgroup')?.classList.contains('collapsed')) return;
   const refEl = S.app === 'video' ? $('pTimeline') : $('pairViews');
   const refRect = refEl?.getBoundingClientRect();
-  const targetBottom = (refRect && refRect.height > 20) ? (refRect.bottom - 1) : (col.getBoundingClientRect().bottom - 12);
+  const colRect = col.getBoundingClientRect();
+  const targetBottom = S.app === 'video'
+    ? (colRect.bottom - 24)
+    : ((refRect && refRect.height > 20) ? (refRect.bottom - 1) : (colRect.bottom - 12));
+  const availColH = Math.max(500, targetBottom - colRect.top);
+  // Set top box (#pOutput / #pPresets / #pAnimPresets) fixed height so EXTRA NOTES + button are 100% visible and bottom #pPrompt has comfortable fixed height
+  const outBoxH = clamp(Math.floor(availColH * (S.app === 'video' ? 0.50 : 0.545)), 372, 464);
+  root.style.setProperty('--out-box-h', outBoxH + 'px');
   const activeEl = barOpen ? bar : pre;
-  const extra = card.getBoundingClientRect().height - activeEl.offsetHeight;
-  const space = targetBottom - card.getBoundingClientRect().top;
-  const h = clamp(Math.floor(space - extra), 80, 520) + 'px';
+  const cardRect = card.getBoundingClientRect();
+  const extra = cardRect.height - activeEl.offsetHeight;
+  const space = targetBottom - cardRect.top;
+  const h = clamp(Math.floor(space - extra - 2), 86, 520) + 'px';
   pre.style.height = h;
   if (bar) bar.style.height = h;
 }
@@ -7352,6 +7371,10 @@ function applyLayout() {
   const video = S.app === 'video';
   document.body.classList.toggle('video', video);
   if (video) {
+    if ($('genImgModelBar') && !$('genImgModelBar').hidden) {
+      $('genImgModelBar').hidden = true;
+      if ($('json')) $('json').hidden = false;
+    }
     $('vCenter').prepend($('pViewport'));
     place($('vThree'), ['pOrbit', 'pTop', 'pSide']);
     place($('iTools'), ['pFocus']);
@@ -7374,13 +7397,41 @@ let bgRemoveRunning = false;
 let bgRemoveLastDataUrl = '';
 
 function syncBgRemoverUI() {
+  const drop = $('bgRemoveDrop');
+  const thumb = $('bgRemoveThumb');
+  const empty = $('bgRemoveEmpty');
+  const meta = $('bgRemoveMeta');
   const dlBtn = $('bgRemoveDownloadBtn');
   const useBtn = $('bgRemoveUseAsInputBtn');
   const hasOutput = Boolean(bgRemoveLastDataUrl);
   if (dlBtn) dlBtn.disabled = !hasOutput || bgRemoveRunning;
   if (useBtn) useBtn.disabled = !hasOutput || bgRemoveRunning;
+
+  if (!thumb || !empty) return;
+  const ref = refs[S.focus?.img] || refs[0];
+  const displaySrc = bgRemoveLastDataUrl || (ref && ref.src) || '';
+  if (displaySrc) {
+    if (thumb.getAttribute('src') !== displaySrc) thumb.src = displaySrc;
+    thumb.hidden = false;
+    empty.hidden = true;
+    const w = ref?.img?.naturalWidth || thumb.naturalWidth || 0;
+    const h = ref?.img?.naturalHeight || thumb.naturalHeight || 0;
+    fitUpscaleDropMedia(drop, thumb, w, h);
+    if (meta) {
+      meta.textContent = bgRemoveLastDataUrl ? '4K PNG Cutout' : (w && h ? `${w}×${h} px` : (ref?.name || 'Reference Image'));
+      meta.hidden = false;
+    }
+  } else {
+    thumb.hidden = true;
+    empty.hidden = false;
+    if (meta) meta.hidden = true;
+  }
 }
 window.syncBgRemoverUI = syncBgRemoverUI;
+
+$('bgRemoveThumb')?.addEventListener('load', () => {
+  fitUpscaleDropMedia($('bgRemoveDrop'), $('bgRemoveThumb'));
+});
 
 async function runImageBgRemove() {
   if (bgRemoveRunning) return;
@@ -7478,6 +7529,47 @@ async function runImageBgRemove() {
 }
 
 function initBgRemover() {
+  $('bgRemoveDrop')?.addEventListener('click', () => {
+    if (bgRemoveRunning) return;
+    $('bgRemoveFile')?.click();
+  });
+  $('bgRemoveFile')?.addEventListener('change', (e) => {
+    if (e.target.files && e.target.files.length) {
+      bgRemoveLastDataUrl = '';
+      addFiles(e.target.files);
+      if (refs.length) {
+        S.focus.img = refs.length - 1;
+        syncBgRemoverUI();
+        syncImageUpscalerUI();
+      }
+      e.target.value = '';
+    }
+  });
+  ['dragenter', 'dragover'].forEach((ev) => {
+    $('bgRemoveDrop')?.addEventListener(ev, (e) => {
+      if (bgRemoveRunning) return;
+      e.preventDefault();
+      e.stopPropagation();
+      $('bgRemoveDrop').classList.add('over');
+    });
+  });
+  ['dragleave', 'drop'].forEach((ev) => {
+    $('bgRemoveDrop')?.addEventListener(ev, (e) => {
+      if (bgRemoveRunning) return;
+      e.preventDefault();
+      e.stopPropagation();
+      $('bgRemoveDrop').classList.remove('over');
+      if (ev === 'drop' && e.dataTransfer?.files?.length) {
+        bgRemoveLastDataUrl = '';
+        addFiles(e.dataTransfer.files);
+        if (refs.length) {
+          S.focus.img = refs.length - 1;
+          syncBgRemoverUI();
+          syncImageUpscalerUI();
+        }
+      }
+    });
+  });
   $('bgRemoveRunBtn')?.addEventListener('click', runImageBgRemove);
   $('bgRemoveDownloadBtn')?.addEventListener('click', () => {
     const targetDataUrl = bgRemoveLastDataUrl || (refs[S.focus?.img] || refs[0])?.src || '';
@@ -7504,7 +7596,7 @@ function initBgRemover() {
   syncBgRemoverUI();
 }
 
-/* ---------- Adobe-Inspired Loading Screen (#vpLoadingScreen) + Dynamic Brand Color Extraction + Asset Preloading ---------- */
+/* ---------- Adobe-Inspired Loading Screen (Real 5s Max Cold Boot) + YouTube-Style Skeleton Loading on Reloads (0.5-1.0s) ---------- */
 function applyDynamicModelBrandColorsToLoadingScreen() {
   const modelMap = {
     claude: document.querySelector('#aiModelMenu .m-dot.claude'),
@@ -7533,13 +7625,25 @@ function dismissVpLoadingScreen() {
   screen.classList.add('is-hidden');
   setTimeout(() => {
     if (screen.parentNode) screen.setAttribute('aria-hidden', 'true');
-  }, 460);
+  }, 400);
 }
 window.dismissVpLoadingScreen = dismissVpLoadingScreen;
 
+function dismissVpSkeletonScreen() {
+  const skel = $('vpSkeletonScreen');
+  if (!skel || skel.classList.contains('is-hidden')) return;
+  const topBar = $('vpSkeletonTopBar');
+  if (topBar) topBar.style.width = '100%';
+  skel.classList.add('is-hidden');
+  setTimeout(() => {
+    if (skel.parentNode) skel.setAttribute('aria-hidden', 'true');
+  }, 220);
+}
+window.dismissVpSkeletonScreen = dismissVpSkeletonScreen;
+
 function initLoadingScreen() {
   const screen = $('vpLoadingScreen');
-  if (!screen) return;
+  const skel = $('vpSkeletonScreen');
 
   // App Version detection: Do NOT apply full dark screen overlay; display only the centered Adobe-style loading box over the interface
   const isAppVersion =
@@ -7551,7 +7655,49 @@ function initLoadingScreen() {
     document.body.classList.add('is-desktop-app');
   }
 
-  // 1. Dynamically extract Claude (Orange), ChatGPT (Green), Gemini (Blue) brand colors from existing VisionPilot HTML/CSS
+  // Case A: Warm Reload (bar bar reload dile loading box ashbe na -> YouTube-style skeleton loading for real 0.5s - 1.0s readiness)
+  if (window.__vpIsReloadOrWarm) {
+    if (screen) {
+      screen.classList.add('is-hidden');
+      screen.setAttribute('aria-hidden', 'true');
+    }
+    if (!skel) return;
+    const topBar = $('vpSkeletonTopBar');
+    const t0 = performance.now();
+    const minSkelMs = 520;
+    const maxSkelMs = 920;
+    let fontsDone = false;
+    if (document.fonts?.ready) {
+      document.fonts.ready.then(() => { fontsDone = true; }).catch(() => { fontsDone = true; });
+    } else {
+      fontsDone = true;
+    }
+
+    const tickSkeleton = () => {
+      if (skel.classList.contains('is-hidden')) return;
+      const elapsedBoot = performance.now();
+      const elapsedCore = performance.now() - t0;
+      const realReady = (document.readyState === 'complete' || document.readyState === 'interactive') && Boolean(window.AC) && fontsDone;
+      const pct = Math.min(98, Math.round(35 + (elapsedBoot / maxSkelMs) * 63));
+      if (topBar) topBar.style.width = `${pct}%`;
+      if ((realReady && elapsedBoot >= minSkelMs && elapsedCore >= 320) || elapsedBoot >= maxSkelMs || elapsedCore >= 850) {
+        dismissVpSkeletonScreen();
+      } else {
+        requestAnimationFrame(tickSkeleton);
+      }
+    };
+    requestAnimationFrame(tickSkeleton);
+    return;
+  }
+
+  // Case B: First Cold Boot (Adobe-inspired Loading Box driven by real asset loading, strictly max 5s / 5000ms)
+  if (skel) {
+    skel.classList.add('is-hidden');
+    skel.setAttribute('aria-hidden', 'true');
+  }
+  if (!screen) return;
+
+  // 1. Dynamically extract Claude (Orange), ChatGPT (Green), Gemini (Blue) brand colors
   applyDynamicModelBrandColorsToLoadingScreen();
 
   // 2. Mount the 4:3 Image Carousel from /add/ (add_image_1.png, add_image_2.png, ...)
@@ -7561,13 +7707,14 @@ function initLoadingScreen() {
     });
   }
 
-  // 3. Preload & cache critical assets during the 5-10s loading screen display
+  // 3. Real asset & engine readiness tracking capped strictly at 5000ms (5s max)
   const preloadUrls = [
     'add/add_image_1.png',
     'add/add_image_2.png',
     'add/add_image_3.png',
     'add/add_image_4.png',
     'logo/visionpilot-logo-dark.svg',
+    'logo/visionpilot-logo-light.svg',
     'logo/visionpilot-app-icon.svg',
     'ads.html',
     'ads.js',
@@ -7580,9 +7727,14 @@ function initLoadingScreen() {
   const fillEl = $('vpLoadProgFill');
   const pctEl = $('vpLoadPctLbl');
   const statusEl = $('vpLoadStatusLbl');
-  const minDisplayMs = 5400; // 5-10 seconds display duration
-  const t0 = performance.now();
+  const maxDisplayMs = 4650; // Strict 5s maximum cap from navigation start (never exceeds 5000ms even on slow network)
   let loadedCount = 0;
+  let fontsReady = false;
+  if (document.fonts?.ready) {
+    document.fonts.ready.then(() => { fontsReady = true; }).catch(() => { fontsReady = true; });
+  } else {
+    fontsReady = true;
+  }
 
   preloadUrls.forEach(url => {
     fetch(url, { cache: 'force-cache' })
@@ -7594,16 +7746,31 @@ function initLoadingScreen() {
 
   if (statusEl) statusEl.textContent = 'Loading...';
 
+  // Hard 5000ms safety timeout from navigation start so loading box NEVER stays longer than 5s
+  const remainingHardMs = Math.max(80, 4750 - performance.now());
+  const hardTimeoutId = setTimeout(() => {
+    if (fillEl) fillEl.style.width = '100%';
+    if (pctEl) pctEl.textContent = '100%';
+    dismissVpLoadingScreen();
+  }, remainingHardMs);
+
   const tickLoader = () => {
-    if (screen.classList.contains('is-hidden')) return;
-    const elapsed = performance.now() - t0;
-    const timeRatio = clamp(elapsed / minDisplayMs, 0, 1);
+    if (screen.classList.contains('is-hidden')) {
+      clearTimeout(hardTimeoutId);
+      return;
+    }
+    const elapsed = performance.now();
+    const domReady = document.readyState === 'complete' ? 1 : (document.readyState === 'interactive' ? 0.65 : 0.3);
+    const engineReady = window.AC ? 1 : 0.4;
     const assetRatio = loadedCount / preloadUrls.length;
-    const pct = Math.min(100, Math.round((timeRatio * 0.78 + assetRatio * 0.22) * 100));
+    const realReadiness = assetRatio * 0.60 + domReady * 0.20 + (fontsReady ? 0.10 : 0) + engineReady * 0.10;
+    const timeRatio = clamp(elapsed / maxDisplayMs, 0, 1);
+    const pct = Math.min(100, Math.round((timeRatio * 0.55 + realReadiness * 0.45) * 100));
     if (fillEl) fillEl.style.width = `${Math.max(8, pct)}%`;
     if (pctEl) pctEl.textContent = `${pct}%`;
     if (statusEl) statusEl.textContent = 'Loading...';
-    if (elapsed >= minDisplayMs && loadedCount >= Math.min(4, preloadUrls.length)) {
+    if (elapsed >= maxDisplayMs) {
+      clearTimeout(hardTimeoutId);
       if (fillEl) fillEl.style.width = '100%';
       if (pctEl) pctEl.textContent = '100%';
       dismissVpLoadingScreen();
@@ -7630,11 +7797,14 @@ const ro = new ResizeObserver(() => {
   if ($('imgUpscaleDrop') && $('imgUpscaleThumb') && !$('imgUpscaleThumb').hidden) {
     fitUpscaleDropMedia($('imgUpscaleDrop'), $('imgUpscaleThumb'));
   }
+  if ($('bgRemoveDrop') && $('bgRemoveThumb') && !$('bgRemoveThumb').hidden) {
+    fitUpscaleDropMedia($('bgRemoveDrop'), $('bgRemoveThumb'));
+  }
   if ($('vidUpscaleDrop') && $('vidUpscaleThumbImg') && !$('vidUpscaleThumbImg').hidden) {
     fitUpscaleDropMedia($('vidUpscaleDrop'), $('vidUpscaleThumbImg'));
   }
 });
-['globe', 'top', 'side', 'lightDial', 'focusImg', 'focusPic', 'imgUpscaleDrop', 'vidUpscaleDrop'].forEach(id => {
+['globe', 'top', 'side', 'lightDial', 'focusImg', 'focusPic', 'imgUpscaleDrop', 'bgRemoveDrop', 'vidUpscaleDrop'].forEach(id => {
   if ($(id)) ro.observe($(id));
 });
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { drawAll(); hooks.themeChanged?.(); });

@@ -95,6 +95,7 @@ function map3DModelInfo(cls, type, subtype) {
   if (c === 'chair' || c === 'couch' || c === 'bench' || /chair|armchair|stool|sofa|couch|bench/i.test(c)) return {model3d:'chair', base3d:'Chair'};
   if (c === 'dining table' || c === 'desk' || /table|desk/i.test(c)) return {model3d:'table', base3d:'Table'};
   if (c === 'potted plant' || c === 'tree' || /tree|plant|bush|palm|pine/i.test(c)) return {model3d:'tree', base3d:'Tree'};
+  if (/motorcycle|motorbike|bicycle|bike|scooter|moped/i.test(c)) return {model3d:'bike', base3d:'Bike'};
   if (type === 'car' || type === 'vehicle' || /car|truck|bus|sedan|coupe|suv/i.test(c)) return {model3d:'car', base3d:'Car'};
   if (type === 'phone' || /phone|smartphone|cell/i.test(c)) return {model3d:'phone', base3d:'Phone'};
   if (type === 'animal' || ANIMALS.has(c)) return {model3d:'animal', base3d:c ? c[0].toUpperCase() + c.slice(1) : 'Animal'};
@@ -745,11 +746,12 @@ async function analyze(img) {
         if (preds && preds.length) {
           o._mnTags = preds.filter(p => p.probability >= .10).map(p => p.className.split(',')[0].trim().toLowerCase());
           const topTag = o._mnTags[0] || '';
-          if (o.type === 'auto' || o.cls === 'subject' || o.cls === 'product') {
-            if (/car|sedan|coupe|convertible|cabriolet|limousine|minivan|jeep|sports car|wagon|racer/i.test(topTag)) { o.type = 'car'; o.cls = topTag; }
+          if (o.type === 'auto' || o.cls === 'subject' || o.cls === 'product' || o.type === 'object') {
+            if (/motor scooter|moped|motorcycle|motorbike|mountain bike|bicycle|tricycle|unicycle/i.test(topTag)) { o.type = 'vehicle'; o.cls = /bicycle|mountain bike/i.test(topTag) ? 'bicycle' : 'motorcycle'; }
+            else if (/car|sedan|coupe|convertible|cabriolet|limousine|minivan|jeep|sports car|wagon|racer/i.test(topTag)) { o.type = 'car'; o.cls = topTag; }
             else if (/cellular telephone|cellphone|iPod|hand-held computer|modem/i.test(topTag)) { o.type = 'phone'; o.cls = 'smartphone'; }
             else if (/cat|tabby|tiger cat|persian cat|siamese cat|egyptian cat|dog|retriever|terrier|spaniel|shepherd|pug|poodle|hound|husky|bird|parrot|owl|horse|cow|sheep/i.test(topTag)) { o.type = 'animal'; o.cls = topTag; }
-            else if (/bottle|perfume|lotion|mug|cup|watch|shoe|sneaker|sandal|sunglass|camera|bag|backpack|lamp|vase|clock|pillow|cushion|book|headphones|speaker/i.test(topTag)) { o.type = 'product'; o.cls = topTag; }
+            else if (/bottle|perfume|lotion|mug|cup|watch|shoe|sneaker|sandal|sunglass|camera|bag|backpack|lamp|vase|clock|pillow|cushion|book|headphones|speaker|laptop|notebook/i.test(topTag)) { o.type = 'product'; o.cls = topTag; }
             else if (topTag) { o.type = 'product'; o.cls = topTag; }
           }
         }
@@ -829,6 +831,8 @@ function assign3DSceneInfo(subjects) {
       s.scale3d = hM;
     } else if (s.model3d === 'car') {
       s.scale3d = 1.48;
+    } else if (s.model3d === 'bike') {
+      s.scale3d = 1.12;
     } else if (s.model3d === 'phone') {
       s.scale3d = .16;
     } else {
@@ -1271,11 +1275,29 @@ function pointInfo(det, x, y, preferredSubj = null) {
       }
     }
   } else if (s.type === 'car' || s.type === 'vehicle') {
+    const isBikeSubj = /motorcycle|motorbike|bicycle|bike|scooter|moped/i.test(`${s.cls || ''} ${s.subtype || ''}`);
     const viewCode = s.viewCode || 'front';
     const isRearView = viewCode === 'back';
     const isRightSide = viewCode === 'right';
     const isLeftSide = viewCode === 'left' || viewCode === 'three-quarter';
-    if (ry >= .48 && (rx < .44 || rx > .56)) {
+    if (isBikeSubj) {
+      const bikeNoun = /bicycle/i.test(`${s.cls || ''} ${s.subtype || ''}`) ? 'bicycle' : 'motorcycle';
+      if (ry >= .48 && (rx < .40 || rx > .60)) {
+        if (isRightSide) {
+          part = rx < .5 ? `the ${bikeNoun}'s rear wheel and swingarm` : `the ${bikeNoun}'s front wheel and brake disc`;
+        } else {
+          part = rx < .5 ? `the ${bikeNoun}'s front wheel and brake disc` : `the ${bikeNoun}'s rear wheel and swingarm`;
+        }
+      } else if (ry < .42 && ((isRightSide && rx > .54) || (!isRightSide && rx < .46))) {
+        part = `the ${bikeNoun}'s handlebars, front fork, and headlight`;
+      } else if (ry < .52 && rx >= .32 && rx <= .68) {
+        part = `the ${bikeNoun}'s sculpted fuel tank and upper frame`;
+      } else if ((isRightSide && rx < .44) || (!isRightSide && rx > .56)) {
+        part = `the ${bikeNoun}'s stepped rider seat and tail cowling`;
+      } else {
+        part = `the ${bikeNoun}'s engine block and exhaust pipe`;
+      }
+    } else if (ry >= .48 && (rx < .44 || rx > .56)) {
       if (isRearView) {
         part = rx < .5 ? `the car's rear left wheel` : `the car's rear right wheel`;
       } else if (isRightSide) {

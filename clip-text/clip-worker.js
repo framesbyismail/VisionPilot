@@ -114,8 +114,19 @@ const PROMPT_BANKS = {
     { id: 'elderly', word: 'elderly person', noun: 'elderly person', category: 'person', text: 'a photo of an elderly person' },
     { id: 'group', word: 'group of people', noun: 'group of people', category: 'person', text: 'a photo of a group of people together' },
     { id: 'car', word: 'car', noun: 'car', category: 'car', text: 'a photo of a car, sedan, sports car, SUV, or automobile' },
+    { id: 'motorcycle', word: 'motorcycle', noun: 'motorcycle', category: 'bike', text: 'a photo of a motorcycle, sport bike, motorbike, or cruiser' },
+    { id: 'bicycle', word: 'bicycle', noun: 'bicycle', category: 'bike', text: 'a photo of a bicycle, road bike, or mountain bike' },
+    { id: 'laptop', word: 'laptop computer', noun: 'laptop', category: 'product', text: 'a product photo of an open laptop computer or notebook' },
+    { id: 'watch', word: 'wristwatch', noun: 'wristwatch', category: 'product', text: 'a close-up product photo of a wristwatch or smartwatch' },
+    { id: 'sneaker', word: 'sneaker', noun: 'sneaker', category: 'product', text: 'a commercial product photo of a sneaker, running shoe, or footwear' },
+    { id: 'bottle', word: 'bottle', noun: 'bottle', category: 'product', text: 'a studio product photo of a glass perfume bottle, cosmetic bottle, or beverage bottle' },
+    { id: 'camera', word: 'camera', noun: 'camera', category: 'product', text: 'a product photo of a digital camera and camera lens' },
+    { id: 'headphones', word: 'headphones', noun: 'headphones', category: 'product', text: 'a product photo of over-ear headphones or audio headset' },
+    { id: 'chair', word: 'chair', noun: 'chair', category: 'product', text: 'a photo of a modern chair, armchair, or sofa' },
     { id: 'cat', word: 'cat', noun: 'cat', category: 'animal', text: 'a photo of a domestic cat' },
     { id: 'dog', word: 'dog', noun: 'dog', category: 'animal', text: 'a photo of a dog' },
+    { id: 'bird', word: 'bird', noun: 'bird', category: 'animal', text: 'a photo of a bird with feathers and wings' },
+    { id: 'horse', word: 'horse', noun: 'horse', category: 'animal', text: 'a photo of a horse' },
     { id: 'animal', word: 'animal', noun: 'animal', category: 'animal', text: 'a photo of an animal in focus' },
     { id: 'building', word: 'building', noun: 'building', category: 'building', text: 'a photo of a building or architectural structure' },
     { id: 'landscape', word: 'landscape', noun: 'landscape', category: 'landscape', text: 'a photo of an outdoor scenic landscape' }
@@ -150,6 +161,7 @@ const PROMPT_BANKS = {
     { id: 'girl_tunic', forCat: 'person', word: 'a white long-sleeve tunic top with subtle lavender embroidery trim', text: 'a young girl wearing a white tunic top with subtle purple stitched trim along the neckline' },
     { id: 'casual_wear', forCat: 'person', word: 'tailored casual clothing with natural fabric folds', text: 'a person wearing neat casual everyday clothing with soft fabric texture' },
     { id: 'car_body', forCat: 'car', word: 'glossy painted automotive bodywork with glass windows and alloy wheels', text: 'a car exterior with glossy paint, windshield glass, and alloy wheels' },
+    { id: 'bike_body', forCat: 'bike', word: 'a sculpted metallic fuel tank, exposed engine block, front forks, and spoked alloy wheels', text: 'a motorcycle with a sculpted fuel tank, engine cylinders, handlebars, front fork, and spoked wheels' },
     { id: 'animal_fur', forCat: 'animal', word: 'a soft natural fur coat with fine whisker and eye detail', text: 'an animal with soft natural fur texture, clear eyes, and whiskers' }
   ],
 
@@ -246,6 +258,13 @@ const PROMPT_BANKS = {
     { id: 'car_taillight_rear', cat: 'car', text: 'a close-up of a car rear section, red taillight lamp, trunk lid, and rear bumper' },
     { id: 'car_front_grille_hood', cat: 'car', text: 'a close-up of a car front hood, radiator grille, and front bumper' },
     { id: 'car_door_panel', cat: 'car', text: 'a close-up of a painted car side door panel and exterior mirror' },
+
+    // Motorcycle / Bike parts
+    { id: 'bike_wheel', cat: 'bike', text: 'a close-up of a motorcycle rubber tire, spoked alloy wheel rim, and brake disc rotor' },
+    { id: 'bike_fuel_tank', cat: 'bike', text: 'a close-up of a sculpted painted motorcycle fuel tank and upper frame' },
+    { id: 'bike_handlebars_headlight', cat: 'bike', text: 'a close-up of motorcycle handlebars, front fork suspension tubes, windscreen, and front headlight' },
+    { id: 'bike_engine_exhaust', cat: 'bike', text: 'a close-up of a motorcycle metallic engine block, cooling fins, and exhaust muffler pipe' },
+    { id: 'bike_seat_tail', cat: 'bike', text: 'a close-up of a motorcycle stepped rider saddle seat and rear tail cowling' },
 
     // Animal parts
     { id: 'animal_eyes_face', cat: 'animal', text: 'a close-up of an animal face, eyes, and ears' },

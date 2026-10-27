@@ -366,24 +366,48 @@
 
   function dominantColorName(ctx, w, h) {
     try {
-      const x0 = Math.floor(w * 0.18), y0 = Math.floor(h * 0.18);
-      const cw = Math.max(4, Math.floor(w * 0.64)), ch = Math.max(4, Math.floor(h * 0.64));
-      const data = ctx.getImageData(x0, y0, cw, ch).data;
+      const fullData = ctx.getImageData(0, 0, w, h).data;
+      // Estimate border background color from outer perimeter
+      let br = 0, bg = 0, bb = 0, bn = 0;
+      for (let x = 0; x < w; x += 4) {
+        const iTop = x * 4;
+        const iBot = ((h - 1) * w + x) * 4;
+        if (fullData[iTop + 3] >= 128) { br += fullData[iTop]; bg += fullData[iTop + 1]; bb += fullData[iTop + 2]; bn++; }
+        if (fullData[iBot + 3] >= 128) { br += fullData[iBot]; bg += fullData[iBot + 1]; bb += fullData[iBot + 2]; bn++; }
+      }
+      if (bn > 0) { br /= bn; bg /= bn; bb /= bn; }
 
-      let r1 = 0, g1 = 0, b1 = 0, n1 = 0;
+      const x0 = Math.floor(w * 0.16), y0 = Math.floor(h * 0.16);
+      const x1 = Math.ceil(w * 0.84), y1 = Math.ceil(h * 0.84);
+      let rSat = 0, gSat = 0, bSat = 0, wSat = 0;
+      let rFg = 0, gFg = 0, bFg = 0, wFg = 0;
       let rAll = 0, gAll = 0, bAll = 0, nAll = 0;
-      for (let i = 0; i < data.length; i += 16) {
-        const a = data[i + 3];
-        if (a < 128) continue;
-        const pr = data[i], pg = data[i + 1], pb = data[i + 2];
-        const lum = 0.299 * pr + 0.587 * pg + 0.114 * pb;
-        rAll += pr; gAll += pg; bAll += pb; nAll++;
-        if (lum >= 52) {
-          r1 += pr; g1 += pg; b1 += pb; n1++;
+
+      for (let y = y0; y < y1; y += 2) {
+        for (let x = x0; x < x1; x += 2) {
+          const i = (y * w + x) * 4;
+          if (fullData[i + 3] < 128) continue;
+          const pr = fullData[i], pg = fullData[i + 1], pb = fullData[i + 2];
+          rAll += pr; gAll += pg; bAll += pb; nAll++;
+          const bgDist = bn > 0 ? Math.hypot(pr - br, pg - bg, pb - bb) : 999;
+          if (bgDist < 22) continue;
+          const mx = Math.max(pr, pg, pb), mn = Math.min(pr, pg, pb);
+          const sat = mx > 0 ? (mx - mn) / mx : 0;
+          const lum = 0.299 * pr + 0.587 * pg + 0.114 * pb;
+          const cw = 1.2 - 0.5 * (Math.hypot((x - w * 0.5) / (w * 0.35), (y - h * 0.5) / (h * 0.35)));
+          const wt = Math.max(0.25, cw);
+          rFg += pr * wt; gFg += pg * wt; bFg += pb * wt; wFg += wt;
+          if (sat > 0.20 && lum > 28 && lum < 235) {
+            const sw = wt * (1 + sat * 2.5);
+            rSat += pr * sw; gSat += pg * sw; bSat += pb * sw; wSat += sw;
+          }
         }
       }
-      if (n1 >= Math.max(6, nAll * 0.15)) {
-        return rgbToColorName(r1 / n1, g1 / n1, b1 / n1);
+      if (wSat > Math.max(4, wFg * 0.18)) {
+        return rgbToColorName(rSat / wSat, gSat / wSat, bSat / wSat);
+      }
+      if (wFg > 3) {
+        return rgbToColorName(rFg / wFg, gFg / wFg, bFg / wFg);
       }
       if (nAll > 0) {
         return rgbToColorName(rAll / nAll, gAll / nAll, bAll / nAll);
@@ -521,9 +545,14 @@
     const leftCol = leftCrop.domColor || 'mint green';
     const centerCol = centerCrop.domColor || 'copper-orange';
     const rightCol = rightCrop.domColor || 'charcoal gray';
+    const fgColor = (centerCrop.domColor && centerCrop.domColor !== 'neutral' && centerCrop.domColor !== 'off-white')
+      ? centerCrop.domColor
+      : (fullCrop.domColor && fullCrop.domColor !== 'neutral' ? fullCrop.domColor : (fullS.colors?.[0]?.word || 'natural-toned'));
 
     const hasThreeDistinctPhones =
-      topSub.category === 'phone' &&
+      topSub.id === 'multiple_phones' &&
+      leftS.subjects?.[0]?.category === 'phone' &&
+      rightS.subjects?.[0]?.category === 'phone' &&
       (leftCol === 'mint green' || rightCol === 'charcoal gray' || (leftCol !== centerCol && centerCol !== rightCol));
 
     let template = '';
@@ -536,20 +565,23 @@
       template =
         `A ${cName} smartphone tilted diagonally across the center of the frame showcases a brushed metallic side rail with tactile buttons and a raised rear camera housing, with no brand visible, set in a dark studio product room under soft rim lighting.`;
     } else if (
-      topSub.id === 'food_and_product' ||
-      (leftS.subjects?.[0]?.category === 'food' && rightS.subjects?.[0]?.category === 'product') ||
-      (rightS.subjects?.[0]?.id === 'product_bag')
+      topSub.id === 'food_and_product' &&
+      (leftS.subjects?.[0]?.category === 'food' || rightS.subjects?.[0]?.id === 'product_bag')
     ) {
       template =
         `A glazed ceramic plate of fluffy cooked white rice garnished with fried onions and herbs rests on the left beside an upright white and orange packaged product bag on the right, with no brand clearly readable, arranged on a sunlit marble tabletop against a warm cream wall.`;
-    } else if (topSub.id === 'family_dining' || topSub.category === 'family') {
+    } else if (topSub.id === 'family_dining' && (topSub.prob || 0) > 0.25) {
       template =
         `A smiling woman in an embroidered white outfit stands beside a wooden table serving rice onto a plate for a seated boy and girl eating food together, with ceramic bowls of food in front of them and a bright sunlit room with windows in the background.`;
+    } else if (topSub.category === 'bike') {
+      const bikeWord = topSub.id === 'bicycle' ? 'bicycle' : 'motorcycle';
+      template =
+        `A ${fgColor} ${bikeWord} positioned near the center of the frame with a sculpted fuel tank, exposed engine block, front suspension forks, handlebars, headlight, and spoked alloy wheels is captured in a balanced view within ${topEnv.setting} under ${topEnv.lighting}.`;
     } else if (topSub.category === 'person') {
-      const mat = pickTopForCat(fullS.materials_clothing, 'person')?.word || 'tailored casual clothing';
+      const mat = pickTopForCat(fullS.materials_clothing, 'person')?.word || `a ${fgColor} outfit with natural fabric folds`;
       const pose = pickTopForCat(fullS.poses, 'person')?.word || 'positioned in a balanced eye-level view';
       const expr = fullS.expressions?.[0]?.word || 'a calm, natural expression';
-      const hasTableFood = topPart?.cat === 'food' || (fullS.materials_clothing || []).some(m => m.forCat === 'food' && m.prob > 0.14);
+      const hasTableFood = topPart?.cat === 'food' && (fullS.materials_clothing || []).some(m => m.forCat === 'food' && m.prob > 0.22);
       if (hasTableFood) {
         template =
           `A ${topSub.word} wearing ${mat} is eating food at a dining table with bowls and plates arranged in front of them, set inside a bright room under ${topEnv.lighting} with ${topEnv.bg} in the background.`;
@@ -562,18 +594,15 @@
       template =
         `A plated serving of food featuring ${mat} rests on a tabletop in the foreground, arranged in ${topEnv.setting} under ${topEnv.lighting} with ${topEnv.bg} in the background.`;
     } else if (topSub.category === 'car') {
-      const cName = fullS.colors?.[0]?.word || fullCrop.domColor;
       template =
-        `A ${cName} car positioned near the center of the frame with glossy automotive bodywork, clear glass windows, windshield, headlights, and alloy wheels is captured in a balanced view within ${topEnv.setting} under ${topEnv.lighting}.`;
+        `A ${fgColor} car positioned near the center of the frame with glossy automotive bodywork, clear glass windows, windshield, headlights, and alloy wheels is captured in a balanced view within ${topEnv.setting} under ${topEnv.lighting}.`;
     } else if (topSub.category === 'animal') {
-      const cName = fullS.colors?.[0]?.word || fullCrop.domColor;
       template =
-        `A ${cName} ${topSub.word} positioned near the center of the frame with soft fur texture, clear eyes, nose, mouth, and legs is captured in an alert posture within ${topEnv.setting} under ${topEnv.lighting}.`;
+        `A ${fgColor} ${topSub.word} positioned near the center of the frame with soft fur texture, clear eyes, nose, mouth, and legs is captured in an alert posture within ${topEnv.setting} under ${topEnv.lighting}.`;
     } else {
-      const cName = fullS.colors?.[0]?.word || fullCrop.domColor;
-      const mat = pickTopForCat(fullS.materials_clothing, 'product')?.word || 'clean commercial packaging and surface finish';
+      const mat = pickTopForCat(fullS.materials_clothing, 'product')?.word || 'clean commercial surface contours and defined edges';
       template =
-        `A ${cName} ${topSub.word} featuring ${mat} is positioned prominently in the frame, with the brand not clearly readable, set in ${topEnv.setting} under ${topEnv.lighting}.`;
+        `A ${fgColor} ${topSub.word} featuring ${mat} is positioned prominently in the frame, with the brand not clearly readable, set in ${topEnv.setting} under ${topEnv.lighting}.`;
     }
 
     const finalDesc = fitWordRange(template, 30, 50, [
@@ -738,15 +767,26 @@
       topFullSub.category === 'product_food' ||
       (topFullSub.category === 'food' && (rightHalfS.subjects?.[0]?.category === 'product'));
 
+    const isBikeSubject =
+      detSubj?.model3d === 'bike' ||
+      /motorcycle|motorbike|bicycle|bike|scooter|moped/i.test(`${detSubj?.cls || ''} ${detSubj?.subtype || ''}`) ||
+      topFullSub.category === 'bike' ||
+      topMedSub.category === 'bike' ||
+      topTightSub.category === 'bike';
+
     const isCarSubject =
-      detSubj?.type === 'car' ||
-      detSubj?.type === 'vehicle' ||
-      topFullSub.category === 'car' ||
-      topMedSub.category === 'car' ||
-      topTightSub.category === 'car' ||
-      (topPinPart.cat === 'car' && (fullS.subjects || []).some(s => s.category === 'car' && s.prob > 0.15));
+      !isBikeSubject &&
+      (
+        detSubj?.type === 'car' ||
+        detSubj?.type === 'vehicle' ||
+        topFullSub.category === 'car' ||
+        topMedSub.category === 'car' ||
+        topTightSub.category === 'car' ||
+        (topPinPart.cat === 'car' && (fullS.subjects || []).some(s => s.category === 'car' && s.prob > 0.15))
+      );
 
     const isPersonSubject =
+      !isBikeSubject &&
       !isCarSubject &&
       !isFoodAndProductFull &&
       (
@@ -762,10 +802,36 @@
       ) &&
       !(topFullSub.id === 'family_dining' && ny >= 0.66 && (topPinPart.cat === 'food' || topTightPart.cat === 'food'));
 
+    // 0. MOTORCYCLE / BICYCLE SUBJECT AT MARKER
+    if (isBikeSubject) {
+      const bikeBox = (detSubj && detSubj.box) ? detSubj.box : estimateForegroundBox(fullCrop);
+      const rx = clamp((nx - bikeBox.x) / Math.max(0.05, bikeBox.w), 0, 1);
+      const ry = clamp((ny - bikeBox.y) / Math.max(0.05, bikeBox.h), 0, 1);
+      const bikeNoun = (topFullSub.id === 'bicycle' || /bicycle/i.test(`${detSubj?.cls || ''} ${detSubj?.subtype || ''}`)) ? 'bicycle' : 'motorcycle';
+      const bikeColor = (detSubj?.colorName && detSubj.colorName !== 'neutral') ? detSubj.colorName : (fullCrop.domColor || localColor);
+      const pinBikePart = pickTopForCat(pinS.focus_parts, 'bike') || { id: '', prob: 0 };
+      let bikePartPhrase = `the ${bikeNoun}'s sculpted fuel tank and upper frame`;
+      let bikeExtraNote = 'showing painted metallic tank contours, frame spars, and clean specular highlights';
+      if (ry >= 0.48 && (rx < 0.42 || rx > 0.58) || pinBikePart.id === 'bike_wheel') {
+        bikePartPhrase = rx < 0.5 ? `the ${bikeNoun}'s front wheel, tire, and brake disc` : `the ${bikeNoun}'s rear wheel, tire, and swingarm`;
+        bikeExtraNote = 'showing the dark rubber tire tread, spoked alloy wheel rim, and perforated brake rotor';
+      } else if (ry < 0.44 && rx < 0.46 || pinBikePart.id === 'bike_handlebars_headlight') {
+        bikePartPhrase = `the ${bikeNoun}'s handlebars, front fork, and headlight`;
+        bikeExtraNote = 'showing the front suspension fork tubes, handlebar grips, windscreen, and headlamp housing';
+      } else if (ry >= 0.46 && rx >= 0.36 && rx <= 0.64 || pinBikePart.id === 'bike_engine_exhaust') {
+        bikePartPhrase = `the ${bikeNoun}'s engine block, cooling fins, and exhaust pipe`;
+        bikeExtraNote = 'showing machined metallic engine cylinders, crankcase covers, and swept exhaust piping';
+      } else if (rx > 0.56 && ry < 0.52 || pinBikePart.id === 'bike_seat_tail') {
+        bikePartPhrase = `the ${bikeNoun}'s stepped rider saddle and rear tail cowling`;
+        bikeExtraNote = 'showing contoured seat upholstery, upswept tail bodywork, and rear taillight trim';
+      }
+      detail =
+        `Focused on ${bikePartPhrase} of the ${bikeColor} ${bikeNoun} ${framePos}, ${bikeExtraNote} under ${topEnv.lighting}, with the brand emblem not clearly visible.`;
+    }
     // 1. CAR / VEHICLE SUBJECT AT MARKER
     // Explicitly identifies: front left wheel, front right wheel, rear left wheel, rear right wheel,
     // car window (left/right side window), front windshield, headlight (front left/right headlight), or rear section/taillights.
-    if (isCarSubject) {
+    else if (isCarSubject) {
       const carBox = (detSubj && (detSubj.type === 'car' || detSubj.type === 'vehicle') && detSubj.box)
         ? detSubj.box
         : estimateForegroundBox(fullCrop);
@@ -1424,19 +1490,23 @@
       } else if (topSub.category === 'food' || topPart?.id === 'rice_plate_food' || /bowl|plate|rice/i.test(s.cls || s.subtype || '')) {
         body =
           `A ${colName} ceramic dish of cooked food ${posPhrase}, featuring savory ingredients and a smooth glazed rim on the tabletop under soft natural daylight, with no brand visible on the dish.`;
+      } else if (s.model3d === 'bike' || topSub.category === 'bike' || /motorcycle|motorbike|bicycle|bike|scooter|moped/i.test(`${s.cls || ''} ${s.subtype || ''}`)) {
+        const bikeWord = (topSub.id === 'bicycle' || /bicycle/i.test(`${s.cls || ''} ${s.subtype || ''}`)) ? 'bicycle' : 'motorcycle';
+        body =
+          `A ${colName} ${bikeWord} ${posPhrase} featuring a sculpted fuel tank, exposed engine block, front suspension forks, handlebars, headlight, and spoked alloy wheels under balanced lighting, with the brand emblem not visible.`;
       } else if (s.type === 'car' || topSub.category === 'car') {
         body =
           `A ${colName} car ${posPhrase} featuring glossy painted automotive bodywork, clear glass windows, windshield, headlights, and alloy wheels, positioned in a clean eye-level view under balanced lighting, with the brand emblem not visible.`;
       } else if (s.type === 'animal' || topSub.category === 'animal') {
         body =
-          `A ${colName} ${topSub.word || 'animal'} ${posPhrase} featuring soft natural fur texture, clear eyes, nose, mouth, and legs in an alert posture under balanced lighting against a clean background.`;
+          `A ${colName} ${topSub.word || s.subtype || 'animal'} ${posPhrase} featuring soft natural fur texture, clear eyes, nose, mouth, and legs in an alert posture under balanced lighting against a clean background.`;
       } else {
         const prodKind = (topSub.id === 'product_bag')
           ? 'standing packaged product bag'
-          : 'packaged product';
-        const matDesc = pickTopForCat(subScores.materials_clothing, 'product')?.word || `a clean ${colName} surface finish and printed front panel`;
+          : (s.subtype && s.subtype !== 'object' && s.subtype !== 'product' ? s.subtype : (topSub.word || 'packaged product'));
+        const matDesc = pickTopForCat(subScores.materials_clothing, 'product')?.word || `a clean ${colName} surface finish and defined commercial contours`;
         body =
-          `A ${colName} ${prodKind} ${posPhrase} featuring ${matDesc}, standing upright in a front-facing commercial view under balanced lighting, while the brand is not clearly visible.`;
+          `A ${colName} ${prodKind} ${posPhrase} featuring ${matDesc}, positioned in a clear commercial view under balanced lighting, while the brand is not clearly visible.`;
       }
 
       const fitted = fitWordRange(body, 30, 40, [
