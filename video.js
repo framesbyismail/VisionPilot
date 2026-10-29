@@ -328,7 +328,8 @@ function getBikeRiders(bikeId, excludePersonId = null) {
 }
 function positionPersonOnBike(person, bike, slot, blend = 1) {
   const L = (bike.w || 2.0) * (bike.sx ?? 1);
-  const seatOffsetZ = slot === 0 ? L * .03 : -L * .20;
+  // rider on the saddle just behind the tank, passenger on the raised pillion behind them (matches the seat shape in the bike model)
+  const seatOffsetZ = slot === 0 ? -L * .105 : -L * .262;
   const ang = rad(bike.ry || 0);
   const tx = (bike.x || 0) + Math.sin(ang) * seatOffsetZ;
   const tz = (bike.z || 0) + Math.cos(ang) * seatOffsetZ;
@@ -1585,12 +1586,14 @@ function camAt(t) {
   const v = (path, base) => valueAt(path, t, 'num', base);
   return {az:v('cam.az', S.az), el:v('cam.el', S.el), dist:v('cam.dist', S.dist), roll:v('cam.roll', S.roll), focal:v('cam.focal', S.focal), sensor:v('cam.sensor', S.sensorW)};
 }
+// free camera move (Shift / middle drag): shifts the camera and the point it aims at together
+const camPan = () => { const p = V().camPan; return p && isFinite(p.x) ? p : {x:0, y:0, z:0}; };
 function camWorld(t) {
-  const c = camAt(t), tg = targetAt(t), a = rad(c.az), e = rad(clamp(c.el, -89.5, 89.5));
-  return {x:tg.x + Math.sin(a) * Math.cos(e) * c.dist, y:tg.y + Math.sin(e) * c.dist, z:tg.z + Math.cos(a) * Math.cos(e) * c.dist};
+  const c = camAt(t), tg = targetAt(t), a = rad(c.az), e = rad(clamp(c.el, -89.5, 89.5)), p = camPan();
+  return {x:tg.x + p.x + Math.sin(a) * Math.cos(e) * c.dist, y:tg.y + p.y + Math.sin(e) * c.dist, z:tg.z + p.z + Math.cos(a) * Math.cos(e) * c.dist};
 }
 function setCamFromWorldPos(wx, wy, wz) {
-  const tg = targetAt(T);
+  const tg0 = targetAt(T), p = camPan(), tg = {x:tg0.x + p.x, y:tg0.y + p.y, z:tg0.z + p.z};
   const dx = wx - tg.x, dy = wy - tg.y, dz = wz - tg.z;
   const dist = clamp(Math.hypot(dx, dy, dz), .25, 60);
   const el = clamp(deg(Math.asin(clamp(dy / dist, -.995, .995))), -89, 89);
@@ -1601,6 +1604,37 @@ function setCamFromWorldPos(wx, wy, wz) {
 }
 let freeCamMode = false;
 const freeCam = {az:38, el:24, dist:5.8, target:{x:0, y:.85, z:0}};
+let lastFramedSel = null, zoomGoal = null, zoomRaf = 0;
+// the closest the camera may come along its current line of sight: just outside the first subject it would enter
+function camZoomLimit() {
+  if (!R || !R.objs.size) return AC.DMIN;
+  const THREE = R.THREE, tg = targetAt(T), p = camPan(), a = rad(S.az), e = rad(clamp(S.el, -89.5, 89.5));
+  const look = new THREE.Vector3(tg.x + p.x, tg.y + p.y, tg.z + p.z);
+  const dir = new THREE.Vector3(Math.sin(a) * Math.cos(e), Math.sin(e), Math.cos(a) * Math.cos(e));
+  const cam = look.clone().addScaledVector(dir, S.dist);
+  const ray = new THREE.Ray(cam, dir.clone().negate()), hit = new THREE.Vector3(), box = new THREE.Box3();
+  let limit = AC.DMIN;
+  R.objs.forEach(({g}) => {
+    if (!g || g.visible === false) return;
+    box.setFromObject(g);
+    if (box.isEmpty() || box.containsPoint(cam)) return;
+    if (!ray.intersectBox(box, hit)) return;
+    const along = cam.distanceTo(hit);
+    if (along > S.dist + 1e-6) return; // only subjects between the camera and the aim point
+    const size = box.getSize(new THREE.Vector3()), margin = .03 + .06 * Math.min(size.x, size.y, size.z);
+    limit = Math.max(limit, S.dist - along + margin);
+  });
+  return limit;
+}
+function zoomStep() {
+  zoomRaf = 0;
+  if (zoomGoal == null) return;
+  const d = S.dist + (zoomGoal - S.dist) * .35;
+  AC.setDist(Math.abs(zoomGoal - d) < 1e-4 ? zoomGoal : d);
+  AC.changed();
+  if (Math.abs(zoomGoal - S.dist) < 1e-4) { zoomGoal = null; return; }
+  zoomRaf = requestAnimationFrame(zoomStep);
+}
 let vpOverlayView = null;
 hooks.target = () => is3D() ? targetAt(T) : null;
 hooks.sceneExtent = view => {
@@ -2155,8 +2189,11 @@ function initThree() {
       renderVP();
       return;
     }
-    AC.setDist(S.dist * Math.exp(e.deltaY * .0012));
-    AC.changed();
+    // camera view: glide toward the scene, stopping just before the camera would enter a subject
+    const from = zoomGoal ?? S.dist;
+    zoomGoal = clamp(from * Math.exp(e.deltaY * .0012), AC.DMIN, AC.DMAX);
+    if (zoomGoal < S.dist) zoomGoal = Math.max(zoomGoal, camZoomLimit());
+    if (!zoomRaf) zoomRaf = requestAnimationFrame(zoomStep);
   }, {passive:false});
   bindViewportPicking();
 }
@@ -2790,7 +2827,7 @@ function buildSingleModel(o) {
         swArm.rotation.x = -.06;
       });
       // Rear tire hugger mudguard
-      const rearHugger = addMesh(bodyGrp, new THREE.CylinderGeometry(wheelR * 1.07, wheelR * 1.07, W * .24, 20, 1, true, -Math.PI * .15, Math.PI * .45), frameM, 0, wheelR, -wb);
+      const rearHugger = addMesh(bodyGrp, new THREE.CylinderGeometry(wheelR * 1.07, wheelR * 1.07, W * .24, 20, 1, true, Math.PI * .3, Math.PI * .45), frameM, 0, wheelR, -wb);
       rearHugger.rotation.z = Math.PI / 2;
 
       // Swept stainless header pipe + angled carbon/titanium sport exhaust canister on right side
@@ -2831,7 +2868,7 @@ function buildSingleModel(o) {
       dash.rotation.x = -.55;
 
       // Front mudguard hugging front wheel
-      const fFender = addMesh(steerGrp, new THREE.CylinderGeometry(wheelR * 1.07, wheelR * 1.07, W * .21, 20, 1, true, -Math.PI * .22, Math.PI * .48), bodyM, 0, 0, 0);
+      const fFender = addMesh(steerGrp, new THREE.CylinderGeometry(wheelR * 1.07, wheelR * 1.07, W * .21, 20, 1, true, Math.PI * .2, Math.PI * .5), bodyM, 0, 0, 0);
       fFender.rotation.z = Math.PI / 2;
 
       // Sculpted Handlebars, Grips, Brake/Clutch Levers & Sleek Side Mirrors
@@ -3298,6 +3335,38 @@ function pathDist(o, t) {
   };
 }
 
+// the rider holds the handlebars: each arm is solved (two bones) so the hand lands on its grip
+const HAND_GRIP_INSET = .02;
+function gripHandlebars(o, rig, g) {
+  const bk = o.seatedBikeId ? objById(o.seatedBikeId) : null;
+  const be = bk && R?.objs.get(bk.id);
+  const steer = be?.g?.userData?.rig?.frontSteer?.[0];
+  if (!steer) return;
+  const THREE = R.THREE, brig = be.g.userData.rig, h = rig.h;
+  be.g.updateMatrixWorld(true); g.updateMatrixWorld(true);
+  const a = h * .16, b = h * .155; // upper arm, forearm (as built in the person model)
+  const gripOf = side => steer.localToWorld(new THREE.Vector3(side * brig.W * (.31 - HAND_GRIP_INSET), brig.h * .46, -.13));
+  const reachOf = (arm, side) => arm.sh.parent.worldToLocal(gripOf(side)).sub(arm.sh.position).length();
+  // lean forward (like a real rider) until both grips are within arm's reach, then bend the arms onto them
+  for (let i = 0; i < 24 && Math.max(reachOf(rig.leftArm, -1), reachOf(rig.rightArm, 1)) > (a + b) * .93 && rig.torsoGrp.rotation.x < 1.05; i++) {
+    rig.torsoGrp.rotation.x += .04; rig.headGrp.rotation.x -= .03;
+    g.updateMatrixWorld(true);
+  }
+  [[rig.leftArm, -1], [rig.rightArm, 1]].forEach(([arm, side]) => {
+    // grip: end of the handlebar on this side of the rider (rider faces the same way as the bike)
+    const grip = gripOf(side);
+    const parent = arm.sh.parent;
+    const t = parent.worldToLocal(grip.clone()).sub(arm.sh.position);
+    let d = t.length(); if (d < 1e-4) return;
+    d = Math.min(d, (a + b) * .995);
+    const elbowBend = Math.PI - Math.acos(clamp((a * a + b * b - d * d) / (2 * a * b), -1, 1));
+    const alpha = Math.acos(clamp((a * a + d * d - b * b) / (2 * a * d), -1, 1));
+    const len = t.length(), phi = Math.asin(clamp(t.x / len, -1, 1));
+    const theta = Math.atan2(-t.z, -t.y);
+    arm.sh.rotation.set(theta + alpha, 0, phi);
+    arm.elbow.rotation.set(-elbowBend, 0, 0);
+  });
+}
 // Compute velocity, walk/run phase, jump preparation crouch, tails and vehicle wheel/drift dynamics
 function updateRigPoseAndMotion(o, g, t) {
   const rig = g.userData.rig;
@@ -3466,11 +3535,11 @@ function updateRigPoseAndMotion(o, g, t) {
             const bk = (o._bikeId ? objById(o._bikeId) : null) || findAlignedBikeForPerson(o)?.bike || (V().objects || []).find(b => b.model === 'bike');
             const bkH = bk ? (bk.h || 1.12) : 1.12;
             const bkY = bk ? (bk.y || 0) : 0;
-            const seatTopY = bkY + bkH * .50;
+            const seatTopY = bkY + bkH * .505;
             S0.ry = (seatTopY - (o.y || 0)) - h * .435;
             S0.tx = .32; S0.hx = -.26;
-            S0.lHipX = -1.08; S0.lHipZ = -.24; S0.lKneeX = 1.48;
-            S0.rHipX = -1.08; S0.rHipZ = .24; S0.rKneeX = 1.48;
+            S0.lHipX = -1.42; S0.lHipZ = -.22; S0.lKneeX = 2.12; // feet up on the footpegs
+            S0.rHipX = -1.42; S0.rHipZ = .22; S0.rKneeX = 2.12;
             S0.lShX = -1.05; S0.lShZ = -.14; S0.lElX = -.32;
             S0.rShX = -1.05; S0.rShZ = .14; S0.rElX = -.32;
             S0.seatedChair = true;
@@ -3480,11 +3549,11 @@ function updateRigPoseAndMotion(o, g, t) {
             const bk = (o._bikeId ? objById(o._bikeId) : null) || findAlignedBikeForPerson(o)?.bike || (V().objects || []).find(b => b.model === 'bike');
             const bkH = bk ? (bk.h || 1.12) : 1.12;
             const bkY = bk ? (bk.y || 0) : 0;
-            const seatTopY = bkY + bkH * .55;
+            const seatTopY = bkY + bkH * .625; // the pillion is higher than the rider saddle
             S0.ry = (seatTopY - (o.y || 0)) - h * .435;
             S0.tx = .18; S0.hx = -.14;
-            S0.lHipX = -1.12; S0.lHipZ = -.25; S0.lKneeX = 1.52;
-            S0.rHipX = -1.12; S0.rHipZ = .25; S0.rKneeX = 1.52;
+            S0.lHipX = -1.30; S0.lHipZ = -.26; S0.lKneeX = 2.0;
+            S0.rHipX = -1.30; S0.rHipZ = .26; S0.rKneeX = 2.0;
             S0.lShX = -.78; S0.lShZ = .16; S0.lElX = -.55;
             S0.rShX = -.78; S0.rShZ = -.16; S0.rElX = -.55;
             S0.seatedChair = true;
@@ -3582,6 +3651,7 @@ function updateRigPoseAndMotion(o, g, t) {
       rightLeg.hip.rotation.set(PState.rHipX, PState.rHipY, PState.rHipZ);
       rightLeg.knee.rotation.x = PState.rKneeX;
       rig.seatedChair = Boolean(PState.seatedChair);
+      if (o.pose === 'riding_bike' && !(poseTrack && poseTrack.length >= 2)) gripHandlebars(o, rig, g);
     }
     if (airBlend > .001) {
       const mix = (a, b) => a + (b - a) * airBlend;
@@ -3953,22 +4023,27 @@ function renderVP(sizeOverride) {
     R.camera.lookAt(ft.x, ft.y, ft.z);
   } else {
     vpOverlayView = null;
-    let effDist = S.dist;
-    const fObjs = getSelectedFocusObjects();
-    if (fObjs.length > 1) {
-      let maxSpread = 0;
-      fObjs.forEach(fo => {
-        const fc = objCenter(fo, T);
-        const r = Math.hypot(fc.x - tg.x, fc.y - tg.y, fc.z - tg.z) + Math.max(fo.w || .5, (fo.h || 1) * .55);
-        if (r > maxSpread) maxSpread = r;
-      });
-      const halfFov = rad(Math.max(12, Math.min(k.vfov, k.hfov || k.vfov)) * .44);
-      const reqDist = (maxSpread * 1.18) / Math.tan(halfFov);
-      effDist = Math.max(S.dist, reqDist);
+    // when the selected focus subjects change, frame them once; after that the zoom is free
+    // (it used to hold the camera at this framing distance on every frame, so zooming in with 2+ subjects did nothing)
+    const fObjs = getSelectedFocusObjects(), selKey = fObjs.map(o => o.id).join();
+    if (!sizeOverride && selKey !== lastFramedSel) {
+      lastFramedSel = selKey;
+      if (fObjs.length > 1) {
+        let maxSpread = 0;
+        fObjs.forEach(fo => {
+          const fc = objCenter(fo, T);
+          const r = Math.hypot(fc.x - tg.x, fc.y - tg.y, fc.z - tg.z) + Math.max(fo.w || .5, (fo.h || 1) * .55);
+          if (r > maxSpread) maxSpread = r;
+        });
+        const halfFov = rad(Math.max(12, Math.min(k.vfov, k.hfov || k.vfov)) * .44);
+        const reqDist = (maxSpread * 1.18) / Math.tan(halfFov);
+        if (S.dist < reqDist) { AC.setDist(reqDist); zoomGoal = null; }
+      }
     }
-    R.camera.fov = k.vfov; R.camera.aspect = w / h; R.camera.near = Math.max(.002, effDist * .02); R.camera.updateProjectionMatrix();
-    R.camera.position.set(tg.x + Math.sin(a) * Math.cos(e) * effDist, tg.y + Math.sin(e) * effDist, tg.z + Math.cos(a) * Math.cos(e) * effDist);
-    R.camera.up.set(0, 1, 0); R.camera.lookAt(tg.x, tg.y, tg.z); R.camera.rotateZ(-rad(S.roll));
+    const effDist = S.dist, p = camPan(), lx = tg.x + p.x, ly = tg.y + p.y, lz = tg.z + p.z;
+    R.camera.fov = k.vfov; R.camera.aspect = w / h; R.camera.near = Math.max(.002, Math.min(effDist * .02, .05)); R.camera.updateProjectionMatrix();
+    R.camera.position.set(lx + Math.sin(a) * Math.cos(e) * effDist, ly + Math.sin(e) * effDist, lz + Math.cos(a) * Math.cos(e) * effDist);
+    R.camera.up.set(0, 1, 0); R.camera.lookAt(lx, ly, lz); R.camera.rotateZ(-rad(S.roll));
   }
   syncScene(!sizeOverride);
   R.ground.visible = R.grid.visible = V().ground !== false;
@@ -4193,8 +4268,11 @@ function bindViewportPicking() {
   wrap.addEventListener('auxclick', e => { if (e.button === 1) e.preventDefault(); });
   wrap.addEventListener('pointerdown', e => {
     if (e.target.closest('button, input, select')) return;
-    // Middle mouse button (or Alt+Left-click) orbits/pans Free Camera OR Scene Camera in 3D mode, or pans Top/Side View freely
-    if (e.button === 1 || (e.button === 0 && e.altKey && !raycastGizmoAt(e.clientX, e.clientY))) {
+    // Middle-mouse drag, or Shift+drag on empty space, moves the camera freely (no fixed centre); Alt+drag orbits.
+    // Shift+click on an object still adds it to the selection.
+    const shiftMove = e.button === 0 && e.shiftKey && !e.altKey && !raycastGizmoAt(e.clientX, e.clientY) && !raycastObjectAt(e.clientX, e.clientY);
+    if (e.button === 1 || shiftMove || (e.button === 0 && e.altKey && !raycastGizmoAt(e.clientX, e.clientY))) {
+      const pan = e.button === 1 ? !e.altKey : !e.altKey || e.shiftKey;
       e.preventDefault(); e.stopPropagation();
       try { wrap.setPointerCapture(e.pointerId); } catch (err) {}
       activeVpDrag = true;
@@ -4211,19 +4289,20 @@ function bindViewportPicking() {
         };
       } else if (freeCamMode) {
         vpDrag = {
-          mode:e.shiftKey ? 'freeCamPan' : 'freeCamOrbit',
+          mode:pan ? 'freeCamPan' : 'freeCamOrbit',
           x0:e.clientX, y0:e.clientY,
           az0:freeCam.az, el0:freeCam.el,
           tx0:freeCam.target.x, ty0:freeCam.target.y, tz0:freeCam.target.z,
           moved:false
         };
       } else {
-        const cw = camWorld(T);
+        const cw = camWorld(T), p0 = camPan();
         vpDrag = {
-          mode:e.shiftKey ? 'sceneCamPan' : 'sceneCamOrbit',
+          mode:pan ? 'sceneCamPan' : 'sceneCamOrbit',
           x0:e.clientX, y0:e.clientY,
           az0:S.az, el0:S.el,
           cx0:cw.x, cy0:cw.y, cz0:cw.z,
+          px0:p0.x, py0:p0.y, pz0:p0.z,
           moved:false
         };
       }
@@ -4397,14 +4476,18 @@ function bindViewportPicking() {
       const dx = e.clientX - vpDrag.x0, dy = e.clientY - vpDrag.y0;
       if (Math.hypot(dx, dy) > 1) vpDrag.moved = true;
       wrap.style.cursor = 'grabbing';
-      if (vpDrag.mode === 'sceneCamPan' || e.shiftKey) {
-        const panScale = Math.max(.002, S.dist * .0022);
-        const sa = rad(S.az);
+      if (vpDrag.mode === 'sceneCamPan') {
+        // move the camera and its aim point together in the view plane: the scene follows the mouse
+        const h = R?.renderer?.domElement?.clientHeight || 500;
+        const panScale = 2 * S.dist * Math.tan(rad(AC.calc().vfov / 2)) / h;
+        const sa = rad(S.az), se = rad(clamp(S.el, -89.5, 89.5));
         const rx = Math.cos(sa), rz = -Math.sin(sa);
-        const nx = vpDrag.cx0 - dx * panScale * rx;
-        const nz = vpDrag.cz0 - dx * panScale * rz;
-        const ny = Math.max(.05, vpDrag.cy0 + dy * panScale);
-        setCamFromWorldPos(nx, ny, nz);
+        const ux = -Math.sin(sa) * Math.sin(se), uy = Math.cos(se), uz = -Math.cos(sa) * Math.sin(se);
+        const px = vpDrag.px0 - dx * panScale * rx + dy * panScale * ux;
+        const py = vpDrag.py0 + dy * panScale * uy;
+        const pz = vpDrag.pz0 - dx * panScale * rz + dy * panScale * uz;
+        V().camPan = {x:rnd(px, 3), y:rnd(py, 3), z:rnd(pz, 3)};
+        AC.changed();
       } else {
         AC.setAz(rnd(norm360(vpDrag.az0 - dx * .45), 1));
         AC.setEl(rnd(clamp(vpDrag.el0 + dy * .38, -89, 89), 1));
@@ -5023,6 +5106,10 @@ async function ensureModelLoaders(ext) {
     if (!T.OBJLoader) await loadScriptOnce('loaders/OBJLoader.js');
     if (!T.MTLLoader) await loadScriptOnce('loaders/MTLLoader.js');
   }
+  if (ext === 'dae' && !T.ColladaLoader) await loadScriptOnce('loaders/ColladaLoader.js');
+  if (ext === 'stl' && !T.STLLoader) await loadScriptOnce('loaders/STLLoader.js');
+  if (ext === 'ply' && !T.PLYLoader) await loadScriptOnce('loaders/PLYLoader.js');
+  if (ext === '3mf' && !T.ThreeMFLoader) { await loadScriptOnce('libs/fflate.min.js'); await loadScriptOnce('loaders/3MFLoader.js'); }
   if (!T.SkeletonUtils) await loadScriptOnce('utils/SkeletonUtils.js').catch(() => {});
   if (!T.TGALoader) await loadScriptOnce('loaders/TGALoader.js').catch(() => {});
 }
@@ -5104,11 +5191,53 @@ function describeImportedModel(root, clips, fileName, fmt, urlNames, mtlTex) {
     + `Parts and materials: ${shown.join('; ')}${parts.length > 24 ? `; and ${parts.length - 24} more parts` : ''}. Reproduce each part with exactly these materials, colors and finishes.`;
   return {file:fileName, format:fmt.toUpperCase(), triangles:Math.round(tris), rigged:bones > 0, bones, animations:clips.map(c => ({name:c.name || 'clip', seconds:rnd(c.duration, 2)})), textures:[...texSet], parts:parts.slice(0, 24), summary};
 }
+const MODEL_EXTS = ['glb', 'gltf', 'fbx', 'obj', 'dae', '3mf', 'stl', 'ply'];
+// put Vision Pilot's camera exactly where the project's camera was: same position, direction, roll and lens
+function applyProjectCamera(o, entry, pose) {
+  const THREE = window.THREE; if (!entry || !THREE) return;
+  const sc = o.h / Math.max(1e-6, entry.size.y);
+  const toScene = v => new THREE.Vector3((o.x || 0) + (v.x - entry.center.x) * sc, (o.y || 0) + (v.y - entry.min.y) * sc, (o.z || 0) + (v.z - entry.center.z) * sc);
+  const P = toScene(pose.pos);
+  const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(pose.quat).normalize();
+  const up = new THREE.Vector3(0, 1, 0).applyQuaternion(pose.quat).normalize();
+  // aim along the camera's own line of sight, as far out as the model sits
+  const mc = new THREE.Vector3(o.x || 0, (o.y || 0) + o.h / 2, o.z || 0);
+  const dist = clamp(Math.max(.3, mc.clone().sub(P).dot(dir)), AC.DMIN, AC.DMAX);
+  const aim = P.clone().addScaledVector(dir, dist), tg = targetAt(T), back = dir.clone().negate();
+  V().camPan = {x:rnd(aim.x - tg.x, 4), y:rnd(aim.y - tg.y, 4), z:rnd(aim.z - tg.z, 4)};
+  AC.setEl(rnd(deg(Math.asin(clamp(back.y, -1, 1))), 2));
+  AC.setAz(rnd(norm360(deg(Math.atan2(back.x, back.z))), 2));
+  AC.setDist(rnd(dist, 4));
+  const right = new THREE.Vector3().crossVectors(dir, new THREE.Vector3(0, 1, 0));
+  if (right.lengthSq() > 1e-8) {
+    right.normalize();
+    const flatUp = new THREE.Vector3().crossVectors(right, dir).normalize();
+    S.roll = rnd(clamp(deg(Math.atan2(up.dot(right), up.dot(flatUp))), -45, 45), 2);
+  }
+  if (pose.fov) AC.setFocal(rnd((AC.calc().sH / 2) / Math.tan(rad(pose.fov) / 2), 2));
+  if (freeCamMode) toggleFreeCamMode(false);
+  if (vpViewMode !== 'orbit') setVpViewMode('orbit');
+  lastFramedSel = getSelectedFocusObjects().map(x => x.id).join();
+  AC.changed(); renderVP(); AC.drawAll();
+}
+// every file in a dropped folder (and its sub-folders)
+async function filesFromDrop(dt) {
+  const items = [...(dt.items || [])].map(i => i.webkitGetAsEntry?.()).filter(Boolean);
+  if (!items.length || items.every(en => en.isFile)) return [...dt.files];
+  const out = [];
+  const walk = async en => {
+    if (en.isFile) { out.push(await new Promise(r => en.file(r, () => r(null)))); return; }
+    const rd = en.createReader();
+    for (let batch; (batch = await new Promise(r => rd.readEntries(r, () => r([])))).length;) for (const c of batch) await walk(c);
+  };
+  for (const en of items) await walk(en);
+  return out.filter(Boolean);
+}
 async function importModelFiles(fileList) {
   const files = [...fileList]; if (!files.length) return;
   const ext = f => (f.name.split('.').pop() || '').toLowerCase();
-  const main = ['glb', 'gltf', 'fbx', 'obj'].map(x => files.find(f => ext(f) === x)).find(Boolean);
-  if (!main) { AC.toast('Choose a .fbx, .obj, .glb or .gltf model (plus its textures)'); return; }
+  const main = MODEL_EXTS.map(x => files.find(f => ext(f) === x)).find(Boolean);
+  if (!main) { AC.toast('Choose a 3D model: ' + MODEL_EXTS.map(x => '.' + x).join(', ')); return; }
   if (!isVideo()) { AC.toast('Switch to Video & 3D mode first'); return; }
   const THREE = window.THREE, e = ext(main);
   AC.toast(`Loading ${main.name}…`);
@@ -5122,14 +5251,28 @@ async function importModelFiles(fileList) {
     const mainUrl = urls.get(main.name.toLowerCase());
     const load = (Loader, url) => new Promise((res, rej) => new Loader(manager).load(url, res, undefined, err => rej(err instanceof Error ? err : new Error('File could not be read'))));
     let root, clips = [], mtlTex = null;
+    const meshOf = geo => { if (!geo.attributes.normal) geo.computeVertexNormals(); const g = new THREE.Group(); g.add(new THREE.Mesh(geo, new THREE.MeshStandardMaterial({color:geo.attributes.color ? 0xffffff : 0xb0b0b0, vertexColors:!!geo.attributes.color, roughness:.6}))); return g; };
     if (e === 'fbx') { root = await load(THREE.FBXLoader, mainUrl); clips = root.animations || []; }
-    else if (e === 'glb' || e === 'gltf') { const gl = await load(THREE.GLTFLoader, mainUrl); root = gl.scene; clips = gl.animations || []; }
+    else if (e === 'glb' || e === 'gltf') { const gl = await load(THREE.GLTFLoader, mainUrl); root = gl.scene; clips = gl.animations || []; if (gl.cameras?.length && !gl.scene.getObjectByProperty('isCamera', true)) root.add(gl.cameras[0]); }
+    else if (e === 'dae') { const dae = await load(THREE.ColladaLoader, mainUrl); root = dae.scene; clips = dae.animations || []; }
+    else if (e === 'stl') root = meshOf(await load(THREE.STLLoader, mainUrl));
+    else if (e === 'ply') root = meshOf(await load(THREE.PLYLoader, mainUrl));
+    else if (e === '3mf') root = await load(THREE.ThreeMFLoader, mainUrl);
     else {
       const mtl = files.find(f => ext(f) === 'mtl'); const ol = new THREE.OBJLoader(manager);
       if (mtl) mtlTex = parseMtlTextures(await mtl.text());
       if (mtl && THREE.MTLLoader) { const mats = await load(THREE.MTLLoader, urls.get(mtl.name.toLowerCase())); mats.preload(); ol.setMaterials(mats); }
       root = await new Promise((res, rej) => ol.load(mainUrl, res, undefined, rej));
     }
+    // the project's camera (if any) becomes Vision Pilot's camera; read it before cameras and lights are stripped
+    root.updateMatrixWorld(true);
+    let projCam = null;
+    root.traverse(n => { if (!projCam && n.isCamera) projCam = n; });
+    const camPose = projCam ? {
+      pos:new THREE.Vector3().setFromMatrixPosition(projCam.matrixWorld),
+      quat:new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().extractRotation(projCam.matrixWorld)),
+      fov:projCam.isPerspectiveCamera ? projCam.fov : null, aspect:projCam.aspect || null, name:projCam.name || 'camera'
+    } : null;
     const dead = []; root.traverse(n => { if (n.isLight || n.isCamera) dead.push(n); }); dead.forEach(n => n.parent && n.parent.remove(n));
     root.traverse(n => {
       if (!n.isMesh) return;
@@ -5153,7 +5296,8 @@ async function importModelFiles(fileList) {
     const tg = targetAt(T); o.x = rnd(tg.x + (V().objects.length ? .55 * ((V().objects.length % 5) - 2) : 0), 2); o.z = rnd(tg.z, 2);
     V().objects.push(o); selectObj(o.id, false); objPropsKey = ''; vfOptsKey = '';
     renderObjects(); buildTimeline(); syncVideoFocus(); AC.changed();
-    AC.toast(`${label}: ${info.triangles.toLocaleString('en-US')} triangles${info.rigged ? ` · rig (${info.bones} bones)` : ''}${clips.length ? ` · ${clips.length} animation${clips.length > 1 ? 's' : ''}` : ''}`);
+    if (camPose) { info.camera = {name:camPose.name, fov:camPose.fov && rnd(camPose.fov, 2)}; applyProjectCamera(o, CUSTOM.get(customId), camPose); }
+    AC.toast(`${label}: ${info.triangles.toLocaleString('en-US')} triangles${info.rigged ? ` · rig (${info.bones} bones)` : ''}${clips.length ? ` · ${clips.length} animation${clips.length > 1 ? 's' : ''}` : ''}${camPose ? ' · project camera applied' : ''}`);
     return o;
   } catch (err) {
     console.error(err);
@@ -5170,7 +5314,9 @@ function updateCustomClip(o, cr, t) {
 $('objUpload')?.addEventListener('click', () => $('objUploadFile')?.click());
 $('objUploadFile')?.addEventListener('change', e => { importModelFiles(e.target.files); e.target.value = ''; });
 $('vpWrap')?.addEventListener('dragover', e => { if (isVideo() && e.dataTransfer?.types?.includes('Files')) e.preventDefault(); });
-$('vpWrap')?.addEventListener('drop', e => { if (!isVideo() || !e.dataTransfer?.files?.length) return; e.preventDefault(); importModelFiles(e.dataTransfer.files); });
+$('vpWrap')?.addEventListener('drop', async e => { if (!isVideo() || !e.dataTransfer?.files?.length) return; e.preventDefault(); importModelFiles(await filesFromDrop(e.dataTransfer)); });
+$('objUploadDir')?.addEventListener('click', () => $('objUploadDirFile')?.click());
+$('objUploadDirFile')?.addEventListener('change', e => { importModelFiles(e.target.files); e.target.value = ''; });
 $('objMatchImg')?.addEventListener('click', () => {
   if (!AC.refs.length) { AC.toast('Add a reference image first'); return; }
   V().objects.forEach(o => { if (o.auto) { o.userMoved = false; o.userPosed = false; } });
@@ -8266,6 +8412,68 @@ hooks.handleDroppedVideos = async (videoFiles, folderName = '') => {
 /* ---------- boot ---------- */
 // small read-only inspection hook (used by the automated viewport tests)
 AC.vpTest = {R:() => R, setTime:t => setTime(t), time:() => T, objs:() => V().objects, stop:() => stop(), renderVP:sz => renderVP(sz), pathDist:(o, t) => pathDist(o, t), applyPreset:id => applyAnimPreset(id), preciseMinY, detect3DFocusPartAt, sampleFocusPartTimeline, focusMarkerAt, setFocusMarkerWorld, toggleObjPathCurveControl, isObjKnotCurveEnabled, objPathKeyTimes, objPosAt, hitTestPathInView, smoothTurnRiggedOnDrag, colorSlotsForObject, lastViewTransform:() => lastViewTransform, projectObjPathPt, ensureObjPathKnotKeys, selKey:() => selKey, selectedKeys, freeCamMode:() => freeCamMode, freeCam:() => freeCam, toggleFreeCamMode, vpViewMode:() => vpViewMode, setVpViewMode, vpOverlayView:() => vpOverlayView, dragPathKnotOrHandleInView, setCamFromWorldPos};
+// "Reset camera" also clears a free camera move
+document.querySelectorAll('[data-reset]').forEach(b => b.addEventListener('click', () => { if (V().camPan) { V().camPan = null; renderVP(); } }));
+
+/* ---------- test hooks for the Vision Pilot MCP ---------- */
+{
+  const VPT = window.VPTest = window.VPTest || {};
+  const frames = n => new Promise(r => { const f = () => (--n <= 0 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
+  const insideAny = () => {
+    if (!R) return false;
+    const c = camWorld(T), p = new R.THREE.Vector3(c.x, c.y, c.z), box = new R.THREE.Box3();
+    let inside = false;
+    R.objs.forEach(({g}) => { if (g && g.visible !== false && box.setFromObject(g).containsPoint(p)) inside = true; });
+    return inside;
+  };
+  // distance from each bike rider's hands to the handlebar grips (metres)
+  VPT.bikeHands = () => {
+    if (!R) return null;
+    const THREE = R.THREE;
+    return V().objects.filter(o => o.model === 'person' && o.pose === 'riding_bike' && o.seatedBikeId).map(o => {
+      const e = R.objs.get(o.id), be = R.objs.get(o.seatedBikeId), rig = e?.g?.userData?.rig, steer = be?.g?.userData?.rig?.frontSteer?.[0];
+      if (!rig || !steer) return {rider:o.label, error:'not built'};
+      e.g.updateMatrixWorld(true); be.g.updateMatrixWorld(true);
+      const brig = be.g.userData.rig;
+      const gap = [[rig.leftArm, -1], [rig.rightArm, 1]].map(([arm, side]) => {
+        const hand = arm.elbow.localToWorld(new THREE.Vector3(0, -rig.h * .155, 0));
+        const grip = steer.localToWorld(new THREE.Vector3(side * brig.W * (.31 - HAND_GRIP_INSET), brig.h * .46, -.13));
+        return rnd(hand.distanceTo(grip), 3);
+      });
+      return {rider:o.label, leftHandToGrip:gap[0], rightHandToGrip:gap[1]};
+    });
+  };
+  VPT.clearSelection = () => { selectObj(null, false); hoverGizmoAxis = null; renderObjects(); buildTimeline(); renderVP(); };
+  VPT.video3d = () => is3D() ? {
+    camera:camWorld(T), aim:targetAt(T), dist:rnd(S.dist, 3), pan:camPan(), freeCam:freeCamMode,
+    view:R ? {pos:R.camera.position.toArray().map(v => rnd(v, 4)), quat:R.camera.quaternion.toArray().map(v => rnd(v, 4)), fov:rnd(R.camera.fov, 3)} : null,
+    objects:V().objects.map(o => o.label), focusSubjects:getSelectedFocusObjects().map(o => o.label), viewMode:vpViewMode
+  } : null;
+  // zoom with one and with several focus subjects: the camera must move forward and stop outside the subjects
+  VPT.zoomTest = async ({steps = 30} = {}) => {
+    if (!is3D()) return {ok:false, error:'Open Video & 3D mode first.'};
+    const objs = V().objects;
+    if (objs.length < 2) return {ok:false, error:'Add at least two 3D subjects first.'};
+    const fs = focusSt(), keep = {on:fs.on, targets:fs.targets, target:fs.target, dist:S.dist, pan:V().camPan, tracks:JSON.stringify(V().tracks || {})};
+    if (freeCamMode) toggleFreeCamMode(false);
+    if (vpViewMode !== 'orbit') setVpViewMode('orbit');
+    const run = async labels => {
+      fs.on = true; fs.targets = labels; fs.target = labels[0]; V().camPan = null;
+      AC.setDist(8); lastFramedSel = null; zoomGoal = null; renderVP(); await frames(2);
+      const d0 = S.dist, t0 = performance.now();
+      for (let i = 0; i < steps; i++) { $('vpWrap').dispatchEvent(new WheelEvent('wheel', {deltaY:-240, bubbles:true, cancelable:true})); await frames(2); }
+      for (let i = 0; i < 120 && zoomGoal != null; i++) await frames(1);
+      renderVP(); await frames(1);
+      return {subjects:labels, startDist:rnd(d0, 3), endDist:rnd(S.dist, 3), movedForward:S.dist < d0 - .05, cameraInsideSubject:insideAny(), stopDistance:rnd(camZoomLimit(), 3), ms:Math.round(performance.now() - t0)};
+    };
+    const one = await run([objs[0].label]);
+    const several = await run(objs.slice(0, Math.min(3, objs.length)).map(o => o.label));
+    Object.assign(fs, {on:keep.on, targets:keep.targets, target:keep.target}); V().camPan = keep.pan; V().tracks = JSON.parse(keep.tracks);
+    AC.setDist(keep.dist); lastFramedSel = null; zoomGoal = null; renderVP(); AC.changed();
+    return {ok:one.movedForward && several.movedForward && !one.cameraInsideSubject && !several.cameraInsideSubject, one, several};
+  };
+}
+
 renderPresets();
 renderAnimPresets();
 updateTimeUI();

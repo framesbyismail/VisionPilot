@@ -1,7 +1,7 @@
 // VisionPilot Service Worker (sw.js)
 // Defines the files to cache and the serving rules for instant loading & offline support.
 
-const CACHE_VERSION = 'v42';
+const CACHE_VERSION = 'v43';
 const APP_CACHE_NAME = `visionpilot-app-${CACHE_VERSION}`;
 const MODEL_CACHE_NAME = `visionpilot-models-${CACHE_VERSION}`;
 
@@ -22,6 +22,7 @@ const CORE_ASSETS = [
   './ai-bridge.js',
   './core.js',
   './video.js',
+  './resize.js',
   './auth.js',
   './clip-text/clip-writer.js',
   './clip-text/clip-worker.js',

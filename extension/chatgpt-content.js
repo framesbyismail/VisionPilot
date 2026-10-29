@@ -1117,12 +1117,14 @@
   }
 
   // Extract a generated <img> element into a base64 dataUrl (via MAIN world, content script fetch, canvas, or background service worker)
-  async function extractGeneratedImageDataUrl(imgEl) {
+  async function extractGeneratedImageDataUrl(imgEl, fast = false) {
     if (!imgEl) return { imageDataUrl: '', imageUrl: '' };
     const src = imgEl.currentSrc || imgEl.src || '';
     if (src.startsWith('data:image/')) {
       return { imageDataUrl: src, imageUrl: src };
     }
+    // the background worker reads the image inside this tab right away (fastest and works for 4K files)
+    if (fast) return { imageDataUrl: '', imageUrl: src };
 
     // 1. Try MAIN-world reader (handles page-owned blob: URLs and same-origin/CORS images)
     try {
@@ -1170,8 +1172,11 @@
   }
 
   // PART 4: Generate an image in ChatGPT (ChatGPT Image 2 / GPT Image 1.5) and bring the generated image back to VisionPilot
+  // live status for VisionPilot: uploading -> generating -> finishing -> reading
+  const stage = (payload, name) => { try { chrome.runtime.sendMessage({ type: 'VP_STAGE', reqId: payload?.reqId || '', stage: name }); } catch (e) {} };
   async function runChatGPTImageGeneration(payload) {
     abortCurrentPrompt = false;
+    stage(payload, 'uploading');
     const editor = await waitForEditor(15000);
     await ensureChatGPTFastestModelAndThinkingOff(true);
     if (abortCurrentPrompt) throw new Error('Image generation cancelled.');
@@ -1242,6 +1247,7 @@
     if (!started) {
       throw new Error('ChatGPT did not start generating the image.');
     }
+    stage(payload, 'generating');
 
     // Helper to find the newly generated image inside assistant messages
     const findGeneratedImage = () => {
@@ -1275,7 +1281,8 @@
         const curSrc = candidate.currentSrc || candidate.src || '';
         if (!streaming && curSrc && curSrc === lastSrc) {
           stableImgStreak++;
-          if (stableImgStreak >= 4) {
+          if (stableImgStreak === 1) stage(payload, 'finishing');
+          if (stableImgStreak >= 2) {
             genImg = candidate;
             break;
           }
@@ -1298,7 +1305,7 @@
           doneWithoutImgStreak = 0;
         }
       }
-      await sleep(450);
+      await sleep(300);
     }
 
     if (!genImg) {
@@ -1316,7 +1323,8 @@
       );
     }
 
-    const extracted = await extractGeneratedImageDataUrl(genImg);
+    stage(payload, 'reading');
+    const extracted = await extractGeneratedImageDataUrl(genImg, true);
     if (!extracted.imageDataUrl && !extracted.imageUrl) {
       throw new Error('Could not extract or download the generated image from ChatGPT.');
     }
@@ -1351,6 +1359,14 @@
       runChatGPTPrompt(msg.payload || msg || {})
         .then((res) => sendResponse(res))
         .catch((err) => sendResponse({ ok: false, error: err.message || String(err) }));
+      return true;
+    }
+    // Retry: the newest image ChatGPT shows in this chat, without generating again
+    if (msg.type === 'VP_SITE_FIND_LAST_IMAGE') {
+      const imgs = Array.from(document.querySelectorAll('[data-message-author-role="assistant"] img, [data-turn="assistant"] img'))
+        .filter((im) => (im.naturalWidth || 0) >= 200 && (im.naturalHeight || 0) >= 200 && !/avatar|profile|favicon|icon/i.test(im.currentSrc || im.src || ''));
+      const last = imgs[imgs.length - 1];
+      sendResponse(last ? { ok: true, src: last.currentSrc || last.src } : { ok: false });
       return true;
     }
     if (msg.type === 'VP_SITE_GENERATE_IMAGE') {

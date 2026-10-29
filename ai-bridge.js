@@ -181,11 +181,18 @@
 
   // Send a message to the Chrome Extension content.js -> background.js (or silent Electron backend) and await the real result
   // No timeout while AI is generating (timeoutMs <= 0 or omitted for run_prompt / generate_image)
-  function sendExtensionRequest(payload, timeoutMs = 0) {
+  // live stages from the extension / desktop app: reqId -> callback(stage)
+  const progressHandlers = new Map();
+  window.addEventListener('vp-ai-extension-progress', (ev) => { const d = ev.detail || {}; const h = progressHandlers.get(d.reqId); if (h) h(d.stage, d); });
+  window.visionPilotDesktop?.onBridgeProgress?.((d) => { const h = d && progressHandlers.get(d.reqId); if (h) h(d.stage, d); });
+  function sendExtensionRequest(payload, timeoutMs = 0, onProgress = null) {
+    payload = { ...payload, reqId: payload.reqId || ('vp_req_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8)) };
+    if (onProgress) progressHandlers.set(payload.reqId, onProgress);
+    const done = (p) => p.finally(() => progressHandlers.delete(payload.reqId));
     if (window.visionPilotDesktop?.isDesktop && typeof window.visionPilotDesktop.runSilentAiBridge === 'function') {
-      return window.visionPilotDesktop.runSilentAiBridge(payload);
+      return done(window.visionPilotDesktop.runSilentAiBridge(payload));
     }
-    return new Promise((resolve) => {
+    return done(new Promise((resolve) => {
       if (!isExtensionConnected()) {
         resolve({
           ok: false,
@@ -193,7 +200,7 @@
         });
         return;
       }
-      const reqId = 'vp_req_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+      const reqId = payload.reqId;
       const refId = payload.refId || null;
       let settled = false;
 
@@ -263,7 +270,7 @@
           error: String(err && err.message ? err.message : err)
         });
       }
-    });
+    }));
   }
 
   // Verify extension installation by round-trip ping to background worker
@@ -1031,7 +1038,7 @@
     'Accurately isolate the main subject (person or object) with 100% precision. Remove all background elements completely and return the isolated subject as a high-quality PNG image. Upscale the final output resolution to 4K.';
 
   // Remove Background via ChatGPT (uploads image in the exact same manner as generate_image and sends the 4K cutout prompt)
-  async function runRemoveBackgroundStep(ref) {
+  async function runRemoveBackgroundStep(ref, opts = {}) {
     const imgModel = IMAGE_GEN_MODELS.gpt;
     if (!isExtensionConnected()) {
       throw new Error(
@@ -1066,7 +1073,8 @@
         ],
         instruction: REMOVE_BG_CHATGPT_PROMPT
       },
-      240000
+      240000,
+      opts.onStage || null
     );
 
     if (res?.cancelled || ref.cancelled) {
@@ -1092,6 +1100,13 @@
       height: aspectInfo.height,
       createdAt: Date.now()
     };
+  }
+
+  // Retry without generating again: pick up the image ChatGPT already made in the last image chat
+  async function recoverRemovedBackground(opts = {}) {
+    const res = await sendExtensionRequest({ action: 'recover_image', model: 'gpt' }, 60000, opts.onStage || null);
+    if (!res || !res.ok || !res.imageDataUrl) throw new Error(res?.error || 'No finished image was found in ChatGPT.');
+    return res;
   }
 
   // Minimal CRC32 + Uncompressed ZIP generator for downloading the real extension files
@@ -1250,6 +1265,7 @@
     runMultiFocusStep,
     runImageGenerationStep,
     runRemoveBackgroundStep,
+    recoverRemovedBackground,
     renderOriginalImageDataUrl,
     renderMarkerScreenshotDataUrl,
     renderLabeledBoxesScreenshotDataUrl,

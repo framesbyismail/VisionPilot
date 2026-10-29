@@ -17,7 +17,7 @@ const loadScript = src => new Promise((res, rej) => {
 /* ---------- models (loaded once, cached in IndexedDB after first download) ---------- */
 const COCO_MODEL = 'https://storage.googleapis.com/tfjs-models/savedmodel/ssdlite_mobilenet_v2/model.json';
 const COCO_IDB = 'indexeddb://vp-coco-lite-v1';
-let ready = null, coco = null, mobilenetModel = null, faceOK = false;
+let ready = null, coco = null, mobilenetModel = null, faceOK = false, facesLoading = null;
 
 function init() {
   const yieldFrame = () => new Promise(r => requestAnimationFrame(r));
@@ -34,6 +34,7 @@ function init() {
       faceapi.nets.tinyFaceDetector.loadFromUri(FACE_MODELS),
       faceapi.nets.faceLandmark68Net.loadFromUri(FACE_MODELS)
     ]).then(() => { faceOK = true; }).catch(e => console.warn('face-api models did not load', e));
+    facesLoading = faces;
 
     const useIdb = typeof location !== 'undefined' && location.protocol !== 'file:';
     let gm = useIdb ? await window.tf.loadGraphModel(COCO_IDB).catch(() => null) : null;
@@ -55,6 +56,7 @@ function init() {
     })().catch(e => console.warn('mobilenet model did not load', e));
 
     await Promise.race([Promise.all([faces, mnLoad]), new Promise(r => setTimeout(r, 4500))]);
+    try { const wc = document.createElement('canvas'); wc.width = wc.height = 96; await coco.detect(wc, 1, .5); if (mobilenetModel) await mobilenetModel.classify(wc, 1); } catch (e) {}
   })().catch(e => { ready = null; throw e; }));
 }
 // Lazy-loaded on demand when Multiple Mode detection is requested (never block initial page reload)
@@ -559,59 +561,60 @@ async function analyze(img) {
   const ctx = c.getContext('2d');
   ctx.drawImage(img, 0, 0, w, h);
 
-  // 1) Full-image COCO-SSD pass with lowered threshold (0.10) so all foreground, background, and tabletop objects are caught
+  // 1) Full-image pass, plus the same image mirrored (a second look from the other side catches misses)
+  const toCand = (d, cw, ch, cr, flip = false) => {
+    let bx = d.bbox[0] / cw; const by = d.bbox[1] / ch, bw = d.bbox[2] / cw, bh = d.bbox[3] / ch;
+    if (flip) bx = 1 - bx - bw;
+    return {cls:d.class, type:mapClass(d.class), score:d.score * (cr ? .96 : flip ? .97 : 1),
+      box:{x:clamp(cr ? cr.rx + bx * cr.rw : bx, 0, 1), y:clamp(cr ? cr.ry + by * cr.rh : by, 0, 1), w:clamp(cr ? bw * cr.rw : bw, .02, 1), h:clamp(cr ? bh * cr.rh : bh, .02, 1)},
+      _edge:cr ? ((cr.rx > 0 && bx < .016) || (cr.rx + cr.rw < .99 && bx + bw > .984) || (cr.ry > 0 && by < .016) || (cr.ry + cr.rh < .99 && by + bh > .984)) : false};
+  };
   const rawFull = await coco.detect(c, 60, .10).catch(() => []);
+  const fullCands = (rawFull || []).map(d => toCand(d, w, h, null));
+  // unclear or busy pictures, or something people ride or sit on (riders hide in it): the full multi-scale set, as before.
+  // A clear picture takes the fast path: one mirrored look instead of 12 crops.
+  const sure = dedupeCandidates(fullCands.filter(o => o.score >= .6));
+  const carries = /^(motorcycle|bicycle|horse|car|truck|bus|boat|chair|couch|bench|bed|elephant)$/;
+  const fullSet = !sure.length || dedupeCandidates(fullCands.filter(o => o.score >= .12)).length >= 6 || sure.some(o => carries.test(o.cls));
+  let rawFlip = [];
+  { // a mirrored look always: it fixed small subjects that the first pass mislabelled
+    const fc = document.createElement('canvas'); fc.width = w; fc.height = h;
+    const fg = fc.getContext('2d'); fg.translate(w, 0); fg.scale(-1, 1); fg.drawImage(c, 0, 0);
+    rawFlip = (await coco.detect(fc, 60, .10).catch(() => [])).map(d => toCand(d, w, h, null, true));
+  }
   await new Promise(r => setTimeout(r, 0));
 
-  // 2) Multi-scale overlapping sub-crop passes (halves, thirds, quadrants, and center focus crops) with main-thread yields
-  const crops = [
-    {rx:0,    ry:0,   rw:.62, rh:1},
-    {rx:.38,  ry:0,   rw:.62, rh:1},
-    {rx:0,    ry:0,   rw:.46, rh:1},
-    {rx:.27,  ry:0,   rw:.46, rh:1},
-    {rx:.54,  ry:0,   rw:.46, rh:1},
-    {rx:0,    ry:0,   rw:.58, rh:.58},
-    {rx:.42,  ry:0,   rw:.58, rh:.58},
-    {rx:0,    ry:.42, rw:.58, rh:.58},
-    {rx:.42,  ry:.42, rw:.58, rh:.58},
-    {rx:.16,  ry:.14, rw:.68, rh:.72},
-    {rx:0,    ry:.22, rw:.54, rh:.68},
-    {rx:.46,  ry:.22, rw:.54, rh:.68}
-  ];
+  // 2) Zoomed-in looks: each small candidate gets its own padded crop (small subjects were the ones mislabelled)
+  const firstPass = [...fullCands, ...rawFlip];
+  const crops = [];
+  firstPass.filter(o => o.score >= .12 && o.box.w * o.box.h < .12).sort((a, b) => b.score - a.score).slice(0, 4).forEach(o => {
+    const pad = 1.1, cx = o.box.x + o.box.w / 2, cy = o.box.y + o.box.h / 2, side = Math.max(o.box.w * w, o.box.h * h) * (1 + pad);
+    const rw = clamp(side / w, .18, 1), rh = clamp(side / h, .18, 1);
+    crops.push({rx:clamp(cx - rw / 2, 0, 1 - rw), ry:clamp(cy - rh / 2, 0, 1 - rh), rw, rh});
+  });
+  if (fullSet) {
+    crops.push({rx:0, ry:0, rw:.62, rh:1}, {rx:.38, ry:0, rw:.62, rh:1}, {rx:0, ry:0, rw:.46, rh:1}, {rx:.27, ry:0, rw:.46, rh:1}, {rx:.54, ry:0, rw:.46, rh:1},
+      {rx:0, ry:0, rw:.58, rh:.58}, {rx:.42, ry:0, rw:.58, rh:.58}, {rx:0, ry:.42, rw:.58, rh:.58}, {rx:.42, ry:.42, rw:.58, rh:.58},
+      {rx:.16, ry:.14, rw:.68, rh:.72}, {rx:0, ry:.22, rw:.54, rh:.68}, {rx:.46, ry:.22, rw:.54, rh:.68});
+  }
   const rawCrops = [];
   const subC = document.createElement('canvas');
   const subG = subC.getContext('2d');
   for (let ci = 0; ci < crops.length; ci++) {
     const cr = crops[ci];
     const cw = Math.max(64, Math.round(w * cr.rw)), ch = Math.max(64, Math.round(h * cr.rh));
-    const sx = Math.round(w * cr.rx), sy = Math.round(h * cr.ry);
     subC.width = cw; subC.height = ch;
-    subG.drawImage(c, sx, sy, cw, ch, 0, 0, cw, ch);
+    subG.drawImage(c, Math.round(w * cr.rx), Math.round(h * cr.ry), cw, ch, 0, 0, cw, ch);
     const dets = await coco.detect(subC, 30, .12).catch(() => []);
-    for (const d of dets) {
-      const bx = d.bbox[0] / cw, by = d.bbox[1] / ch, bw = d.bbox[2] / cw, bh = d.bbox[3] / ch;
-      const touchesInternalLeft = cr.rx > 0 && bx < .016;
-      const touchesInternalRight = (cr.rx + cr.rw) < .99 && (bx + bw) > .984;
-      const touchesInternalTop = cr.ry > 0 && by < .016;
-      const touchesInternalBot = (cr.ry + cr.rh) < .99 && (by + bh) > .984;
-      if (touchesInternalLeft || touchesInternalRight || touchesInternalTop || touchesInternalBot) continue;
-      rawCrops.push({
-        cls: d.class,
-        type: mapClass(d.class),
-        score: d.score * .96,
-        box: {
-          x: clamp(cr.rx + bx * cr.rw, 0, 1),
-          y: clamp(cr.ry + by * cr.rh, 0, 1),
-          w: clamp(bw * cr.rw, .02, 1),
-          h: clamp(bh * cr.rh, .02, 1)
-        }
-      });
-    }
+    for (const d of dets) { const o = toCand(d, cw, ch, cr); if (!o._edge) rawCrops.push(o); }
     if (ci % 3 === 2) await new Promise(r => setTimeout(r, 0));
   }
+  rawCrops.push(...rawFlip);
 
   // 3) Face detection + 68 landmarks (inputSize 416 catches smaller faces in 3-4 person group photos)
   let rawFaces = [];
+  // people are often found by their face: wait for that model if it is still loading (first picture after opening)
+  if (!faceOK && facesLoading) await Promise.race([facesLoading, new Promise(r => setTimeout(r, 6000))]);
   if (faceOK) {
     try { rawFaces = await faceapi.detectAllFaces(c, new faceapi.TinyFaceDetectorOptions({inputSize:416, scoreThreshold:.24})).withFaceLandmarks(); }
     catch (e) { rawFaces = []; }
@@ -639,8 +642,8 @@ async function analyze(img) {
     }
   }));
 
-  // Combine full-frame and sub-crop detections and deduplicate
-  let objs = dedupeCandidates([...fullMapped, ...rawCrops]);
+  // Combine full-frame and sub-crop detections and deduplicate; weak small guesses that are not people, animals or vehicles are dropped
+  let objs = dedupeCandidates([...fullMapped, ...rawCrops]).filter(o => o.score >= .25 || ['person', 'animal', 'car', 'vehicle'].includes(o.type) && o.score >= .18 || o.box.w * o.box.h > .05);
 
   // Attach faces to person boxes; if a single person box contains multiple distinct faces, split cleanly along midpoints between faces
   const usedFaces = new Set();
@@ -722,6 +725,7 @@ async function analyze(img) {
   }
 
   objs = dedupeCandidates(objs);
+  if (window.__vpDetDebug) window.__vpDetDebug = {path:fullSet ? "full" : "fast", passes:1 + (rawFlip.length ? 1 : 0) + crops.length, final:objs.map(o => o.cls + " " + (o.score || 0).toFixed(2))};
 
   if (!objs.length) {
     const fallbackBox = islands[0] ? {x:islands[0].x, y:islands[0].y, w:islands[0].w, h:islands[0].h} : {x:.15, y:.1, w:.7, h:.8};
@@ -1357,8 +1361,16 @@ function pointInfo(det, x, y, preferredSubj = null) {
   return {index:h.i, subject:s, part, colorName:cName, color:cHex, where:whereStr, whereOnSubject, fullDetail};
 }
 
+const detCache = new Map();
+const detKey = img => { const s = img.currentSrc || img.src || ''; return s ? s.length + ':' + s.slice(0, 96) + s.slice(-96) + ':' + (img.naturalWidth || 0) + 'x' + (img.naturalHeight || 0) : ''; };
 async function analyzeKeep(img) {
-  const det = await analyze(img);
+  const key = detKey(img);
+  let det;
+  if (key && detCache.has(key)) det = JSON.parse(detCache.get(key));
+  else {
+    det = await analyze(img);
+    if (key) { detCache.set(key, JSON.stringify(det)); if (detCache.size > 16) detCache.delete(detCache.keys().next().value); }
+  }
   Object.defineProperty(det, '_px', {value:pixelGrid(img), enumerable:false, configurable:true});
   return det;
 }

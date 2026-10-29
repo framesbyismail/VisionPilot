@@ -26,6 +26,45 @@ const PROVIDERS = {
   }
 };
 
+// ---------- link to the VisionPilot desktop app (Windows / macOS / Linux) ----------
+// The desktop app listens on this computer only (127.0.0.1). This browser keeps a connection to it, so the app can send
+// prompts and image jobs that run here, in the browser where you are signed in to ChatGPT, Claude and Gemini.
+const DESKTOP_PORT = 47821;
+const desktopLink = { ws: null, connected: false, send: null };
+function connectDesktop() {
+  if (desktopLink.ws && desktopLink.ws.readyState <= 1) return;
+  let ws;
+  try { ws = new WebSocket(`ws://127.0.0.1:${DESKTOP_PORT}/vp-extension`); } catch (e) { return; }
+  desktopLink.ws = ws;
+  ws.onopen = () => {
+    desktopLink.connected = true;
+    desktopLink.send = (m) => { try { ws.send(JSON.stringify(m)); } catch (e) {} };
+    desktopLink.send({ type: 'hello', version: chrome.runtime.getManifest().version, models: ['claude', 'gpt', 'gemini'] });
+  };
+  ws.onmessage = async (ev) => {
+    let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+    if (m.type === 'ping') { desktopLink.send?.({ type: 'pong' }); return; }
+    if (m.type !== 'request' || !m.id) return;
+    const result = await handleBridgeRequest({ ...(m.payload || {}), reqId: m.payload?.reqId || m.id }, null).catch((err) => ({ ok: false, error: err?.message || String(err) }));
+    desktopLink.send?.({ type: 'response', id: m.id, result });
+  };
+  ws.onclose = ws.onerror = () => { desktopLink.connected = false; desktopLink.send = null; if (desktopLink.ws === ws) desktopLink.ws = null; };
+}
+let desktopWindowId = null;
+async function desktopWorkWindow() {
+  try { if (desktopWindowId !== null && await chrome.windows.get(desktopWindowId)) return desktopWindowId; } catch (e) { desktopWindowId = null; }
+  try {
+    const w = await chrome.windows.create({ url: 'about:blank', state: 'minimized', focused: false });
+    desktopWindowId = w.id;
+    return w.id;
+  } catch (e) { return undefined; }
+}
+// try now, on browser start, and every 30 s (a live connection also keeps this worker awake)
+connectDesktop();
+chrome.runtime.onStartup?.addListener(connectDesktop);
+chrome.runtime.onInstalled?.addListener(connectDesktop);
+try { chrome.alarms.create('vp-desktop-link', { periodInMinutes: 0.5 }); chrome.alarms.onAlarm.addListener((a) => { if (a.name === 'vp-desktop-link') connectDesktop(); }); } catch (e) {}
+
 const activeProviderTabIds = {
   claude: null,
   gpt: null,
@@ -507,6 +546,9 @@ async function ensureFreshProviderChatTab(model, options = {}) {
       const sTab = await chrome.tabs.get(senderTabId);
       if (sTab && sTab.windowId !== undefined) targetWindowId = sTab.windowId;
     } catch (e) {}
+  } else if (!options.focusTab) {
+    // a job from the desktop app: work in a minimised window of its own, so no browser window pops up
+    targetWindowId = await desktopWorkWindow();
   }
 
   let tab = null;
@@ -541,6 +583,8 @@ async function ensureFreshProviderChatTab(model, options = {}) {
   }
 
   activeProviderTabIds[model] = tab.id;
+  // keep the AI tab loaded while it works in the background
+  try { await chrome.tabs.update(tab.id, { autoDiscardable: false }); } catch (e) {}
   freshChatStarted[model] = true;
 
   // Put VisionPilot and all open Claude/ChatGPT/Gemini tabs (including this tab) into one Chrome tab group
@@ -804,6 +848,48 @@ async function runProviderPrompt(model, payload, senderTabId = null) {
 }
 
 // Fetch an image URL in the MV3 background service worker (bypasses CORS via <all_urls>) and return as a base64 dataUrl
+// Read a generated image inside the AI tab itself (its own cookies, no CORS), and return it straight back.
+// This replaces handing big images over through a page attribute, which gave up after ~1.4 s and lost 4K results.
+async function readImageInPage(tabId, src) {
+  if (!tabId || !src) return { ok: false, error: 'No image to read.' };
+  try {
+    const [res] = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      args: [src],
+      func: async (s) => {
+        const toDataUrl = (blob) => new Promise((r) => { const fr = new FileReader(); fr.onloadend = () => r(String(fr.result || '')); fr.onerror = () => r(''); fr.readAsDataURL(blob); });
+        try {
+          const resp = await fetch(s, { credentials: 'include' });
+          if (resp.ok) { const d = await toDataUrl(await resp.blob()); if (d.startsWith('data:image/')) return { ok: true, dataUrl: d }; }
+        } catch (e) {}
+        const im = Array.from(document.images).find((i) => i.currentSrc === s || i.src === s);
+        if (im) {
+          try {
+            if (!im.complete) await new Promise((r) => { im.onload = im.onerror = r; setTimeout(r, 8000); });
+            const c = document.createElement('canvas'); c.width = im.naturalWidth; c.height = im.naturalHeight;
+            c.getContext('2d').drawImage(im, 0, 0);
+            const d = c.toDataURL('image/png'); if (d.startsWith('data:image/')) return { ok: true, dataUrl: d };
+          } catch (e) {}
+        }
+        return { ok: false, error: 'The image is visible in the AI tab but could not be read.' };
+      }
+    });
+    return res?.result || { ok: false, error: 'Reading the image failed.' };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+}
+
+// Tell the VisionPilot page what stage a request is at (shown as live status there)
+const requestSenders = new Map(); // reqId -> VisionPilot tab id
+function reportStage(reqId, stage, extra = {}) {
+  const tabId = requestSenders.get(reqId);
+  const msg = { type: 'VP_PROGRESS', reqId, stage, at: Date.now(), ...extra };
+  if (tabId) chrome.tabs.sendMessage(tabId, msg).catch(() => {});
+  if (desktopLink.send) desktopLink.send(msg);
+}
+
 async function fetchImageAsDataUrl(imageUrl) {
   if (!imageUrl) {
     return { ok: false, error: 'Missing image URL.' };
@@ -914,6 +1000,12 @@ async function runProviderImageGeneration(model, payload, senderTabId = null) {
     }
 
     let finalDataUrl = result.imageDataUrl || '';
+    lastImageJob = { model, tabId: tabStatus.tabId, imageUrl: result.imageUrl || '', at: Date.now() };
+    if (!finalDataUrl && result.imageUrl) {
+      reportStage(reqId, 'reading');
+      const inPage = await readImageInPage(tabStatus.tabId, result.imageUrl);
+      if (inPage.ok) finalDataUrl = inPage.dataUrl;
+    }
     if (!finalDataUrl && result.imageUrl) {
       const fetched = await fetchImageAsDataUrl(result.imageUrl);
       if (fetched && fetched.ok && fetched.dataUrl) {
@@ -1117,61 +1209,62 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  // the AI chat tab reports how far it got (shown live in VisionPilot)
+  if (msg.type === 'VP_STAGE') {
+    if (msg.reqId) reportStage(msg.reqId, msg.stage, msg.extra || {});
+    return false;
+  }
+
   if (msg.type !== 'VP_AI_BRIDGE_REQUEST') return false;
 
-  (async () => {
-    const payload = msg.payload || {};
-    const action = payload.action || 'status';
-    const model = payload.model || 'claude';
-    const senderTabId = sender?.tab?.id || null;
-    if (senderTabId) knownVisionPilotTabIds.add(senderTabId);
-
-    if (action === 'cancel_requests') {
-      const res = await cancelPendingRequests(payload);
-      sendResponse(res);
-      return;
-    }
-
-    if (action === 'connect_model') {
-      const res = await ensureFreshProviderChatTab(model, {
-        focusTab: false,
-        senderTabId
-      });
-      sendResponse(res);
-      return;
-    }
-
-    if (action === 'run_prompt') {
-      const res = await runProviderPrompt(model, payload, senderTabId);
-      sendResponse(res);
-      return;
-    }
-
-    if (action === 'generate_image') {
-      const res = await runProviderImageGeneration(model, payload, senderTabId);
-      sendResponse(res);
-      return;
-    }
-
-    if (action === 'open_login') {
-      const prov = PROVIDERS[model];
-      if (prov) {
-        const res = await ensureFreshProviderChatTab(model, { focusTab: true, senderTabId });
-        sendResponse({ ok: true, opened: prov.newChatUrl, tabId: res.tabId });
-      } else {
-        sendResponse({ ok: false, error: `Unknown model: ${model}` });
-      }
-      return;
-    }
-
-    // Basic extension installation ping
-    sendResponse({
-      ok: true,
-      installed: true,
-      version: '2.0.0',
-      models: ['visionpilot', 'claude', 'gpt', 'gemini']
-    });
-  })();
-
+  const payload = msg.payload || {};
+  const senderTabId = sender?.tab?.id || null;
+  if (senderTabId) knownVisionPilotTabIds.add(senderTabId);
+  handleBridgeRequest(payload, senderTabId).then(sendResponse, (err) => sendResponse({ ok: false, error: err?.message || String(err) }));
   return true;
 });
+
+// One request from VisionPilot (the website through content.js, or the desktop app through the local link)
+async function handleBridgeRequest(payload, senderTabId = null) {
+  const action = payload.action || 'status';
+  const model = payload.model || 'claude';
+  if (payload.reqId && senderTabId) requestSenders.set(payload.reqId, senderTabId);
+  try {
+    if (action === 'cancel_requests') return await cancelPendingRequests(payload);
+    if (action === 'connect_model') return await ensureFreshProviderChatTab(model, { focusTab: false, senderTabId });
+    if (action === 'run_prompt') return await runProviderPrompt(model, payload, senderTabId);
+    if (action === 'generate_image') {
+      reportStage(payload.reqId, 'opening');
+      return await runProviderImageGeneration(model, payload, senderTabId);
+    }
+    // Retry without generating again: pick up the image ChatGPT already made in the last image chat
+    if (action === 'recover_image') return await recoverLastImage(payload.reqId);
+    if (action === 'open_login') {
+      const prov = PROVIDERS[model];
+      if (!prov) return { ok: false, error: `Unknown model: ${model}` };
+      const res = await ensureFreshProviderChatTab(model, { focusTab: true, senderTabId });
+      return { ok: true, opened: prov.newChatUrl, tabId: res.tabId };
+    }
+    // Basic extension installation ping
+    return { ok: true, installed: true, version: chrome.runtime.getManifest().version, models: ['visionpilot', 'claude', 'gpt', 'gemini'], desktopLinked: desktopLink.connected };
+  } finally {
+    if (payload.reqId) setTimeout(() => requestSenders.delete(payload.reqId), 60000);
+  }
+}
+
+let lastImageJob = null;
+async function recoverLastImage(reqId) {
+  const job = lastImageJob;
+  if (!job || !job.tabId) return { ok: false, error: 'There is no earlier image chat to pick the image up from.' };
+  reportStage(reqId, 'reading');
+  let src = job.imageUrl;
+  try {
+    const found = await chrome.tabs.sendMessage(job.tabId, { type: 'VP_SITE_FIND_LAST_IMAGE' });
+    if (found?.ok && found.src) src = found.src;
+  } catch (e) {}
+  if (!src) return { ok: false, error: 'ChatGPT has not shown an image in that chat yet.' };
+  const r = await readImageInPage(job.tabId, src);
+  if (r.ok) return { ok: true, imageDataUrl: r.dataUrl, recovered: true };
+  const f = await fetchImageAsDataUrl(src);
+  return f.ok ? { ok: true, imageDataUrl: f.dataUrl, recovered: true } : { ok: false, error: r.error || f.error };
+}

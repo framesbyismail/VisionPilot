@@ -550,34 +550,32 @@
                 <button type="button" id="fModeMulti" data-fmode="multi" aria-pressed="false">Multiple Mode</button>
               </div>
               <div class="field fdetail" id="focusSinglePane">
-                <div class="labrow"><label for="focusDesc">Focus Point Detail</label>
-                  <button class="tog pin" type="button" id="focusIntoSubjSingle" aria-pressed="false">Into Subject</button></div>
+                <span class="lbl fsel-lbl">Select Focus Point</span>
+                <div class="chips fsel-chips"><button type="button" class="tog fdet-btn marker-glow" id="focusSingleMarker" aria-pressed="false" style="--sc:#3fb950" title="Focus Marker: move the green marker on the image"><i class="sdot marker-dot"></i><span>Marker</span></button></div>
+                <div class="labrow"><label for="focusDesc">Focus Point</label>
+                  <button class="tog pin" type="button" id="focusIntoSubjSingle" aria-pressed="false">Add to Prompt</button></div>
                 <textarea id="focusDesc" rows="3" placeholder="Click a spot on the image: detected details appear here (you can edit it)"></textarea>
                 <span class="detect" id="focusStatus" hidden></span>
               </div>
               <div class="field fmulti" id="focusMultiPane" hidden>
-                <div class="labrow"><span class="lbl">Focus Detail</span>
-                  <div class="fmulti-acts">
-                    <button class="tog pin" type="button" id="focusIntoSubjMulti">Into Subject</button>
-                  </div>
-                </div>
-                <div class="chips" id="focusDetList"></div>
+                <div class="labrow"><span class="lbl">Focus Subjects</span></div>
+                <span class="lbl fsel-lbl">Select Focus Subject</span>
+                <div class="chips fsel-chips" id="focusDetList"></div>
                 <div id="focusHiddenSubjBoxes" hidden aria-hidden="true"></div>
                 <div class="fmedit" id="focusMultiEditWrap">
                   <textarea id="focusMultiText" rows="3" placeholder="Select a subject to see its detail"></textarea>
                 </div>
               </div>
-              <div class="field" id="focusSubjWrap">
+              <div class="field" id="focusSubjWrap" hidden>
                 <div class="labrow"><label><button class="kb vonly" data-kp="focus" aria-label="Keyframe focus subject"></button>Select Focus Subject</label></div>
                 <div class="chips fsubj-list" id="focusSubjList"></div>
                 <select id="focusTarget" hidden></select>
               </div>
               <div class="sl"><div class="top"><span>Preview zoom</span><output id="fZoomV">1×</output></div><input type="range" id="fZoom" min="1" max="8" step="0.5" value="1" aria-label="Preview zoom"></div>
-              <div class="swrow sm">Zoom to Detail<button class="switch" id="detailOn" role="switch" aria-checked="false" aria-label="Zoom to Detail"></button></div>
               <div class="mrow" id="detailRow">
-                <div class="row">
-                  <div class="field"><label for="detailCm">Detail size <small class="unit">cm</small></label><input type="number" id="detailCm" min="0.5" max="200" step="0.5"></div>
-                  <button class="tog zoom-lock" type="button" id="detailZoom" aria-pressed="false" style="flex:none;align-self:flex-end">Zoom to detail</button>
+                <div class="row detail-row">
+                  <div class="cmfield"><input type="number" id="detailCm" min="0.5" max="200" step="0.5" aria-label="Detail size in centimetres"><span class="unit">cm</span></div>
+                  <button class="tog zoom-lock" type="button" id="detailZoom" aria-pressed="false">Zoom to Detail</button>
                 </div>
               </div>
             </div>
@@ -827,11 +825,13 @@
         <button class="btn ghost sm" id="objAdd" style="flex:none">+ Add</button>
       </div>
       <div class="row" style="gap:6px;flex-wrap:wrap">
-        <button class="btn ghost sm" id="objUpload" type="button" style="flex:1 1 auto" title="Upload your own 3D model: FBX, OBJ (+MTL), GLB or GLTF with textures and rig">⬆ Upload 3D model</button>
+        <button class="btn ghost sm" id="objUpload" type="button" style="flex:1 1 auto" title="Upload a 3D model or project: FBX, OBJ (+MTL), GLB, GLTF, DAE, 3MF, STL or PLY, with textures, rig and camera">⬆ Upload 3D model</button>
         <button class="btn ghost sm" id="objMatchImg" type="button" style="flex:1 1 auto" hidden title="Re-place the subjects and set the 3D camera angle, tilt, distance and frame shape from your reference image">⌖ Match to image</button>
-        <input type="file" id="objUploadFile" accept=".fbx,.obj,.mtl,.glb,.gltf,.bin,.png,.jpg,.jpeg,.webp,.bmp,.tga,.gif" multiple hidden>
+        <input type="file" id="objUploadFile" accept=".fbx,.obj,.mtl,.glb,.gltf,.bin,.dae,.3mf,.stl,.ply,.png,.jpg,.jpeg,.webp,.bmp,.tga,.gif" multiple hidden>
+        <button class="btn ghost sm" id="objUploadDir" type="button" style="flex:0 0 auto" title="Upload a whole 3D project folder (model, textures and camera)">⬆ Folder</button>
+        <input type="file" id="objUploadDirFile" webkitdirectory directory multiple hidden>
       </div>
-      <p class="hint" id="objUploadHint">Upload FBX, OBJ (+ MTL), GLB or GLTF. Select the model together with its texture images (and .bin for GLTF). You can also drop files on the 3D view. Rig, textures and animation clips come along.</p>
+      <p class="hint" id="objUploadHint">Upload 3D Model</p>
       <div id="objProps" style="display:flex;flex-direction:column;gap:8px"></div>
     </div>
   </div>
@@ -1149,7 +1149,7 @@
 <aside class="vp-history-drawer" id="vpHistoryDrawer" aria-label="Account, Settings &amp; History Library" aria-hidden="true">
   <!-- 1. User / Account Section (Top) -->
   <div class="vpd-section vpd-user-sec" id="vpDrawerUserSec">
-    <button type="button" class="vpd-sec-head vpd-user-head" id="vpDrawerUserHead" aria-expanded="false" title="Expand or minimize user account info">
+    <button type="button" class="vpd-sec-head vpd-user-head" id="vpDrawerUserHead" aria-expanded="true" title="Expand or minimize user account info">
       <div class="vpd-user-head-left">
         <span class="vpd-user-avatar" id="vpDrawerUserAvatar">
           <img id="vpDrawerUserPic" alt="" referrerpolicy="no-referrer" hidden>
@@ -1160,7 +1160,7 @@
       </div>
       <span class="vpd-arrow" id="vpDrawerUserArrow" aria-hidden="true">▾</span>
     </button>
-    <div class="vpd-sec-body vpd-user-body" id="vpDrawerUserBody" hidden>
+    <div class="vpd-sec-body vpd-user-body" id="vpDrawerUserBody">
       <div class="authm vpd-authm" id="authM">
         <button class="navbtn" id="authBtn" aria-haspopup="true" aria-expanded="false" hidden><span>Sign in</span></button>
         <div class="menu vpd-inline-menu" id="authMenu" role="menu"></div>
@@ -1170,11 +1170,11 @@
 
   <!-- 2. Settings Section (Above History / Library) -->
   <div class="vpd-section vpd-settings-sec" id="vpDrawerSettingsSec">
-    <button type="button" class="vpd-sec-head vpd-settings-head" id="vpDrawerSettingsHead" aria-expanded="false" title="Expand or minimize reset settings">
+    <button type="button" class="vpd-sec-head vpd-settings-head" id="vpDrawerSettingsHead" aria-expanded="true" title="Expand or minimize reset settings">
       <span class="vpd-sec-title">Settings</span>
       <span class="vpd-arrow" id="vpDrawerSettingsArrow" aria-hidden="true">▾</span>
     </button>
-    <div class="vpd-sec-body vpd-settings-body" id="vpDrawerSettingsBody" hidden>
+    <div class="vpd-sec-body vpd-settings-body" id="vpDrawerSettingsBody">
       <div class="vpd-reset-list" role="menu">
         <button type="button" id="resetLayout" class="vpd-reset-item" role="menuitem"><b>Reset layout</b><small>Put every panel back in its default place</small></button>
         <button type="button" id="resetAll" class="vpd-reset-item danger" role="menuitem"><b>Full reset</b><small>Clear images, objects, keyframes and every setting</small></button>
@@ -1204,6 +1204,7 @@
 <script src="ai-bridge.js"></script>
 <script src="core.js"></script>
 <script src="video.js"></script>
+<script src="resize.js"></script>
 <script src="auth.js"></script>
 <script>
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.protocol === 'http:') && !window.__vpSwRegistered) {

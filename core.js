@@ -1285,14 +1285,14 @@ function renderLiveAIStatus() {
   const fLbl = document.querySelector('label[for="focusDesc"]');
   if (fLbl) {
     fLbl.innerHTML = (activeId !== 'visionpilot' || isBusy)
-      ? `Focus point detail <span class="ai-focus-tag" style="--aic:${info.color || '#e85d2b'}">● ${esc(info.name)}${spinHtml}</span>`
-      : 'Focus point detail';
+      ? `Focus Point <span class="ai-focus-tag" style="--aic:${info.color || '#e85d2b'}">● ${esc(info.name)}${spinHtml}</span>`
+      : 'Focus Point';
   }
   const fmLbl = document.querySelector('#focusMultiPane > .labrow > .lbl');
   if (fmLbl) {
     fmLbl.innerHTML = (activeId !== 'visionpilot' || isBusy)
-      ? `Focus Detail <span class="ai-focus-tag" style="--aic:${info.color || '#e85d2b'}">● ${esc(info.name)}${spinHtml}</span>`
-      : 'Focus Detail';
+      ? `Focus Subjects <span class="ai-focus-tag" style="--aic:${info.color || '#e85d2b'}">● ${esc(info.name)}${spinHtml}</span>`
+      : 'Focus Subjects';
   }
 }
 function setDescLoading(loading, customMsg = '') {
@@ -1997,7 +1997,7 @@ function syncFocus() {
   $('pFocus').classList.toggle('marker-controls-locked', markerLocked);
   $('focusOn').setAttribute('aria-checked', S.focus.on);
   if ($('focusMarkOn')) $('focusMarkOn').setAttribute('aria-checked', String(!!S.focus.showMark));
-  $('detailOn').setAttribute('aria-checked', !!S.focus.detail); $('detailRow').hidden = !S.focus.detail;
+  $('detailRow').hidden = false;
   $('detailZoom').setAttribute('aria-pressed', !!S.focus.zoomLocked);
   setIfIdle($('detailCm'), S.focus.detailCm);
   $('fZoom').value = S.focus.zoom; $('fZoomV').textContent = S.focus.zoom + '×';
@@ -2017,7 +2017,8 @@ function syncFocus() {
   $('focusBoxes').hidden = !isMulti;
   const singleOn = !!(S.focus.on && !isMulti && S.focus.singleActive && S.focus.desc.trim());
   $('focusIntoSubjSingle').setAttribute('aria-pressed', singleOn);
-  $('focusIntoSubjSingle').textContent = singleOn ? '✓ In Subject' : 'Into Subject';
+  $('focusIntoSubjSingle').textContent = singleOn ? '✓ In Prompt' : 'Add to Prompt';
+  $('focusSingleMarker').setAttribute('aria-pressed', singleOn);
   const imgSubs = currentImgSubjects();
   syncHiddenSubjectTextboxes(imgSubs);
   const markerDescVal = (S.focus.multiEdits && S.focus.multiEdits['__marker']) || '';
@@ -2045,9 +2046,10 @@ function syncFocus() {
       ? `<button type="button" class="tog fdet-btn marker-glow" data-fdet="__marker" aria-pressed="${S.focus.multiSel === '__marker'}" style="--sc:#3fb950" title="Focus Marker — move the green marker on the image and select to see its detail"><i class="sdot marker-dot"></i><span>Marker</span></button>`
       : '';
     // Multiple Mode: row of subject buttons at the top
-    $('focusDetList').innerHTML = markerBtnHtml + imgSubs.map(s => {
-      const isSelected = S.focus.multiSel === s.key;
-      return `<button type="button" class="tog fdet-btn" data-fdet="${escAttr(s.key)}" aria-pressed="${isSelected}" style="--sc:${escAttr(s.color)}" title="${escAttr(s.label + ' (' + s.category + ') — click to see its detail')}"><i class="sdot" style="background:${escAttr(s.color)}"></i><span>${esc(s.label)}</span></button>`;
+    // a chip is "pressed" while its detail is in the main prompt; the one shown below gets .shown
+    $('focusDetList').innerHTML = markerBtnHtml.replace(/aria-pressed="[^"]*"/, `aria-pressed="${S.focus.activeSubjs.includes('__marker')}"`).replace('class="tog fdet-btn marker-glow"', `class="tog fdet-btn marker-glow${S.focus.multiSel === '__marker' ? ' shown' : ''}"`) + imgSubs.map(s => {
+      const isSelected = S.focus.activeSubjs.includes(s.key);
+      return `<button type="button" class="tog fdet-btn${S.focus.multiSel === s.key ? ' shown' : ''}" data-fdet="${escAttr(s.key)}" aria-pressed="${isSelected}" style="--sc:${escAttr(s.color)}" title="${escAttr(s.label + ' (' + s.category + ') — click to see its detail')}"><i class="sdot" style="background:${escAttr(s.color)}"></i><span>${esc(s.label)}</span></button>`;
     }).join('');
 
     // CHANGE 1: The visible text box below must ALWAYS be visible and never minimize or collapse,
@@ -3564,8 +3566,8 @@ $('focusIntoSubjSingle').addEventListener('click', () => {
     S.focus.activeSubjs = S.focus.activeSubjs.filter(x => x !== singleKey && x !== S.focus.singleKey);
     S.focus.activeSubj = S.focus.activeSubjs[S.focus.activeSubjs.length - 1] || '';
     if (!S.focus.activeSubjs.length) S.focus.target = '';
-    focusKey = ''; syncFocus(); changed();
-    toast('Marker unselected from Select Focus Subject');
+    focusKey = ''; syncFocus(); changed(); refreshFocusJson();
+    toast('Focus Point removed from the prompt');
     return;
   }
   const detail = ($('focusDesc').value || S.focus.desc || '').trim();
@@ -3599,9 +3601,22 @@ $('focusIntoSubjSingle').addEventListener('click', () => {
   S.focus.activeSubj = singleKey;
   S.focus.target = 'Marker';
   S.focus.on = true;
-  focusKey = ''; syncFocus(); changed();
-  toast('Marker added to Select Focus Subject');
+  focusKey = ''; syncFocus(); changed(); refreshFocusJson();
+  toast('Focus Point added to the prompt');
 });
+// the Marker chip above the text does the same as "Add to Prompt"
+$('focusSingleMarker').addEventListener('click', () => $('focusIntoSubjSingle').click());
+// rebuild the shown JSON right away when a focus detail goes in or out of the prompt
+function refreshFocusJson() {
+  if (lastObj && S.app !== 'video') {
+    try {
+      lastObj = buildImagePrompt();
+      $('json').innerHTML = hl(JSON.stringify(lastObj, null, 2));
+      $('status').textContent = 'Up to date';
+      $('status').classList.remove('stale');
+    } catch (err) {}
+  }
+}
 // Reset button (next to Focus Marker toggle): clears current Focus details and re-runs detection when in Multiple Mode
 $('focusMultiReset')?.addEventListener('click', async () => {
   const btn = $('focusMultiReset');
@@ -3649,11 +3664,53 @@ $('focusMultiReset')?.addEventListener('click', async () => {
     focusKey = ''; syncFocus(); placeBoxes(); changed();
   }
 });
-// CHANGE 1 & CHANGE 4: Click subject button (or Marker button) to show its hidden box text in the always-visible box below
+// Multiple Mode: clicking a chip shows its detail below and puts it in the main prompt;
+// clicking the chip that is already shown takes it out of the prompt again
 $('focusDetList').addEventListener('click', e => {
   const b = e.target.closest('[data-fdet]'); if (!b) return;
-  selectMultiSubject(b.dataset.fdet, true);
+  const k = b.dataset.fdet;
+  if (!Array.isArray(S.focus.activeSubjs)) S.focus.activeSubjs = S.focus.activeSubj ? [S.focus.activeSubj] : [];
+  const inPrompt = S.focus.activeSubjs.includes(k);
+  if (inPrompt && S.focus.multiSel === k) {
+    S.focus.activeSubjs = S.focus.activeSubjs.filter(x => x !== k);
+    S.focus.activeSubj = S.focus.activeSubjs[S.focus.activeSubjs.length - 1] || '';
+    if (!S.focus.activeSubjs.length) S.focus.target = '';
+    selectMultiSubject(k, true);
+    refreshFocusJson();
+    toast(`${b.textContent.trim()} removed from the prompt`);
+    return;
+  }
+  selectMultiSubject(k, false);
+  const item = multiFocusItem(k);
+  if (!item) return;
+  S.focus.subjectItems = (Array.isArray(S.focus.subjectItems) ? S.focus.subjectItems : []).filter(it => it.key !== k);
+  S.focus.subjectItems[k === '__marker' ? 'unshift' : 'push'](item);
+  if (!inPrompt) S.focus.activeSubjs.push(k);
+  S.focus.activeSubj = k; S.focus.target = item.label; S.focus.on = true;
+  focusKey = ''; changed(); refreshFocusJson();
+  if (!inPrompt) toast(`${item.label} added to the prompt`);
 });
+// the prompt item for a Multiple Mode chip (Marker or a detected subject)
+function multiFocusItem(k) {
+  if (k === '__marker') {
+    const markerDetail = (getHiddenSubjectBoxText('__marker') || S.focus.multiMarkerText || S.focus.multiEdits?.['__marker'] || '').trim();
+    return {key:'__marker', label:'Marker', type:S.subjType || 'auto', category:'Focus Marker', color:'#3fb950', desc:markerDetail,
+      detail:markerDetail || `Focus marker pointed at (${Math.round(S.focus.x * 100)}%, ${Math.round(S.focus.y * 100)}%)`,
+      pointedPart:S.focus.multiPart || S.focus.note || '', pointedWhere:S.focus.multiWhere || S.focus.where || '',
+      x:S.focus.x, y:S.focus.y, img:S.focus.img, isMarker:true};
+  }
+  const s = currentImgSubjects().find(x => x.key === k);
+  if (!s) return null;
+  const cx = clamp((s.box?.x || .15) + (s.box?.w || .7) / 2, 0, 1), cy = clamp((s.box?.y || .1) + (s.box?.h || .8) / 2, 0, 1);
+  return {
+    key:s.key, label:s.label, type:s.type || S.subjType, category:s.category || null, subtype:s.subtype || '',
+    color:s.color, subjHex:s.subjHex || null, colorName:s.colorName || null, secColorName:s.secColorName || null,
+    desc:s.desc || '', detail:getHiddenSubjectBoxText(s.key) || S.focus.multiEdits?.[s.key] || s.detail || '', richSentence:s.richSentence || '',
+    angle:s.angle || '', pose:s.pose || '', finish:s.finish || '', condition:s.condition || '',
+    position:s.position || '', horiz:s.horiz || '', vert:s.vert || '', depth:s.depth || '',
+    cm:s.cm || S.subjCm, box:s.box || null, partNames:s.partNames || null, x:cx, y:cy, img:S.focus.img
+  };
+}
 $('focusMultiText').addEventListener('input', e => {
   if (!S.focus.multiSel) return;
   const val = e.target.value;
@@ -3662,6 +3719,8 @@ $('focusMultiText').addEventListener('input', e => {
   if (S.focus.multiSel === '__marker') {
     S.focus.multiMarkerText = val;
     setHiddenSubjectBoxText({ key: '__marker', label: 'Marker', color: '#22c55e' }, val, '#22c55e');
+    const mi = (S.focus.subjectItems || []).find(x => x.key === '__marker');
+    if (mi && val.trim()) { mi.detail = val.trim(); mi.desc = val.trim(); }
   } else {
     const subs = currentImgSubjects();
     const s = subs.find(x => x.key === S.focus.multiSel);
@@ -3693,7 +3752,7 @@ $('focusMultiDone')?.addEventListener('click', () => {
   toast('Subject details saved');
 });
 // Multiple Mode -> "Into Subject": transfers Marker (at the very front if active/present) and all detected subjects into Focus Subject
-$('focusIntoSubjMulti').addEventListener('click', () => {
+$('focusIntoSubjMulti')?.addEventListener('click', () => {
   if (S.focus.multiSel && $('focusMultiText')) {
     S.focus.multiEdits = S.focus.multiEdits || {};
     S.focus.multiEdits[S.focus.multiSel] = ($('focusMultiText').value || '').trim();
@@ -3818,15 +3877,17 @@ function toggleMacro() {
   else S.focus.zoomLocked = false;
   changed();
 }
-$('detailOn').addEventListener('click', toggleMacro);
+$('detailOn')?.addEventListener('click', toggleMacro);
 on('detailCm', 'change', v => { if (+v > 0) S.focus.detailCm = clamp(+v, .5, 200); if (S.focus.zoomLocked && S.focus.detail) zoomToDetail(); });
 on('fZoom', 'input', v => { S.focus.zoom = clamp(+v, 1, 8); if (S.focus.zoom > 1) S.focus.on = true; });
 function zoomToDetail(z) { const k = calc(), m = z ? 3 / clamp(+z, 1, 8) : 1; setDist(1.15 * m * (S.focus.detailCm / 100) * S.focal / k.sH); }
 $('detailZoom').addEventListener('click', () => {
   if (S.mode !== 'adv' && !ensureAdvMode('Zoom to Detail')) return;
   S.focus.zoomLocked = !S.focus.zoomLocked;
-  if (S.focus.zoomLocked) { S.focus.on = true; S.focus.detail = true; zoomToDetail(); toast('Zoom to detail locked'); }
-  else toast('Zoom to detail unlocked');
+  // with the on/off switch gone, this button alone turns the detail zoom on and off
+  S.focus.detail = S.focus.zoomLocked;
+  if (S.focus.zoomLocked) { S.focus.on = true; zoomToDetail(); toast('Zoomed to the detail'); }
+  else toast('Detail zoom off');
   changed();
 });
 // lighting
@@ -4737,7 +4798,7 @@ function renderHistoryLibrary() {
       ? `<div class="vph-imgs" style="grid-template-columns:1fr">
           <div class="vph-img-col">
             <div class="vph-img-frame" data-hist-preview="gen" data-hist-idx="${idx}" style="aspect-ratio:16/10" title="Click to open ${escAttr(rightLbl)}">
-              <img src="${escAttr(rightThumb)}" alt="${escAttr(rightLbl)}">
+              <img loading="lazy" decoding="async" src="${escAttr(rightThumb)}" alt="${escAttr(rightLbl)}">
             </div>
             <span class="vph-img-lbl">${esc(rightLbl)}</span>
           </div>
@@ -4745,13 +4806,13 @@ function renderHistoryLibrary() {
       : `<div class="vph-imgs">
           <div class="vph-img-col">
             <div class="vph-img-frame" data-hist-preview="main" data-hist-idx="${idx}" title="Click to view ${escAttr(leftLbl)}">
-              <img src="${escAttr(leftThumb)}" alt="${escAttr(leftLbl)}">
+              <img loading="lazy" decoding="async" src="${escAttr(leftThumb)}" alt="${escAttr(leftLbl)}">
             </div>
             <span class="vph-img-lbl">${esc(leftLbl)}</span>
           </div>
           <div class="vph-img-col">
             <div class="vph-img-frame" data-hist-preview="gen" data-hist-idx="${idx}" title="Click to view ${escAttr(rightLbl)}">
-              <img src="${escAttr(rightThumb)}" alt="${escAttr(rightLbl)}">
+              <img loading="lazy" decoding="async" src="${escAttr(rightThumb)}" alt="${escAttr(rightLbl)}">
             </div>
             <span class="vph-img-lbl">${esc(rightLbl)}</span>
           </div>
@@ -4913,6 +4974,8 @@ function toggleHistoryDrawer(forceState) {
   const moreBtn = $('vpMoreBtn');
   if (!drawer) return;
   const nextOpen = typeof forceState === 'boolean' ? forceState : !drawer.classList.contains('open');
+  // the menu always opens with every section expanded
+  if (nextOpen) ['vpDrawerUserSec', 'vpDrawerSettingsSec', 'vpDrawerHistSec'].forEach(id => { const s = $(id); if (!s) return; s.classList.remove('min'); const head = s.querySelector('.vpd-sec-head'), body = s.querySelector('.vpd-sec-body, .vph-body'); if (body) body.hidden = false; if (head) { head.setAttribute('aria-expanded', 'true'); const ar = head.querySelector('.vpd-arrow'); if (ar) ar.textContent = '▾'; } });
   drawer.classList.toggle('open', nextOpen);
   drawer.setAttribute('aria-hidden', String(!nextOpen));
   if (backdrop) backdrop.hidden = !nextOpen;
@@ -7433,7 +7496,7 @@ $('bgRemoveThumb')?.addEventListener('load', () => {
   fitUpscaleDropMedia($('bgRemoveDrop'), $('bgRemoveThumb'));
 });
 
-async function runImageBgRemove() {
+async function runImageBgRemove(opts = {}) {
   if (bgRemoveRunning) return;
   const ref = refs[S.focus?.img] || refs[0];
   const errBox = $('bgRemoveError');
@@ -7480,11 +7543,23 @@ async function runImageBgRemove() {
   if (runBtn) runBtn.disabled = true;
   if (loadBox) loadBox.hidden = false;
   syncBgRemoverUI();
+  // live status: what ChatGPT is doing right now and for how long
+  const lbl = $('bgRemoveLoadingLbl'), t0 = performance.now();
+  const STAGES = {opening:'Opening ChatGPT…', uploading:'Uploading your image to ChatGPT…', generating:'ChatGPT is removing the background…', finishing:'Image is ready in ChatGPT, finishing…', reading:'Bringing the image back…'};
+  let stageTxt = STAGES.opening;
+  const paint = () => { if (lbl) lbl.textContent = `${stageTxt} ${Math.round((performance.now() - t0) / 1000)} s`; };
+  const ticker = setInterval(paint, 1000); paint();
+  const onStage = st => { stageTxt = STAGES[st] || stageTxt; paint(); };
+  bgRemoveLastRun = {startedAt:Date.now(), ms:0, ok:false, error:''};
 
   try {
     if (ref.ready) await ref.ready.catch(() => {});
-    const res = await window.VPAIBridge.runRemoveBackgroundStep(ref);
+    // a retry first picks up the image ChatGPT already made; only if there is none does it run again
+    let res = null;
+    if (opts.retry) res = await window.VPAIBridge.recoverRemovedBackground({onStage}).catch(() => null);
+    if (!res) res = await window.VPAIBridge.runRemoveBackgroundStep(ref, {onStage});
     const dataUrl = res.imageDataUrl;
+    Object.assign(bgRemoveLastRun, {ok:true, ms:Math.round(performance.now() - t0), recovered:!!res.recovered});
     bgRemoveLastDataUrl = dataUrl;
     syncBgRemoverUI();
 
@@ -7512,21 +7587,37 @@ async function runImageBgRemove() {
 
     toast('Background removed in 4K PNG via ChatGPT and ready for download');
   } catch (err) {
+    Object.assign(bgRemoveLastRun, {ok:false, ms:Math.round(performance.now() - t0), error:err?.message || String(err), cancelled:!!err?.cancelled});
     if (!err?.cancelled) {
       const msg = err?.message || String(err);
       if (errBox) {
-        errBox.textContent = msg;
+        errBox.textContent = msg + ' ';
+        const retry = document.createElement('button');
+        retry.type = 'button'; retry.className = 'btn ghost sm bgremove-retry'; retry.textContent = 'Retry';
+        retry.addEventListener('click', () => runImageBgRemove({retry:true}));
+        errBox.appendChild(retry);
         errBox.hidden = false;
       }
       toast('Remove Background error: ' + msg);
     }
   } finally {
+    clearInterval(ticker);
     bgRemoveRunning = false;
     if (runBtn) runBtn.disabled = false;
     if (loadBox) loadBox.hidden = true;
     syncBgRemoverUI();
   }
 }
+let bgRemoveLastRun = null;
+// used by the Vision Pilot MCP: run Remove Background and report whether the image came back and how long it took
+(window.VPTest = window.VPTest || {}).removeBackground = async ({timeoutMs = 240000} = {}) => {
+  if (!refs.length) return {ok:false, error:'Add an image in Input first.'};
+  const run = runImageBgRemove();
+  const cap = new Promise(r => setTimeout(() => r('timeout'), timeoutMs));
+  if (await Promise.race([run.then(() => 'done'), cap]) === 'timeout') return {ok:false, error:`No result after ${timeoutMs / 1000} s`, stage:$('bgRemoveLoadingLbl')?.textContent || ''};
+  const r = bgRemoveLastRun || {};
+  return {ok:!!r.ok, imageReturned:!!r.ok && !!bgRemoveLastDataUrl, ms:r.ms, recovered:!!r.recovered, error:r.error || ($('bgRemoveError')?.hidden ? '' : $('bgRemoveError')?.textContent || '')};
+};
 
 function initBgRemover() {
   $('bgRemoveDrop')?.addEventListener('click', () => {
@@ -7641,9 +7732,22 @@ function dismissVpSkeletonScreen() {
 }
 window.dismissVpSkeletonScreen = dismissVpSkeletonScreen;
 
+// Loading is driven only by real readiness: the page and its scripts, the fonts, the app engine, the first images
+// and the sign-in backend answering. There is no minimum time and no clock-driven progress; it is never shown
+// longer than 10 s (then the app opens anyway and keeps finishing in the background).
+const LOAD_CAP_MS = 10000;
+const LOAD_STEPS = [
+  {key:'dom', w:.2, label:'Loading interface…'},
+  {key:'fonts', w:.15, label:'Loading fonts…'},
+  {key:'engine', w:.3, label:'Starting the engine…'},
+  {key:'images', w:.15, label:'Loading images…'},
+  {key:'backend', w:.2, label:'Connecting…'}
+];
 function initLoadingScreen() {
   const screen = $('vpLoadingScreen');
   const skel = $('vpSkeletonScreen');
+  const VPT = window.VPTest = window.VPTest || {};
+  VPT.ready = false;
 
   // App Version detection: Do NOT apply full dark screen overlay; display only the centered Adobe-style loading box over the interface
   const isAppVersion =
@@ -7655,130 +7759,69 @@ function initLoadingScreen() {
     document.body.classList.add('is-desktop-app');
   }
 
-  // Case A: Warm Reload (bar bar reload dile loading box ashbe na -> YouTube-style skeleton loading for real 0.5s - 1.0s readiness)
-  if (window.__vpIsReloadOrWarm) {
-    if (screen) {
-      screen.classList.add('is-hidden');
-      screen.setAttribute('aria-hidden', 'true');
-    }
-    if (!skel) return;
-    const topBar = $('vpSkeletonTopBar');
-    const t0 = performance.now();
-    const minSkelMs = 520;
-    const maxSkelMs = 920;
-    let fontsDone = false;
-    if (document.fonts?.ready) {
-      document.fonts.ready.then(() => { fontsDone = true; }).catch(() => { fontsDone = true; });
-    } else {
-      fontsDone = true;
-    }
+  const warm = !!window.__vpIsReloadOrWarm;
+  const done = {dom:document.readyState === 'complete', fonts:!document.fonts?.ready, engine:false, images:warm, backend:!!window.__vpAuthSettled};
+  window.addEventListener('load', () => { done.dom = true; }, {once:true});
+  document.fonts?.ready.then(() => { done.fonts = true; }, () => { done.fonts = true; });
+  window.addEventListener('vp-auth-settled', () => { done.backend = true; }, {once:true});
+  if (!warm) {
+    const pics = ['logo/visionpilot-logo-dark.svg', 'add/add_image_1.png'];
+    Promise.all(pics.map(src => new Promise(res => { const i = new Image(); i.onload = i.onerror = () => res(); i.src = src; })))
+      .then(() => { done.images = true; });
+  }
+  const finish = capped => {
+    if (VPT.ready) return;
+    VPT.ready = true; VPT.loadMs = Math.round(performance.now()); VPT.loadCapped = !!capped;
+    VPT.loadSteps = {...done};
+    document.documentElement.classList.add('vp-ready');
+    window.dispatchEvent(new Event('vp-ready'));
+    window.visionPilotDesktop?.appReady?.();
+  };
+  const progress = () => {
+    done.engine = done.engine || !!window.AC;
+    return LOAD_STEPS.reduce((a, s) => a + (done[s.key] ? s.w : 0), 0);
+  };
 
-    const tickSkeleton = () => {
-      if (skel.classList.contains('is-hidden')) return;
-      const elapsedBoot = performance.now();
-      const elapsedCore = performance.now() - t0;
-      const realReady = (document.readyState === 'complete' || document.readyState === 'interactive') && Boolean(window.AC) && fontsDone;
-      const pct = Math.min(98, Math.round(35 + (elapsedBoot / maxSkelMs) * 63));
-      if (topBar) topBar.style.width = `${pct}%`;
-      if ((realReady && elapsedBoot >= minSkelMs && elapsedCore >= 320) || elapsedBoot >= maxSkelMs || elapsedCore >= 850) {
-        dismissVpSkeletonScreen();
-      } else {
-        requestAnimationFrame(tickSkeleton);
-      }
+  // Warm reload: the skeleton of the interface stays until the real content is ready
+  if (warm) {
+    if (screen) { screen.classList.add('is-hidden'); screen.setAttribute('aria-hidden', 'true'); }
+    const topBar = $('vpSkeletonTopBar');
+    const tick = () => {
+      const p = progress(), capped = performance.now() >= LOAD_CAP_MS;
+      if (topBar) topBar.style.width = `${Math.round(35 + p * 65)}%`;
+      window.visionPilotDesktop?.loadProgress?.(Math.round(p * 100), 'Starting…');
+      if (p >= .999 || capped) { dismissVpSkeletonScreen(); finish(capped); }
+      else requestAnimationFrame(tick);
     };
-    requestAnimationFrame(tickSkeleton);
+    if (skel) requestAnimationFrame(tick); else finish(false);
     return;
   }
 
-  // Case B: First Cold Boot (Adobe-inspired Loading Box driven by real asset loading, strictly max 5s / 5000ms)
-  if (skel) {
-    skel.classList.add('is-hidden');
-    skel.setAttribute('aria-hidden', 'true');
-  }
-  if (!screen) return;
-
-  // 1. Dynamically extract Claude (Orange), ChatGPT (Green), Gemini (Blue) brand colors
+  // First open: the branded loading box, its bar follows the real steps
+  if (skel) { skel.classList.add('is-hidden'); skel.setAttribute('aria-hidden', 'true'); }
+  if (!screen) { finish(false); return; }
   applyDynamicModelBrandColorsToLoadingScreen();
-
-  // 2. Mount the 4:3 Image Carousel from /add/ (add_image_1.png, add_image_2.png, ...)
   if (window.VisionPilotAds && $('vpLoadingAdMount')) {
-    window.__vpLoadingAdCarousel = window.VisionPilotAds.mount('#vpLoadingAdMount', {
-      intervalMs: 1000
-    });
+    window.__vpLoadingAdCarousel = window.VisionPilotAds.mount('#vpLoadingAdMount', {intervalMs:1000});
   }
-
-  // 3. Real asset & engine readiness tracking capped strictly at 5000ms (5s max)
-  const preloadUrls = [
-    'add/add_image_1.png',
-    'add/add_image_2.png',
-    'add/add_image_3.png',
-    'add/add_image_4.png',
-    'logo/visionpilot-logo-dark.svg',
-    'logo/visionpilot-logo-light.svg',
-    'logo/visionpilot-app-icon.svg',
-    'ads.html',
-    'ads.js',
-    'style.css',
-    'core.js',
-    'video.js',
-    'detect.js',
-    'ai-bridge.js'
-  ];
-  const fillEl = $('vpLoadProgFill');
-  const pctEl = $('vpLoadPctLbl');
-  const statusEl = $('vpLoadStatusLbl');
-  const maxDisplayMs = 4650; // Strict 5s maximum cap from navigation start (never exceeds 5000ms even on slow network)
-  let loadedCount = 0;
-  let fontsReady = false;
-  if (document.fonts?.ready) {
-    document.fonts.ready.then(() => { fontsReady = true; }).catch(() => { fontsReady = true; });
-  } else {
-    fontsReady = true;
-  }
-
-  preloadUrls.forEach(url => {
-    fetch(url, { cache: 'force-cache' })
-      .catch(() => {})
-      .finally(() => {
-        loadedCount++;
-      });
-  });
-
-  if (statusEl) statusEl.textContent = 'Loading...';
-
-  // Hard 5000ms safety timeout from navigation start so loading box NEVER stays longer than 5s
-  const remainingHardMs = Math.max(80, 4750 - performance.now());
-  const hardTimeoutId = setTimeout(() => {
-    if (fillEl) fillEl.style.width = '100%';
-    if (pctEl) pctEl.textContent = '100%';
-    dismissVpLoadingScreen();
-  }, remainingHardMs);
-
-  const tickLoader = () => {
-    if (screen.classList.contains('is-hidden')) {
-      clearTimeout(hardTimeoutId);
-      return;
-    }
-    const elapsed = performance.now();
-    const domReady = document.readyState === 'complete' ? 1 : (document.readyState === 'interactive' ? 0.65 : 0.3);
-    const engineReady = window.AC ? 1 : 0.4;
-    const assetRatio = loadedCount / preloadUrls.length;
-    const realReadiness = assetRatio * 0.60 + domReady * 0.20 + (fontsReady ? 0.10 : 0) + engineReady * 0.10;
-    const timeRatio = clamp(elapsed / maxDisplayMs, 0, 1);
-    const pct = Math.min(100, Math.round((timeRatio * 0.55 + realReadiness * 0.45) * 100));
-    if (fillEl) fillEl.style.width = `${Math.max(8, pct)}%`;
-    if (pctEl) pctEl.textContent = `${pct}%`;
-    if (statusEl) statusEl.textContent = 'Loading...';
-    if (elapsed >= maxDisplayMs) {
-      clearTimeout(hardTimeoutId);
+  const fillEl = $('vpLoadProgFill'), pctEl = $('vpLoadPctLbl'), statusEl = $('vpLoadStatusLbl');
+  let shown = 0;
+  const tick = () => {
+    if (screen.classList.contains('is-hidden')) { finish(false); return; }
+    const p = progress(), capped = performance.now() >= LOAD_CAP_MS;
+    shown = Math.max(shown, Math.round(p * 100));
+    if (fillEl) fillEl.style.width = `${Math.max(8, shown)}%`;
+    if (pctEl) pctEl.textContent = `${shown}%`;
+    const waiting = LOAD_STEPS.find(s => !done[s.key]);
+    if (statusEl) statusEl.textContent = waiting ? waiting.label : 'Ready';
+    window.visionPilotDesktop?.loadProgress?.(shown, waiting ? waiting.label : 'Ready');
+    if (p >= .999 || capped) {
       if (fillEl) fillEl.style.width = '100%';
       if (pctEl) pctEl.textContent = '100%';
-      dismissVpLoadingScreen();
-    } else {
-      requestAnimationFrame(tickLoader);
-    }
+      dismissVpLoadingScreen(); finish(capped);
+    } else requestAnimationFrame(tick);
   };
-  requestAnimationFrame(tickLoader);
+  requestAnimationFrame(tick);
 }
 
 /* ---------- boot ---------- */
@@ -7854,3 +7897,18 @@ if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.
   }
 }
 })();
+// used by the Vision Pilot MCP: is the Chrome extension (or the desktop app's link to it) connected?
+(window.VPTest = window.VPTest || {}).extensionStatus = async () => {
+  const B = window.VPAIBridge;
+  if (!B) return {connected:false, error:'AI bridge not loaded'};
+  const desktop = !!window.visionPilotDesktop?.isDesktop;
+  if (desktop && window.visionPilotDesktop.extensionLinkStatus) return {desktop, ...(await window.visionPilotDesktop.extensionLinkStatus())};
+  if (!B.isExtensionConnected()) return {desktop, connected:false};
+  const v = B.verifyExtensionInstalled ? await B.verifyExtensionInstalled() : {ok:true};
+  return {desktop, connected:!!v.ok, version:v.version || null, error:v.ok ? '' : v.error};
+};
+// load the detection models in the background once the app is up, so the first picture is analysed without waiting
+window.addEventListener('vp-ready', () => {
+  const go = () => { try { window.VPDetect?.init?.().catch(() => {}); } catch (e) {} };
+  setTimeout(() => (window.requestIdleCallback ? requestIdleCallback(go, {timeout:4000}) : go()), 1500);
+}, {once:true});

@@ -2829,3 +2829,114 @@ body.is-desktop-app .vp-loading-screen .vpl-shell{
 }
 
 @media (prefers-reduced-motion:reduce){.toast{transition:none}.spin{animation-duration:2s}.theme .knob{transition:none} body{transition:none}}
+
+/* ---------- Focus panel (v19): Select Focus Point / Select Focus Subject, detail zoom row ---------- */
+/* everything fits inside the Focus box: the detail text shrinks first, nothing scrolls out */
+.focus-right{overflow:hidden}
+.focus-right > #focusSinglePane,.focus-right > #focusMultiPane{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+#focusSinglePane textarea,#focusMultiPane .fmedit{flex:1 1 auto;min-height:34px}
+#focusSinglePane textarea{height:auto}
+#focusMultiPane .fmedit textarea{flex:1 1 auto;height:100%;min-height:30px}
+.fsel-lbl{font-family:var(--f-mono);font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);flex:none}
+.fsel-chips{flex:none;display:flex;flex-wrap:wrap;gap:6px}
+.fdet-btn.shown{outline:2px solid var(--sc,var(--green));outline-offset:1px}
+.detail-row{display:flex;align-items:center;gap:8px;flex-wrap:nowrap}
+.cmfield{display:inline-flex;align-items:center;gap:6px;flex:none}
+.cmfield input{width:72px}
+.cmfield .unit{font-family:var(--f-mono);font-size:11px;color:var(--muted)}
+.detail-row .zoom-lock{flex:none;white-space:nowrap}
+
+/* loading screen: no glow under the tagline or under "Made by framesbyismail" (website and desktop) */
+.vpl-tagline-glow,.vpl-maker-link,.vpl-maker-link b,.vpl-maker-link span,.vpl-mouse-ico{text-shadow:none!important;filter:none!important;box-shadow:none!important}
+.vpl-tagline-glow::before,.vpl-tagline-glow::after,.vpl-maker-row::before,.vpl-maker-row::after,.vpl-maker-link::before,.vpl-maker-link::after{content:none!important;display:none!important}
+.focus-right{gap:6px}
+.focus-right > .sl{flex:none}
+.focus-right > .sl .top span{font-size:12px}
+.focus-right > #detailRow{flex:none;padding:5px 8px}
+.focus-right > #focusSinglePane,.focus-right > #focusMultiPane{gap:4px;padding:7px 8px;overflow:hidden}
+#focusSinglePane > .labrow,#focusMultiPane > .labrow{min-height:0}
+#focusSinglePane > .labrow .tog{padding:3px 10px;font-size:11px}
+#focusSinglePane textarea{flex:1 1 0;min-height:26px;padding:5px 8px}
+#focusMultiPane .fmedit{flex:1 1 0;min-height:30px;padding-top:4px}
+#focusMultiPane .fmedit textarea{min-height:24px;padding:5px 8px}
+
+/* three-dot menu opens instantly: short slide, no blur behind it */
+.vp-history-drawer{transition:transform .12s ease-out;will-change:transform;contain:layout paint}
+.vp-drawer-backdrop{backdrop-filter:none!important;transition:none}
+.vph-img-frame img{content-visibility:auto}
+
+/* ---------- resizable panels (resize.js) ---------- */
+.vp-rs{position:absolute;z-index:40;touch-action:none;user-select:none}
+.vp-rs[hidden]{display:none}
+.vp-rs-col{top:0;bottom:0;width:10px;cursor:col-resize}
+.vp-rs-row{left:10px;right:10px;bottom:-5px;height:10px;cursor:row-resize}
+.vp-rs::after{content:"";position:absolute;border-radius:2px;background:var(--accent);opacity:0;transition:opacity .12s}
+.vp-rs-col::after{top:0;bottom:0;left:4px;width:2px}
+.vp-rs-row::after{left:0;right:0;top:4px;height:2px}
+.vp-rs:hover::after,.vp-rs.active::after{opacity:.85}
+body.vp-resizing{cursor:row-resize;user-select:none}
+body.vp-resizing *{cursor:inherit!important}
+.dock .card[id],#iCenter > .view[id],#iCenter > #pairViews,#vCenter > .view[id],#vCenter > #vThree,#vCenter > #pTimeline{position:relative}
+.tgroup.collapsed .vp-rs-row{display:none}
+/* a panel with its own height scrolls its content: controls keep their size, text stays inside */
+.card.vp-sized{display:flex;flex-direction:column;overflow:hidden}
+.card.vp-sized > .cbody{flex:1 1 auto;min-height:0;overflow:auto;scrollbar-width:thin}
+.view.vp-sized{overflow:hidden}
+/* the Focus box shrinks its text first; only when it is smaller still does it scroll (never cut off) */
+.focus-right{overflow-y:auto;overflow-x:hidden}
+/* sized panels: the body always gives way and scrolls (some panels pin their body height elsewhere) */
+.card.vp-sized > .cbody{flex:1 1 0!important;min-height:0!important;height:auto!important;max-height:none!important;overflow:auto!important}
+/* the Focus text box shrinks first, the panes themselves never cut their content */
+.focus-right > #focusSinglePane,.focus-right > #focusMultiPane{min-height:auto;overflow:visible}
+.detail-row{flex-wrap:wrap}
+/* a narrow Focus panel puts the picture above the controls instead of squeezing them */
+#pFocus > .cbody{container-type:inline-size;container-name:vpfocus}
+@container vpfocus (max-width:440px){
+  .focus-split{grid-template-columns:minmax(0,1fr)!important;height:auto!important;overflow:visible!important}
+  .focus-left,.focus-left > .focusimg{width:100%!important;max-width:100%!important;height:auto!important;aspect-ratio:4 / 3}
+  .focus-right{height:auto!important;overflow:visible!important}
+}
+#pFocus > .cbody{overflow-y:auto!important;overflow-x:hidden;min-height:0;scrollbar-width:thin}
+/* wider columns: the panel frame grows, its controls keep their designed size */
+@media (min-width:1251px){
+  #iLeft,#vLeft{--vp-base:var(--vp-baseL,330px)}
+  #iRight,#vRight{--vp-base:var(--vp-baseR,395px)}
+  #iLeft .card > .cbody > *,#iRight .card > .cbody > *,#vLeft .card > .cbody > *,#vRight .card > .cbody > *{max-width:calc(var(--vp-base) - 40px)}
+}
+/* the Focus controls fill the whole right side of the Focus box (as in v18) */
+.focus-right,#focusModeBar{max-width:none}
+
+/* desktop app: its own splash window shows the loading box, so the page does not show a second one */
+html[data-desktop-app="true"] .vp-loading-screen{display:none!important}
+
+/* ---------- the middle column stays inside the screen (image and video mode) ---------- */
+@media (min-width:1251px){
+  /* 3D viewport: the picture and the Focus column share the panel's height; the Focus column scrolls instead of spilling over */
+  body.video #pViewport{overflow:hidden}
+  body.video #pViewport .viewer{grid-template-rows:minmax(0,1fr);overflow:hidden}
+  body.video #pViewport .vpwrap{height:100%;min-height:0;overflow:hidden}
+  body.video #pViewport .vpside{min-height:0;height:100%;overflow-y:auto;overflow-x:hidden;scrollbar-width:thin}
+  body.video #pViewport .vpbar{flex:none;row-gap:4px;padding:6px 10px}
+  body.video #pViewport .vpbar .btn{padding-top:5px;padding-bottom:5px}
+  body.video #vCenter,body:not(.video) #iCenter{overflow:hidden}
+}
+/* a narrow timeline keeps its bottom row on one line: icon-only Graph / Reset, no "Video length" label */
+#pTimeline{container-type:inline-size;container-name:vptl}
+.frames #tlInfo{white-space:nowrap}
+@container vptl (max-width:760px){
+  .frames{gap:6px;padding-left:8px;padding-right:8px}
+  .frames .fside.l .tb span,.frames .durbox label{display:none}
+  .frames .fside{min-width:0}
+  .frames #tlInfo{font-size:10px}
+}
+@container vptl (max-width:600px){ .frames #tlInfo{display:none} }
+/* image mode: the Orbit box takes about half the middle column (it was a fixed 500 px), the views and Focus share the rest */
+@media (min-width:1251px){
+  body:not(.video) #pOrbit:not(.min){height:clamp(260px,54%,500px);min-height:0;max-height:none}
+  body:not(.video) #pairViews{flex:1 1 0;height:auto;max-height:none;min-height:0}
+}
+
+/* Focus point row: "Add to Prompt" never wraps its text; in a narrow Focus panel it moves under the label */
+#focusSinglePane .labrow{display:flex;align-items:center;justify-content:space-between;gap:4px 6px;flex-wrap:wrap;min-width:0}
+#focusSinglePane .labrow label{white-space:nowrap}
+#focusSinglePane .labrow .tog.pin{white-space:nowrap;flex:none;padding:4px 9px;margin-left:auto}

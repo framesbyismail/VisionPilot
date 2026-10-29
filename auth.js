@@ -230,9 +230,12 @@ hooks.afterSync = () => {
 };
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && token) refresh(); });
 render(); advRender();
-pullSharedSyncState().then(() => refresh()).then(() => {
+// the loading screen waits for this: the sign-in backend has answered (or could not be reached)
+const authSettled = () => { if (window.__vpAuthSettled) return; window.__vpAuthSettled = true; window.dispatchEvent(new Event('vp-auth-settled')); };
+pullSharedSyncState().catch(() => {}).then(() => refresh()).then(() => {
+  authSettled();
   if (token) pushSharedSyncState();
   poll();
   if (store.get(AFTER)) { store.set(AFTER, null); if (me && !me.approved) AC.needAdv(); }
-});
+}).catch(authSettled);
 })();

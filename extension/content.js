@@ -1,17 +1,18 @@
 // VisionPilot AI Bridge — VisionPilot Page Content Script (v2.0.0)
 // Forwards real image + instruction requests between VisionPilot and the extension background service worker.
 (function () {
+  const VP_EXT_VERSION = (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getManifest) ? chrome.runtime.getManifest().version : '2.1.0';
   if (window.__vpExtContentLoaded) {
     try {
       if (document.documentElement) {
         document.documentElement.setAttribute('data-vp-extension', 'installed');
-        document.documentElement.setAttribute('data-vp-extension-version', '2.0.0');
+        document.documentElement.setAttribute('data-vp-extension-version', VP_EXT_VERSION);
       }
       if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local && location.href.startsWith('http')) {
         try { chrome.storage.local.set({ vpLastUrl: location.href }); } catch (e) {}
       }
       window.dispatchEvent(new CustomEvent('vp-ai-extension-ready', {
-        detail: { installed: true, version: '2.0.0', models: ['claude', 'gpt', 'gemini'] }
+        detail: { installed: true, version: VP_EXT_VERSION, models: ['claude', 'gpt', 'gemini'] }
       }));
     } catch (e) {}
     return;
@@ -25,13 +26,13 @@
     try {
       if (document.documentElement) {
         document.documentElement.setAttribute('data-vp-extension', 'installed');
-        document.documentElement.setAttribute('data-vp-extension-version', '2.0.0');
+        document.documentElement.setAttribute('data-vp-extension-version', VP_EXT_VERSION);
       }
       if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local && location.href.startsWith('http')) {
         try { chrome.storage.local.set({ vpLastUrl: location.href }); } catch (e) {}
       }
       window.dispatchEvent(new CustomEvent('vp-ai-extension-ready', {
-        detail: { installed: true, version: '2.0.0', models: ['claude', 'gpt', 'gemini'] }
+        detail: { installed: true, version: VP_EXT_VERSION, models: ['claude', 'gpt', 'gemini'] }
       }));
     } catch (e) {} finally {
       announcing = false;
@@ -55,6 +56,11 @@
         announceReady();
         sendResponse({ ok: true, isVisionPilot: Boolean(document.getElementById('aiModelBtn')) });
         return true;
+      }
+      // live stage of a running request (uploading, generating, reading...)
+      if (msg.type === 'VP_PROGRESS') {
+        window.dispatchEvent(new CustomEvent('vp-ai-extension-progress', { detail: { reqId: msg.reqId, stage: msg.stage, at: msg.at } }));
+        return false;
       }
       if (msg.type === 'VP_ACTIVATE_MODEL' && msg.model) {
         announceReady();
