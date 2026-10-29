@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en" data-mode="night" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VisionPilot — Loading</title>
+<style>
+  :root {
+    --bg: #0c0d10;
+    --panel: #15171c;
+    --line: #262930;
+    --edge: #323640;
+    --fg: #eef0f5;
+    --muted: #8a8f9c;
+    --accent: #e85d2b;
+    --claude: #d97757;
+    --gpt: #10a37f;
+    --gemini: #4285f4;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: transparent;
+    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: var(--fg);
+  }
+  /* App Version: Centered Adobe-style single main box without full dark screen overlay or gradients */
+  .splash-card {
+    width: 100%;
+    height: 100%;
+    background: var(--panel);
+    border: 1px solid var(--edge);
+    border-radius: 18px;
+    display: grid;
+    grid-template-columns: 1fr 1.12fr;
+    gap: 24px;
+    padding: 24px 28px;
+    position: relative;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.78);
+    align-items: stretch;
+  }
+  .splash-left {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 12px;
+    min-width: 0;
+    padding: 2px 0;
+  }
+  .splash-logo {
+    height: 54px;
+    width: auto;
+    align-self: flex-start;
+    display: block;
+  }
+  .tagline-glow {
+    font-size: 15.5px;
+    font-weight: 700;
+    color: #f8fafc;
+    text-shadow: 0 0 12px rgba(232, 93, 43, 0.45);
+  }
+  .maker-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 14.5px;
+    font-weight: 700;
+    color: #eef0f5;
+    text-decoration: none;
+    text-shadow: 0 0 12px rgba(232, 93, 43, 0.45);
+    transition: transform 0.18s ease, color 0.18s ease;
+    cursor: pointer;
+    align-self: flex-start;
+  }
+  .maker-link b {
+    color: var(--accent);
+  }
+  .maker-link:hover {
+    color: #ffffff;
+    transform: translateX(2px);
+  }
+  .maker-link svg {
+    width: 15px;
+    height: 15px;
+    color: var(--accent);
+  }
+  .desc-txt {
+    font-size: 12.5px;
+    line-height: 1.58;
+    color: #c9cdd6;
+  }
+  .connect-line {
+    font-size: 13px;
+    font-weight: 700;
+    color: #eef0f5;
+  }
+  .copy-line {
+    font-size: 11.5px;
+    color: var(--muted);
+    font-weight: 600;
+  }
+  .bar-wrap-box {
+    margin-top: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    width: 100%;
+  }
+  .bar-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--fg);
+  }
+  .status-line {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--accent);
+  }
+  .bar-wrap {
+    width: 100%;
+    height: 7px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    overflow: hidden;
+  }
+  .bar-fill {
+    height: 100%;
+    width: 65%;
+    border-radius: 999px;
+    background: var(--accent);
+    transition: width 0.25s ease;
+  }
+  .splash-right {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    min-width: 0;
+  }
+  .vp-ad-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 100%;
+  }
+  .vp-ad-viewport {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid var(--edge);
+    background: #111318;
+    user-select: none;
+  }
+  .vp-ad-track {
+    display: flex;
+    width: 100%;
+    height: 100%;
+    transition: transform 0.42s cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: transform;
+  }
+  .vp-ad-slide {
+    flex: 0 0 100%;
+    width: 100%;
+    height: 100%;
+    position: relative;
+    overflow: hidden;
+  }
+  .vp-ad-slide img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .vp-ad-controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .vp-ad-dots {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 12px;
+    border-radius: 999px;
+    background: #111318;
+    border: 1px solid var(--line);
+    touch-action: none;
+    cursor: pointer;
+  }
+  .vp-ad-dot {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 0;
+    background: transparent;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    padding: 0;
+  }
+  .vp-ad-dot-core {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #4b5262;
+    transition: transform 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+  }
+  .vp-ad-dot.active .vp-ad-dot-core {
+    background: var(--accent);
+    transform: scale(1.25);
+  }
+  .vp-ad-dot.locked .vp-ad-dot-core {
+    background: var(--accent);
+    transform: scale(1.35);
+    box-shadow: 0 0 0 2px #ffffff;
+  }
+</style>
+</head>
+<body>
+  <div class="splash-card">
+    <div class="splash-left">
+      <img class="splash-logo" src="logo/visionpilot-logo-dark.svg" alt="VisionPilot">
+      <div class="tagline-glow">Become an AI Director</div>
+      <a class="maker-link" href="https://framesbyismail.github.io/framesbyismail/" target="_blank" rel="noopener">
+        <span>Made by <b>framesbyismail</b></span>
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 5.2v9l2.3-2.2 1.7 3.6 1.6-.7-1.7-3.5 3.2-.3z" fill="currentColor"/><path d="M3.6 3.6 2.2 2.2M6.2 2.6V.9M2.6 6.2H.9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+      </a>
+
+      <p class="desc-txt">
+        Designed for creative professionals who want to harness the power of AI. Vision Pilot lets you direct multiple AI models simultaneously, giving you complete control to accelerate your design, animation, and content creation workflow.
+      </p>
+
+      <div class="connect-line">Connect with <span style="color:var(--claude)">Claude</span>, <span style="color:var(--gpt)">ChatGPT</span>, <span style="color:var(--gemini)">Gemini</span> Models</div>
+
+      <div class="copy-line">&copy; 2026 VisionPilot <span id="splashVer" style="float:right;opacity:0.75">v1.0.0</span></div>
+
+      <div class="bar-wrap-box">
+        <div class="bar-top">
+          <span id="splashStatus">Loading...</span>
+          <span class="status-line" id="splashPct">65%</span>
+        </div>
+        <div class="bar-wrap" role="progressbar" aria-label="Loading VisionPilot">
+          <div class="bar-fill" id="splashBar"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="splash-right">
+      <div id="splashAdMount"></div>
+    </div>
+  </div>
+  <script src="ads.js"></script>
+  <script>
+    if (window.VisionPilotAds) {
+      window.VisionPilotAds.mount('#splashAdMount', { intervalMs: 1000 });
+    }
+    if (window.visionPilotDesktop && typeof window.visionPilotDesktop.onUpdateStatus === 'function') {
+      window.visionPilotDesktop.onUpdateStatus(msg => {
+        const el = document.getElementById('splashStatus');
+        if (el && msg) el.textContent = msg;
+      });
+    }
+  </script>
+</body>
+</html>
