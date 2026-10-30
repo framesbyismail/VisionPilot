@@ -11,9 +11,12 @@ const PORT = 47821;
 let wss = null, ext = null, info = null, nextId = 1;
 const pending = new Map(); // id -> {resolve, reqId}
 let onProgress = () => {};
+let onAuth = () => {};
 
-function start(progressCb) {
+// progressCb(message): live stages of AI jobs; authCb({token, user, pro}): the user signed in on the website in Chrome
+function start(progressCb, authCb) {
   if (progressCb) onProgress = progressCb;
+  if (authCb) onAuth = authCb;
   if (wss) return;
   wss = new WebSocketServer({host:'127.0.0.1', port:PORT, path:'/vp-extension'});
   wss.on('error', () => {}); // another copy of the app may already own the port
@@ -24,6 +27,7 @@ function start(progressCb) {
       let m; try { m = JSON.parse(raw); } catch (e) { return; }
       if (m.type === 'hello') { ext = ws; info = {version:m.version, models:m.models, since:Date.now()}; return; }
       if (m.type === 'VP_PROGRESS') { onProgress(m); return; }
+      if (m.type === 'auth' && typeof m.token === 'string' && m.token) { onAuth({token:m.token, user:m.user || null, pro:m.pro || null}); return; }
       if (m.type === 'response' && pending.has(m.id)) { const p = pending.get(m.id); pending.delete(m.id); p.resolve(m.result); }
     });
     ws.on('close', () => {

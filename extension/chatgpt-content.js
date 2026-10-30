@@ -1225,6 +1225,18 @@
     return null;
   }
 
+  // ChatGPT's answer when the account has used up its image tool (Free plan: "You've hit the Free plan limit for image
+  // generations requests ... resets in 14 hours"). Returns that text, or '' when the latest reply is something else.
+  function chatGPTImageLimitText(beforeMsgsCount) {
+    const msgs = getAssistantMessages();
+    const last = msgs.length > beforeMsgsCount ? msgs[msgs.length - 1] : null;
+    const t = last ? (last.innerText || last.textContent || '').replace(/^\s*ChatGPT said:\s*/i, '').trim() : '';
+    return /\b(?:hit|reached)\b[^.]{0,40}\blimit\b|\bimage generations? (?:requests? )?limit\b|\blimit (?:for|on) image\b|\blimit resets\b|\bcan create more images\b/i.test(t) ? t.slice(0, 220) : '';
+  }
+  // Remove Background without the image tool: Python in ChatGPT cuts the subject out and saves a transparent PNG
+  // (it does not count toward the image limit, and the subject stays pixel for pixel the same)
+  const REMOVE_BG_PYTHON_PROMPT = 'Do not use the image generation tool. Use Python on the uploaded image instead: cut out the main subject with a clean, accurate edge (for example OpenCV GrabCut refined around hair and fine edges), make the background fully transparent, upscale the result to 4K with a high-quality filter, and save it as a PNG with an alpha channel. Then give me the download link to the PNG file.';
+
   async function runChatGPTImageGeneration(payload) {
     abortCurrentPrompt = false;
     stage(payload, 'uploading');
@@ -1323,6 +1335,7 @@
     let lastSrc = '';
     let stableImgStreak = 0;
     let doneWithoutImgStreak = 0;
+    let pythonFallbackSent = false;
 
     while (true) {
       if (abortCurrentPrompt) throw new Error('Image generation cancelled.');
@@ -1353,13 +1366,32 @@
         }
         doneWithoutImgStreak = 0;
       } else if (!streaming && Date.now() - tGen > 8000) {
+        const limitText = chatGPTImageLimitText(beforeMsgs);
+        if (limitText && !pythonFallbackSent) {
+          if (payload && payload.step === 'remove_background') {
+            pythonFallbackSent = true;
+            stage(payload, 'fallback');
+            console.log('[VP ChatGPT] Image tool limit reached: asking for the Python cutout in the same chat...');
+            const ed = findEditor() || editor;
+            await typeInstructionIntoChatGPT(ed, REMOVE_BG_PYTHON_PROMPT);
+            await sleep(400);
+            const btn = findSendButton();
+            if (btn && !btn.disabled) btn.click();
+            else ed.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+            doneWithoutImgStreak = 0;
+            lastApiCheck = Date.now();
+            await sleep(2500);
+            continue;
+          }
+          throw new Error('ChatGPT image limit reached: ' + limitText);
+        }
         // Check if ChatGPT is still showing an image generation progress card ("Creating image")
         const creatingIndicator = document.querySelector(
           '[aria-label*="Creating image" i], [data-testid*="image" i] [role="progressbar"], .animate-pulse'
         );
         if (!creatingIndicator) {
           doneWithoutImgStreak++;
-          if (doneWithoutImgStreak >= 12) {
+          if (doneWithoutImgStreak >= (pythonFallbackSent ? 60 : 12)) {
             break;
           }
         } else {

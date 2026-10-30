@@ -74,6 +74,15 @@
     });
   }
 
+  // sign-in made on the website: passed on to the desktop app (through the background worker and the app link)
+  const VP_SITE_ORIGINS = ['https://framesbyismail.github.io', 'https://visionpilot.us.ci'];
+  window.addEventListener('vp-sync-state-push', (ev) => {
+    if (!VP_SITE_ORIGINS.includes(location.origin) || !document.getElementById('aiModelBtn')) return;
+    const d = ev.detail || {};
+    if (!d.token) return;
+    try { chrome.runtime.sendMessage({ type: 'VP_SYNC_STATE', state: { token: d.token, user: d.user || null, pro: d.pro || null } }); } catch (e) {}
+  });
+
   window.addEventListener('vp-ai-extension-request', async (ev) => {
     const detail = ev.detail || {};
     const reqId = detail.reqId;

@@ -13,6 +13,7 @@ if (!app.requestSingleInstanceLock()) { app.quit(); process.exit(0); }
 
 const BUNDLED = [path.join(process.resourcesPath || '', 'site'), path.join(__dirname, 'site')].find(d => fs.existsSync(path.join(d, 'index.html'))) || path.join(__dirname, 'site');
 const MAX_SPLASH_MS = 10000;
+const SITE_ORIGINS = ['https://framesbyismail.github.io', 'https://visionpilot.us.ci'];
 const MIME = {'.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf-8', '.js':'application/javascript; charset=utf-8', '.mjs':'application/javascript; charset=utf-8',
   '.json':'application/json; charset=utf-8', '.svg':'image/svg+xml', '.png':'image/png', '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.webp':'image/webp', '.ico':'image/x-icon',
   '.wasm':'application/wasm', '.onnx':'application/octet-stream', '.tflite':'application/octet-stream', '.zip':'application/zip', '.glb':'model/gltf-binary'};
@@ -31,10 +32,17 @@ const saveSync = patch => { Object.entries(patch || {}).forEach(([k, v]) => { if
 function startServer() {
   return new Promise(resolve => {
     server = http.createServer((req, res) => {
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-      if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
       const u = new URL(req.url, 'http://127.0.0.1');
+      // the sign-in kept here is only for VisionPilot: its website, this app's own pages and the Chrome extension
+      const origin = req.headers.origin || '';
+      const trusted = !origin || origin === baseUrl || /^chrome-extension:\/\//.test(origin) || SITE_ORIGINS.includes(origin);
+      if (u.pathname.startsWith('/api/')) {
+        if (!trusted) { res.writeHead(403); res.end(); return; }
+        if (origin) { res.setHeader('Access-Control-Allow-Origin', origin); res.setHeader('Vary', 'Origin'); }
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+        res.setHeader('Access-Control-Allow-Private-Network', 'true'); // Chrome asks before a website may reach this computer
+      }
+      if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
       if (u.pathname === '/api/sync-state') {
         if (req.method === 'POST') {
           let body = ''; req.on('data', c => { body += c; });
@@ -118,7 +126,8 @@ ipcMain.on('vp:app-ready', () => showMain());
 /* ---------- start ---------- */
 app.whenReady().then(async () => {
   const t0 = Date.now();
-  extLink.start(p => { if (win && !win.isDestroyed()) win.webContents.send('vp:bridge-progress', p); });
+  extLink.start(p => { if (win && !win.isDestroyed()) win.webContents.send('vp:bridge-progress', p); },
+    a => { saveSync(a); if (win && !win.isDestroyed()) win.webContents.send('vp:auth-token', a.token); });
   createSplash();
   // the GitHub check runs while the splash shows; the update step is the first 30 % of the bar
   const up = await updater.checkAndUpdate({userData:app.getPath('userData'), bundled:BUNDLED, onStatus:m => status(m.text, .3 * (m.pct || 0))});

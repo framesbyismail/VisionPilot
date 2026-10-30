@@ -7586,7 +7586,7 @@ async function runImageBgRemove(opts = {}) {
   syncBgRemoverUI();
   // live status: what ChatGPT is doing right now and for how long
   const lbl = $('bgRemoveLoadingLbl'), t0 = performance.now();
-  const STAGES = {opening:'Opening ChatGPT…', uploading:'Uploading your image to ChatGPT…', generating:'ChatGPT is removing the background…', finishing:'Image is ready in ChatGPT, finishing…', reading:'Bringing the image back…'};
+  const STAGES = {opening:'Opening ChatGPT…', uploading:'Uploading your image to ChatGPT…', generating:'ChatGPT is removing the background…', finishing:'Image is ready in ChatGPT, finishing…', fallback:'ChatGPT image limit reached: cutting it out with Python instead…', reading:'Bringing the image back…'};
   let stageTxt = STAGES.opening;
   const paint = () => { if (lbl) lbl.textContent = `${stageTxt} ${Math.round((performance.now() - t0) / 1000)} s`; };
   const ticker = setInterval(paint, 1000); paint();

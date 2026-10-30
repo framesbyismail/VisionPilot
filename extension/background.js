@@ -1158,6 +1158,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     (async () => {
       try {
         const incoming = msg.state || {};
+        // the desktop app signs in with the same account when it is linked
+        if (incoming.token && desktopLink.send) desktopLink.send({ type: 'auth', token: incoming.token, user: incoming.user || null, pro: incoming.pro || null });
         const cur = await chrome.storage.local.get(['vpSyncedState']);
         const merged = Object.assign({}, cur?.vpSyncedState || {}, incoming, { updatedAt: Date.now() });
         await chrome.storage.local.set({ vpSyncedState: merged });
