@@ -1,0 +1,15 @@
+import * as vp from '../lib.js';
+const [w, h] = (process.argv[2] || '1366x768').split('x').map(Number);
+await vp.startWebsite({width:w, height:h});
+const S = s => vp.evaluate({script:s});
+await S('localStorage.removeItem("vp-panel-sizes-v1"); AC.setPro && AC.setPro(true); await new Promise(r=>setTimeout(r,500));');
+const img = await vp.checkLayout({});
+await S('document.getElementById("appVideo").click(); await new Promise(r=>setTimeout(r,800)); const b=[...document.querySelectorAll("button")].find(b=>b.offsetParent && /^(Start video|Start)$/i.test(b.textContent.trim())); b && b.click(); await new Promise(r=>setTimeout(r,1800));');
+const vid = await vp.checkLayout({});
+const struct = await S(`const p=document.getElementById('pViewport'); const d=(e,dep)=> dep>3?null:{t:(e.id?'#'+e.id:'')+'.'+String(e.className).split(' ')[0], h:Math.round(e.getBoundingClientRect().height), ov:getComputedStyle(e).overflow, k:[...e.children].filter(x=>x.offsetParent!==null).slice(0,8).map(x=>d(x,dep+1))}; return d(p,0)`);
+const pick = r => r.results[0].problems.filter(p => /Viewport|Timeline|Orbit|Top|Side|Focus|view|3D/i.test(p.panel)).map(p => p.panel + ' | ' + p.el + ' | ' + p.text + ' | ' + p.why);
+console.log('IMAGE', JSON.stringify(pick(img), null, 1));
+console.log('VIDEO', JSON.stringify(pick(vid), null, 1));
+console.log(JSON.stringify(struct));
+await vp.screenshot({file:`C:/Users/mdsha/AppData/Local/Temp/center-${w}.png`});
+await vp.shutdown();

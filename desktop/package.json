@@ -1,0 +1,84 @@
+{
+  "name": "visionpilot",
+  "productName": "Vision Pilot",
+  "version": "2.0.0",
+  "description": "Vision Pilot desktop app: AI director for camera, lighting and prompts. Updates itself from GitHub.",
+  "author": "framesbyismail",
+  "license": "UNLICENSED",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "bundle-site": "node scripts/bundle-site.mjs",
+    "dist:win": "npm run bundle-site && electron-builder --win nsis",
+    "dist:linux": "npm run bundle-site && electron-builder --linux AppImage deb",
+    "dist:mac": "npm run bundle-site && electron-builder --mac dmg zip",
+    "dist": "npm run bundle-site && electron-builder --win nsis --linux AppImage"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "electron": "33.2.1",
+    "electron-builder": "25.1.8"
+  },
+  "build": {
+    "appId": "com.framesbyismail.visionpilot",
+    "productName": "Vision Pilot",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "updater.js",
+      "extension-link.js",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "site",
+        "to": "site",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "Vision Pilot"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "build/icon.png",
+      "category": "Graphics",
+      "maintainer": "framesbyismail"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "build/icon.png",
+      "category": "public.app-category.graphics-design"
+    },
+    "electronDist": "node_modules/electron/dist"
+  }
+}

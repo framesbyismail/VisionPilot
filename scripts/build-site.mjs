@@ -10,8 +10,8 @@ import {minify} from 'terser';
 
 const ROOT = process.cwd();
 const OUT = path.resolve(ROOT, process.env.VP_OUT || '_site');
-// never published
-const SKIP = new Set(['.git', '.github', 'scripts', '_site', 'node_modules', '.gitignore', 'package.json', 'package-lock.json']);
+// never published (desktop/ and tools/ are the desktop app and the test MCP, kept in the repo but not on the site)
+const SKIP = new Set(['.git', '.github', 'scripts', '_site', 'node_modules', 'desktop', 'tools', '.gitignore', 'package.json', 'package-lock.json']);
 // app code that gets minified (the extension folder is copied as it is: Chrome reviews readable code)
 const MINIFY = /^(core|video|detect|ai-bridge|auth|resize|ads|sw)\.js$|^clip-text\/clip-writer\.js$/;
 

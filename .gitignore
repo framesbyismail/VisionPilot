@@ -1,3 +1,6 @@
 # build output and build tools (made by scripts/build-site.mjs on GitHub)
 _site/
 node_modules/
+# desktop app: bundled site and installers are made by npm run dist:*
+desktop/site/
+desktop/release/
