@@ -1260,6 +1260,8 @@ async function recoverLastImage(reqId) {
   let src = job.imageUrl;
   try {
     const found = await chrome.tabs.sendMessage(job.tabId, { type: 'VP_SITE_FIND_LAST_IMAGE' });
+    // the chat data gives the file itself (e.g. a PNG the code tool made); otherwise the page shows its address
+    if (found?.ok && found.dataUrl) return { ok: true, imageDataUrl: found.dataUrl, recovered: true };
     if (found?.ok && found.src) src = found.src;
   } catch (e) {}
   if (!src) return { ok: false, error: 'ChatGPT has not shown an image in that chat yet.' };

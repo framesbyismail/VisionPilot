@@ -1,9 +1,10 @@
 // VisionPilot Service Worker (sw.js)
 // Defines the files to cache and the serving rules for instant loading & offline support.
 
-const CACHE_VERSION = 'v43';
+const CACHE_VERSION = 'v44';
 const APP_CACHE_NAME = `visionpilot-app-${CACHE_VERSION}`;
-const MODEL_CACHE_NAME = `visionpilot-models-${CACHE_VERSION}`;
+// one model cache for every version: models are only downloaded again when version.json says they changed
+const MODEL_CACHE_NAME = 'visionpilot-models';
 
 // Core application files to pre-cache on Service Worker install
 const CORE_ASSETS = [
@@ -94,6 +95,60 @@ function isModelOrImmutableAsset(url) {
   return MODEL_ASSET_PATHS.some(suffix => p.endsWith(suffix.toLowerCase()));
 }
 
+// version.json (made on GitHub by scripts/build-site.mjs) lists every file with its SHA-256.
+// Whenever it changes, only the cached files whose hash changed are dropped, so an upload reaches everyone on their next visit
+// and the big models are downloaded again only when they really changed.
+const META_CACHE_NAME = 'visionpilot-meta';
+const MANIFEST_KEY = './__vp-manifest.json';
+let lastManifestCheck = 0;
+let manifestSync = null;
+let manifestKnown = false; // false where there is no version.json (local copy): app files are then refreshed in the background
+const scopeUrl = () => new URL(self.registration.scope);
+async function syncWithManifest({force = false} = {}) {
+  if (manifestSync) return manifestSync;
+  if (!force && Date.now() - lastManifestCheck < 30000) return 0;
+  lastManifestCheck = Date.now();
+  manifestSync = (async () => {
+    try {
+      const res = await fetch(new URL('version.json', scopeUrl()).href, {cache:'no-store'});
+      if (!res.ok) return 0;
+      const next = await res.json();
+      if (!next || !next.files) return 0;
+      const meta = await caches.open(META_CACHE_NAME);
+      const prevRes = await meta.match(MANIFEST_KEY);
+      const prev = prevRes ? await prevRes.json().catch(() => null) : null;
+      manifestKnown = true;
+      if (prev && prev.version === next.version) return 0;
+      const changed = new Set();
+      if (prev && prev.files) {
+        Object.keys(next.files).forEach(f => { if (prev.files[f] !== next.files[f]) changed.add(f); });
+        Object.keys(prev.files).forEach(f => { if (!(f in next.files)) changed.add(f); });
+      }
+      // no earlier list (first visit after this version): every app file is checked once, models are kept
+      const appCache = await caches.open(APP_CACHE_NAME), modelCache = await caches.open(MODEL_CACHE_NAME);
+      const base = scopeUrl().pathname;
+      let dropped = 0;
+      for (const cache of [appCache, modelCache]) {
+        for (const req of await cache.keys()) {
+          const u = new URL(req.url);
+          if (u.origin !== self.location.origin) continue;
+          const rel = decodeURIComponent(u.pathname.startsWith(base) ? u.pathname.slice(base.length) : u.pathname.replace(/^\//, '')) || 'index.html';
+          const drop = prev ? changed.has(rel) || (rel === 'index.html' && changed.has('index.html')) : cache === appCache;
+          if (drop) { await cache.delete(req); dropped++; }
+        }
+      }
+      await meta.put(MANIFEST_KEY, new Response(JSON.stringify(next), {headers:{'content-type':'application/json'}}));
+      return dropped;
+    } catch (_) {
+      return 0;
+    } finally {
+      manifestSync = null;
+    }
+  })();
+  return manifestSync;
+}
+const withTimeout = (p, ms) => Promise.race([p, new Promise(r => setTimeout(() => r(undefined), ms))]);
+
 // 1. Install: pre-cache core application shell files
 self.addEventListener('install', event => {
   event.waitUntil(
@@ -102,7 +157,7 @@ self.addEventListener('install', event => {
       await Promise.allSettled(
         CORE_ASSETS.map(async assetUrl => {
           try {
-            const req = new Request(assetUrl, { cache: 'default' });
+            const req = new Request(assetUrl, { cache: 'no-cache' });
             const res = await fetch(req);
             if (res && (res.ok || res.type === 'opaque')) {
               await cache.put(assetUrl, res);
@@ -117,20 +172,23 @@ self.addEventListener('install', event => {
   );
 });
 
-// 2. Activate: clean up outdated caches and take control immediately
+// 2. Activate: clean up outdated app caches (the model cache is kept and moved over), take control immediately
 self.addEventListener('activate', event => {
   event.waitUntil(
     (async () => {
       const keys = await caches.keys();
-      await Promise.all(
-        keys.map(key => {
-          if (key !== APP_CACHE_NAME && key !== MODEL_CACHE_NAME && key.startsWith('visionpilot-')) {
-            return caches.delete(key);
-          }
-          return undefined;
-        })
-      );
+      const models = await caches.open(MODEL_CACHE_NAME);
+      for (const key of keys) {
+        if (key === APP_CACHE_NAME || key === MODEL_CACHE_NAME || key === META_CACHE_NAME || !key.startsWith('visionpilot-')) continue;
+        // model caches from older versions: keep the downloaded models instead of fetching them again
+        if (key.startsWith('visionpilot-models')) {
+          const old = await caches.open(key);
+          for (const req of await old.keys()) { const r = await old.match(req); if (r && !(await models.match(req))) await models.put(req, r); }
+        }
+        await caches.delete(key);
+      }
       await self.clients.claim();
+      await syncWithManifest({force:true});
     })()
   );
 });
@@ -162,13 +220,37 @@ self.addEventListener('fetch', event => {
   const isSameOrigin = url.origin === self.location.origin;
   const isCacheableCdn = CACHEABLE_CDN_HOSTS.has(url.hostname);
   if (!isSameOrigin && !isCacheableCdn) return;
+  // the update list itself always comes from the network
+  if (isSameOrigin && url.pathname.endsWith('/version.json')) return;
+
+  // Rule 0: the page itself: network first (an upload shows at once), the cached page when offline or the network is slow.
+  // The update list is checked first, so the scripts the page asks for next are the new ones.
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      (async () => {
+        const cache = await caches.open(APP_CACHE_NAME);
+        const net = fetch(request).then(res => {
+          if (res && res.status === 200 && res.type === 'basic') cache.put(request, res.clone()).catch(() => {});
+          return res;
+        }).catch(() => null);
+        await withTimeout(syncWithManifest({force:true}), 2500);
+        const res = await withTimeout(net, 4000);
+        if (res) return res;
+        const cached = await cache.match(request, { ignoreSearch: true }) || await cache.match('./index.html') || await cache.match('./');
+        if (cached) return cached;
+        return (await net) || new Response('Offline', { status: 503, statusText: 'Offline' });
+      })()
+    );
+    return;
+  }
 
   // Rule A: Cache-First for large ONNX/WASM models, icons, and immutable CDN libraries (Three.js, etc.)
+  // (a model that changed on GitHub was already dropped by syncWithManifest, so it is downloaded fresh)
   if (isCacheableCdn || isModelOrImmutableAsset(url)) {
     event.respondWith(
       (async () => {
         const cache = await caches.open(MODEL_CACHE_NAME);
-        const cached = await cache.match(request, { ignoreSearch: true }) || await caches.match(request, { ignoreSearch: true });
+        const cached = await cache.match(request, { ignoreSearch: true });
         if (cached) return cached;
         try {
           const networkRes = await fetch(request);
@@ -186,29 +268,20 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // Rule B: Instant Cache-First with deferred background revalidation for core app shell (HTML, CSS, JS)
-  // Serves cached response in <2ms with zero startup network contention
+  // Rule B: app files (HTML, CSS, JS): instant from the cache; files that changed on GitHub were already dropped,
+  // anything not in the cache comes from the network and is kept
   event.respondWith(
     (async () => {
       const cache = await caches.open(APP_CACHE_NAME);
       const cached = await cache.match(request, { ignoreSearch: true });
-
       if (cached) {
-        // Defer background revalidation so initial page render & scripts run at full speed
-        event.waitUntil(
-          new Promise(resolve => setTimeout(resolve, 2200)).then(() =>
-            fetch(request)
-              .then(networkRes => {
-                if (networkRes && networkRes.status === 200 && networkRes.type === 'basic') {
-                  return cache.put(request, networkRes.clone());
-                }
-              })
-              .catch(() => {})
-          )
-        );
+        if (!manifestKnown) {
+          event.waitUntil(new Promise(r => setTimeout(r, 2200)).then(() => fetch(request)).then(res => {
+            if (res && res.status === 200 && res.type === 'basic') return cache.put(request, res);
+          }).catch(() => {}));
+        }
         return cached;
       }
-
       try {
         const networkRes = await fetch(request);
         if (networkRes && networkRes.status === 200 && networkRes.type === 'basic') {
@@ -216,10 +289,6 @@ self.addEventListener('fetch', event => {
         }
         return networkRes;
       } catch (_) {
-        if (request.mode === 'navigate') {
-          const indexFallback = await cache.match('./index.html') || await cache.match('./');
-          if (indexFallback) return indexFallback;
-        }
         return new Response('Offline', { status: 503, statusText: 'Offline' });
       }
     })()

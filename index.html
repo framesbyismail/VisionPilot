@@ -12,7 +12,6 @@
 <link rel="preload" href="add/add_image_1.png" as="image">
 <link rel="preload" href="ads.js" as="script">
 <link rel="preload" href="core.js" as="script">
-<link rel="preload" href="video.js" as="script">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style id="vpCriticalCss">
   /* Critical above-the-fold Theme & Solid Adobe-Style Loading Box CSS (No Gradients on Loading Box) */
@@ -1197,13 +1196,25 @@
   </div>
 </aside>
 
-<script src="models/ort.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="detect.js"></script>
 <script src="clip-text/clip-writer.js" data-vp-text="clip-text" data-vp-image="clip-image"></script>
 <script src="ai-bridge.js"></script>
 <script src="core.js"></script>
-<script src="video.js"></script>
+<script>
+/* Video & 3D (three.js + video.js, about 1 MB) loads after the Image page is ready, or at once when the app opens in Video & 3D.
+   The ONNX engine (models/ort.min.js) loads itself the first time a local model needs it. */
+(() => {
+  let busy = null;
+  const add = src => new Promise((ok, no) => { const s = document.createElement('script'); s.src = src; s.async = false; s.onload = ok; s.onerror = () => no(new Error('Could not load ' + src)); document.body.appendChild(s); });
+  window.VPLoadVideo = () => busy || (busy = (window.THREE ? Promise.resolve() : add('https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js'))
+    .then(() => window.AC?.hooks?.enterVideo ? null : add('video.js'))
+    .then(() => { window.AC?.hooks?.refsChanged?.(); window.AC?.changed?.(); })
+    .catch(e => { busy = null; throw e; }));
+  if (window.AC?.S?.app === 'video') { window.VPLoadVideo().catch(() => {}); return; }
+  const later = () => (window.requestIdleCallback || (f => setTimeout(f, 300)))(() => window.VPLoadVideo().catch(() => {}), {timeout:3000});
+  if (document.documentElement.classList.contains('vp-ready')) later(); else addEventListener('vp-ready', later, {once:true});
+})();
+</script>
 <script src="resize.js"></script>
 <script src="auth.js"></script>
 <script>

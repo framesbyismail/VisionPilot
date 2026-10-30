@@ -393,6 +393,12 @@
   }
 
   function getAssistantMessages() {
+    // ChatGPT (2026-10): every reply is <li data-message-role="assistant"> in an <ol data-conversation-transcript>
+    const byMsgRole = Array.from(document.querySelectorAll('[data-message-role="assistant"]'));
+    if (byMsgRole.length) return byMsgRole;
+    // signed-in ChatGPT (2026-10): a hidden heading <h4 data-conversation-role="assistant"> starts each reply, its parent holds it
+    const byConvRole = Array.from(document.querySelectorAll('[data-conversation-role="assistant"]')).map((h) => h.parentElement).filter(Boolean);
+    if (byConvRole.length) return byConvRole;
     const byRole = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
     if (byRole.length) return byRole;
     const byTurn = Array.from(
@@ -603,7 +609,7 @@
   function findTurnCopyButton(msgEl) {
     if (!msgEl) return null;
     const turn =
-      msgEl.closest('article[data-testid^="conversation-turn-"], article[data-turn="assistant"], article') ||
+      msgEl.closest('[data-message-role="assistant"], [data-chatgpt-search-message-ids], article[data-testid^="conversation-turn-"], article[data-turn="assistant"], article') ||
       msgEl.parentElement ||
       msgEl;
     revealHoverOnElement(turn);
@@ -616,7 +622,7 @@
       candidates.find((b) => {
         if (b.closest('pre')) return false;
         const label = ((b.getAttribute('aria-label') || b.textContent || b.getAttribute('data-testid') || '')).trim();
-        return /^copy$/i.test(label) || /copy-turn/i.test(label);
+        return /^copy( response)?$/i.test(label) || /copy-turn/i.test(label);
       }) || null
     );
   }
@@ -870,7 +876,7 @@
 
     const turnEl =
       (lastMsg &&
-        (lastMsg.closest('article[data-testid^="conversation-turn-"], article[data-turn="assistant"], article') ||
+        (lastMsg.closest('[data-message-role="assistant"], [data-chatgpt-search-message-ids], article[data-testid^="conversation-turn-"], article[data-turn="assistant"], article') ||
           lastMsg.parentElement)) ||
       lastMsg ||
       document.body;
@@ -1174,6 +1180,51 @@
   // PART 4: Generate an image in ChatGPT (ChatGPT Image 2 / GPT Image 1.5) and bring the generated image back to VisionPilot
   // live status for VisionPilot: uploading -> generating -> finishing -> reading
   const stage = (payload, name) => { try { chrome.runtime.sendMessage({ type: 'VP_STAGE', reqId: payload?.reqId || '', stage: name }); } catch (e) {} };
+  // The newest image ChatGPT made in this chat, read from its conversation data instead of the page:
+  // a generated picture (image_asset_pointer) or a file the code tool wrote (sandbox:/mnt/data/x.png, e.g. Remove Background).
+  // sinceSec: only messages created after this time (seconds). Returns {dataUrl, name} or null.
+  async function fetchConversationImage(sinceSec = 0) {
+    try {
+      const cid = (location.pathname.match(/\/c\/([0-9a-f-]{20,})/i) || [])[1];
+      if (!cid) return null;
+      const tok = (await fetch('/api/auth/session', { credentials: 'include' }).then((r) => r.json()).catch(() => ({}))).accessToken;
+      const h = tok ? { authorization: 'Bearer ' + tok } : {};
+      const conv = await fetch('/backend-api/conversation/' + cid, { headers: h, credentials: 'include' }).then((r) => (r.ok ? r.json() : null));
+      if (!conv || !conv.mapping) return null;
+      const msgs = Object.values(conv.mapping).map((n) => n.message).filter((m) => m && (m.create_time || 0) >= sinceSec)
+        .sort((a, b) => (a.create_time || 0) - (b.create_time || 0));
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        const m = msgs[i], role = m.author && m.author.role;
+        if (role === 'user') break; // only the answer to the latest request
+        const parts = (m.content && m.content.parts) || [];
+        let url = null, name = 'chatgpt-image.png';
+        const ptr = parts.find((p) => p && typeof p === 'object' && /image_asset_pointer/.test(p.content_type || '') && p.asset_pointer);
+        if (ptr) {
+          const id = String(ptr.asset_pointer).replace(/^(file-service|sediment):\/\//, '');
+          const j = await fetch('/backend-api/files/download/' + encodeURIComponent(id), { headers: h, credentials: 'include' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+          url = j && j.download_url;
+        }
+        if (!url && role === 'assistant') {
+          const txt = parts.filter((p) => typeof p === 'string').join('\n');
+          const sb = (txt.match(/sandbox:(\/mnt\/data\/[^\s)\]"']+?\.(?:png|webp|jpe?g))/gi) || []).pop();
+          if (sb) {
+            const path = sb.replace(/^sandbox:/, '');
+            name = path.split('/').pop();
+            const q = new URLSearchParams({ message_id: m.id, sandbox_path: path });
+            const j = await fetch('/backend-api/conversation/' + cid + '/interpreter/download?' + q, { headers: h, credentials: 'include' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+            url = j && j.download_url;
+          }
+        }
+        if (!url) continue;
+        const blob = await fetch(url, { headers: /^https:\/\/chatgpt\.com\//.test(url) ? h : {}, credentials: 'include' }).then((r) => (r.ok ? r.blob() : null)).catch(() => null);
+        if (!blob || blob.size < 1000) continue;
+        const dataUrl = await new Promise((res) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = () => res(null); fr.readAsDataURL(blob); });
+        if (dataUrl) return { dataUrl, name };
+      }
+    } catch (e) {}
+    return null;
+  }
+
   async function runChatGPTImageGeneration(payload) {
     abortCurrentPrompt = false;
     stage(payload, 'uploading');
@@ -1254,7 +1305,7 @@
       const candidates = Array.from(document.querySelectorAll('img')).filter((im) => {
         if (beforeImgs.has(im)) return false;
         if (composerRoot.contains(im)) return false;
-        if (im.closest('[data-message-author-role="user"], [data-turn="user"]')) return false;
+        if (im.closest('[data-message-role="user"], [data-user-message-bubble], [data-message-author-role="user"], [data-turn="user"]')) return false;
         const src = im.currentSrc || im.src || '';
         if (!src || beforeSrcs.has(src)) return false;
         if (/avatar|profile|favicon|icon/i.test(src) || /avatar|profile/i.test(im.alt || '')) return false;
@@ -1266,6 +1317,8 @@
     };
 
     const tGen = Date.now();
+    const sinceSec = Math.floor(tSend / 1000) - 5;
+    let lastApiCheck = 0;
     let genImg = null;
     let lastSrc = '';
     let stableImgStreak = 0;
@@ -1276,6 +1329,14 @@
       if (isLoggedOut()) throw new Error('Logged out of ChatGPT (chatgpt.com) while generating image.');
       const streaming = isChatGPTStreaming();
       const candidate = findGeneratedImage();
+      if (!streaming && Date.now() - lastApiCheck > 2500 && Date.now() - tGen > 3000) {
+        lastApiCheck = Date.now();
+        const fromChat = await fetchConversationImage(sinceSec);
+        if (fromChat) {
+          stage(payload, 'reading');
+          return { ok: true, imageDataUrl: fromChat.dataUrl, imageUrl: null, fileName: fromChat.name };
+        }
+      }
 
       if (candidate) {
         const curSrc = candidate.currentSrc || candidate.src || '';
@@ -1313,6 +1374,8 @@
     }
 
     if (!genImg) {
+      const fromChat = await fetchConversationImage(sinceSec);
+      if (fromChat) return { ok: true, imageDataUrl: fromChat.dataUrl, imageUrl: null, fileName: fromChat.name };
       const msgs = getAssistantMessages();
       const lastMsg = msgs.length > beforeMsgs ? msgs[msgs.length - 1] : null;
       const errTxt = lastMsg ? (lastMsg.innerText || lastMsg.textContent || '').trim().slice(0, 180) : '';
@@ -1363,10 +1426,13 @@
     }
     // Retry: the newest image ChatGPT shows in this chat, without generating again
     if (msg.type === 'VP_SITE_FIND_LAST_IMAGE') {
-      const imgs = Array.from(document.querySelectorAll('[data-message-author-role="assistant"] img, [data-turn="assistant"] img'))
+      fetchConversationImage(0).then((fromChat) => {
+        if (fromChat) { sendResponse({ ok: true, dataUrl: fromChat.dataUrl }); return; }
+        const imgs = Array.from(document.querySelectorAll('[data-message-role="assistant"] img, [data-message-author-role="assistant"] img, [data-turn="assistant"] img'))
         .filter((im) => (im.naturalWidth || 0) >= 200 && (im.naturalHeight || 0) >= 200 && !/avatar|profile|favicon|icon/i.test(im.currentSrc || im.src || ''));
-      const last = imgs[imgs.length - 1];
-      sendResponse(last ? { ok: true, src: last.currentSrc || last.src } : { ok: false });
+        const last = imgs[imgs.length - 1];
+        sendResponse(last ? { ok: true, src: last.currentSrc || last.src } : { ok: false });
+      });
       return true;
     }
     if (msg.type === 'VP_SITE_GENERATE_IMAGE') {

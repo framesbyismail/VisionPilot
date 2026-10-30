@@ -7112,6 +7112,27 @@ function parabolicArcY(u, u0, u1, hPeak, u2 = 0, hBounce = 0) {
   return 0;
 }
 
+// Bike along a path: heading follows the path, the bike leans into each turn like a real rider
+// (lean = atan(v² · curvature / g) for a steady riding speed), pitch / lift for wheelies come from extra(u)
+function bikePathAnim(o, d, steps, path, {speed = 7, maxLean = 38, extra = null} = {}) {
+  const at = u => path(clamp(u, 0, 1));
+  // measuring windows stay inside the path, so the first and last frames get the right direction too
+  const win = (u, h) => clamp(u - h, 0, 1 - 2 * h);
+  const heading = u => { const lo = win(u, .002), a = at(lo), b = at(lo + .004); return Math.atan2(b.x - a.x, b.z - a.z); };
+  let lastRy = null;
+  return sampleAnimCurve(o, d, steps, u => {
+    const p = at(u), lo = win(u, .012), h0 = heading(lo), h1 = heading(lo + .024);
+    const a = at(lo), b = at(lo + .024), len = Math.max(1e-4, Math.hypot(b.x - a.x, b.z - a.z));
+    const kappa = signed(deg(h1 - h0)) * Math.PI / 180 / len; // signed curvature, 1/m
+    let ry = deg(heading(u));
+    if (lastRy !== null) ry = lastRy + signed(ry - lastRy); // keep turning past 180° without a flip
+    lastRy = ry;
+    // the bike starts and finishes upright: the lean eases in over the first and out over the last 8 %
+    const r = clamp(Math.min(u, 1 - u) / .08, 0, 1), settle = r * r * (3 - 2 * r);
+    const lean = settle * clamp(-deg(Math.atan(speed * speed * kappa / 9.81)), -maxLean, maxLean);
+    return {x:rnd(p.x, 3), z:rnd(p.z, 3), y:0, ry:rnd(ry, 1), rz:rnd(lean, 1), rx:0, ...(extra ? extra(u) : {})};
+  });
+}
 const ANIM_PRESET_GROUPS = [
   {
     id:'__person_anim',
@@ -7359,6 +7380,38 @@ const ANIM_PRESET_GROUPS = [
     ]
   },
   {
+    id:'__bike_anim',
+    title:'Bike (Ride, Lean & Wheelie)',
+    items:[
+      {id:'bike_ride', name:'Bike Riding', model:'bike',
+        prompt:'The motorbike rides smoothly forward through the scene at a steady cruising speed, wheels spinning and the rider balanced and relaxed on the saddle.',
+        apply:(d, o) => bikePathAnim(o, d, 8, u => { const s = .12 * u + .88 * (u * u * (3 - 2 * u)); return {x:.06 * Math.sin(s * Math.PI * 2), z:-4.2 + 8.4 * s}; }, {maxLean:4})},
+      {id:'bike_corner', name:'Bike Corner Lean', model:'bike',
+        prompt:'The motorbike sweeps through a fast corner, the rider tipping the bike deep into the lean at the apex and standing it back up smoothly on the exit.',
+        apply:(d, o) => {
+          const P0 = [-3.6, -2.2], P1 = [-.4, -2.4], P2 = [2.6, -.6], P3 = [2.4, 3.2];
+          return bikePathAnim(o, d, 12, u => { const m = 1 - u; return {
+            x:m * m * m * P0[0] + 3 * m * m * u * P1[0] + 3 * m * u * u * P2[0] + u * u * u * P3[0],
+            z:m * m * m * P0[1] + 3 * m * m * u * P1[1] + 3 * m * u * u * P2[1] + u * u * u * P3[1]}; }, {speed:6.5, maxLean:40});
+        }},
+      {id:'bike_slalom', name:'Bike Slalom Weave', model:'bike',
+        prompt:'The motorbike weaves a rhythmic slalom, flicking from lean to lean left and right as it rides forward through the scene.',
+        apply:(d, o) => bikePathAnim(o, d, 16, u => { const e = Math.min(1, u / .14, (1 - u) / .14), env = e * e * (3 - 2 * e); return {x:1.15 * env * Math.sin((u - .14) / .72 * Math.PI * 3), z:-4 + 8 * u}; }, {speed:5.5, maxLean:32})},
+      {id:'bike_wheelie', name:'Bike Wheelie', model:'bike',
+        prompt:'The motorbike accelerates hard and lifts its front wheel into a controlled wheelie, holds it balanced on the rear wheel, then sets the front wheel back down smoothly.',
+        apply:(d, o) => bikePathAnim(o, d, 12, u => { const s = u * u * (3 - 2 * u); return {x:0, z:-4.2 + 8.4 * s}; }, {maxLean:0, extra:u => {
+          // nose up 0.18-0.32, hold with a small balance wobble, back down 0.72-0.88; the rear wheel stays on the ground
+          const up = clamp((u - .18) / .14, 0, 1), down = clamp((u - .72) / .16, 0, 1);
+          const k = up * up * (3 - 2 * up) * (1 - down * down * (3 - 2 * down));
+          const pitch = k * (24 + 2.5 * Math.sin(u * Math.PI * 9));
+          return {rx:rnd(-pitch, 1), y:rnd(.62 * Math.sin(rad(pitch)), 3)};
+        }})},
+      {id:'bike_circle', name:'Bike Circle 360', model:'bike',
+        prompt:'The motorbike rides one full leaning circle around the center of the scene, holding a steady lean the whole way round.',
+        apply:(d, o) => bikePathAnim(o, d, 16, u => { const a = u * Math.PI * 2 - Math.PI / 2; return {x:2.4 * Math.cos(a), z:2.4 * Math.sin(a) + 0}; }, {speed:5, maxLean:34})}
+    ]
+  },
+  {
     id:'__cat_anim',
     title:'Cat & Animals',
     items:[
@@ -7512,6 +7565,9 @@ function applyAnimPreset(id) {
     if (found.model === 'car') {
       if (S.dist < 8.2) AC.setDist(8.8);
       if (S.el < 20) AC.setEl(24);
+    } else if (found.model === 'bike') {
+      if (S.dist < 7.2) AC.setDist(7.8);
+      if (S.el < 18) AC.setEl(22);
     } else if (found.model === 'cat') {
       if (S.dist > 3.8 || S.dist < 2.2) AC.setDist(3.2);
       if (S.el > 20) AC.setEl(14);
@@ -8443,6 +8499,8 @@ document.querySelectorAll('[data-reset]').forEach(b => b.addEventListener('click
       return {rider:o.label, leftHandToGrip:gap[0], rightHandToGrip:gap[1]};
     });
   };
+  // go to a time on the timeline (seconds) and report every object there
+  VPT.seek = t => { stop(); setTime(t); apply(T); renderObjects(); renderVP(); return V().objects.map(o => ({m:o.model, x:o.x, y:o.y, z:o.z, ry:o.ry, rx:o.rx || 0, rz:o.rz || 0, pose:o.pose}));};
   VPT.clearSelection = () => { selectObj(null, false); hoverGizmoAxis = null; renderObjects(); buildTimeline(); renderVP(); };
   VPT.video3d = () => is3D() ? {
     camera:camWorld(T), aim:targetAt(T), dist:rnd(S.dist, 3), pan:camPan(), freeCam:freeCamMode,

@@ -428,7 +428,7 @@ const detailActive = () => S.focus.on && S.focus.detail;
 const GATED = document.documentElement.hasAttribute('data-gated');
 const LOCKED_PANELS = ['pLight', 'pCam'];
 let PRO = !GATED || (() => { try { return localStorage.getItem('vp-pro') === '1'; } catch (e) { return false; } })();
-// put every Advanced-only setting back to its Normal value (Note: S.focus.on is allowed in Normal mode when an image is dropped per Bug Fix 2)
+// put every Advanced-only setting back to its Normal value (Image Detection & Focus included)
 function enforce() {
   if (!PRO) {
     S.mode = 'normal'; S.lightOn = false;
@@ -436,6 +436,8 @@ function enforce() {
   } else if (S.mode !== 'adv') {
     S.lightOn = false;
   }
+  // Image Detection & Focus is part of Advanced mode: in Normal mode it always stays off (whatever turned it on)
+  if (S.mode !== 'adv' && S.focus && S.focus.on) S.focus.on = false;
 }
 // If the user has Advanced mode (PRO) and clicks an off/locked control while in Normal mode, automatically switch to Advanced mode
 function ensureAdvMode(what) {
@@ -3294,7 +3296,15 @@ $('appImage').onclick = () => {
   renderRefs();
   changed();
 };
-$('appVideo').onclick = () => { if (!ensureAdvMode('Video & 3D')) return; if (S.app === 'video') return; hooks.enterVideo ? hooks.enterVideo() : toast('Video & 3D could not load'); };
+// Video & 3D loads after the page is ready (index.html); anything that needs it waits for it here
+async function ensureVideoLoaded() {
+  if (hooks.enterVideo) return true;
+  toast('Loading Video & 3D…');
+  try { await window.VPLoadVideo?.(); } catch (e) {}
+  if (!hooks.enterVideo) { toast('Video & 3D could not load. Check the internet connection and try again.'); return false; }
+  return true;
+}
+$('appVideo').onclick = async () => { if (!ensureAdvMode('Video & 3D')) return; if (S.app === 'video') return; if (!(await ensureVideoLoaded())) return; if (S.app !== 'video') hooks.enterVideo(); };
 on('rot', 'input', v => setAz(+v));
 on('tilt', 'input', v => setEl(+v));
 on('shot', 'input', v => setDist(distForShot(NSH - +v)));
@@ -3421,6 +3431,8 @@ function handleFocusToggleClick(e) {
   if (S.focus.on) {
     S.focus.on = false;
   } else {
+    // Normal mode: ask for Advanced mode (switches to it when the person already has it)
+    if (!ensureAdvMode('Image Detection & Focus')) return;
     S.focus.on = true;
     S.focus.markerControlsUnlocked = true;
     if (S.focus.mode !== 'multi') S.focus.showMark = true;
@@ -3477,6 +3489,7 @@ $('focusOnWrap')?.addEventListener('click', e => {
 });
 // CHANGE 4 & Bug Fix 2: Focus Marker button (#focusMarkOn) unlocks marker controls and toggles the Focus Marker ON/OFF
 $('focusMarkOn')?.addEventListener('click', () => {
+  if (!S.focus.showMark && !ensureAdvMode('Image Detection & Focus')) return;
   S.focus.showMark = !S.focus.showMark;
   if (S.focus.showMark) {
     S.focus.on = true;
@@ -6993,6 +7006,15 @@ $('resetAll').addEventListener('click', () => {
 });
 
 /* ---------- AI Model Selector (VisionPilot AI · Claude · GPT · Gemini) & Extension Bridge ---------- */
+// desktop app: is the Vision Pilot extension in Chrome linked to the app right now (checked every 3 s)
+let deskExtLinked = false;
+if (window.visionPilotDesktop?.isDesktop && window.visionPilotDesktop.extensionLinkStatus) {
+  const checkLink = () => window.visionPilotDesktop.extensionLinkStatus().then(st => {
+    const v = !!(st && st.connected);
+    if (v !== deskExtLinked) { deskExtLinked = v; syncAIModelUI(); }
+  }).catch(() => {});
+  setInterval(checkLink, 3000); setTimeout(checkLink, 300);
+}
 function syncAIModelUI() {
   const activeId = ['visionpilot', 'claude', 'gpt', 'gemini'].includes(S.aiModel) ? S.aiModel : 'visionpilot';
   S.aiModel = activeId;
@@ -7011,11 +7033,13 @@ function syncAIModelUI() {
   document.querySelectorAll('#aiModelMenu .aimodel-opt').forEach(b => {
     b.setAttribute('aria-checked', String(b.dataset.aimodel === activeId));
   });
+  // desktop app: the label shows the real link to the extension in Chrome (jobs still run: the app opens Chrome itself)
+  const extShown = window.visionPilotDesktop?.isDesktop ? !!deskExtLinked : extConn;
   if ($('aiExtTopBtn')) {
-    $('aiExtTopBtn').classList.toggle('connected', extConn);
+    $('aiExtTopBtn').classList.toggle('connected', extShown);
   }
   if ($('aiExtTopLbl')) {
-    $('aiExtTopLbl').textContent = extConn ? 'Extension Connected' : 'Install Extension';
+    $('aiExtTopLbl').textContent = extShown ? 'Extension Connected' : 'Install Extension';
   }
   if ($('aiMenuExtStatus')) {
     $('aiMenuExtStatus').innerHTML = `<span class="ext-l1">Extension Bridge</span><span class="ext-l2">${extConn ? 'Connected' : 'Not Connected'}</span>`;
@@ -7082,12 +7106,12 @@ async function selectAIModel(modelId) {
 
   // External AI model selected (Claude, GPT, Gemini):
   // Ensure Advanced mode & Focus Box are visible
-  if (!PRO) setPro(true);
-  if (S.mode !== 'adv') {
+  // only people who already have Advanced mode switch into it (choosing a model never grants it)
+  if (PRO && S.mode !== 'adv') {
     S.mode = 'adv';
     document.body.classList.add('adv');
   }
-  if (!S.focus.on) {
+  if (S.mode === 'adv' && !S.focus.on) {
     S.focus.on = true;
   }
   // In Multiple Mode (Image Mode) or Video/3D Mode, focus marker is off by default; in Single Mode (Image Mode), focus marker is on
@@ -7319,6 +7343,7 @@ async function handleGlobalPageDroppedPayload({ files = [], isFolder = false, fo
     if (S.mode !== 'adv') {
       if (!ensureAdvMode('Video Upscale')) return;
     }
+    if (!(await ensureVideoLoaded())) return;
     if (S.app !== 'video') {
       hooks.enterVideo?.();
     }
