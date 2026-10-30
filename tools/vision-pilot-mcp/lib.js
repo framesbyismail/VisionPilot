@@ -143,7 +143,8 @@ export function consoleLogs({onlyErrors = false, limit = 50} = {}) {
   const l = onlyErrors ? logs.filter(x => x.type === 'error' || x.type === 'pageerror') : logs;
   return l.slice(-limit);
 }
-function page() { if (!st.page) throw new Error('Nothing is running. Call start_website or start_desktop first.'); return st.page; }
+// the page being tested (for scripts that need puppeteer directly)
+export function page() { if (!st.page) throw new Error('Nothing is running. Call start_website or start_desktop first.'); return st.page; }
 
 // the app reports readiness itself (window.VPTest.ready); no fixed timers
 export async function waitReady(timeout = 30000) {

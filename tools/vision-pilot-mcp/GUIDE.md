@@ -65,7 +65,7 @@ window, close it. Later runs with the same `profileDir` stay signed in. The agen
 
 ## Test scripts (`tests/`)
 
-Run from this folder, e.g. `node tests/lazytest.mjs`:
+Run from this folder, e.g. `node tests/lazytest.mjs`. Inside the GitHub repo this folder is `tools/vision-pilot-mcp` and finds the site and `desktop/` by itself:
 
 | Script | Checks |
 |---|---|
@@ -77,6 +77,9 @@ Run from this folder, e.g. `node tests/lazytest.mjs`:
 | `desk.mjs`, `deskext.mjs` | Desktop app opens; desktop app -> extension -> ChatGPT -> answer back. |
 | `gptrun.mjs [gpt|claude|gemini]` | One AI job through the extension in a test Chrome. |
 | `detbench.mjs` | Image detection speed and results. |
+| `extzip.mjs [url]` | The site's Install Extension zip is complete and Chrome loads it. |
+| `extlive.mjs [folder]` | An extension folder on the live site: popup, "Extension Connected", one ChatGPT job. |
+| `drawerdl.mjs` | Three-dot menu Downloads: desktop app (latest .exe), extension zip, MCP zip. |
 
 To test the built (minified) site like GitHub publishes it: in `../VisionPilot-GitHub` run
 `node scripts/build-site.mjs`, then `VP_SITE_DIR=../VisionPilot-GitHub/_site VP_PORT=8791 node tests/<script>.mjs`.

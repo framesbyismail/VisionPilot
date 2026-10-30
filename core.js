@@ -4988,7 +4988,7 @@ function toggleHistoryDrawer(forceState) {
   if (!drawer) return;
   const nextOpen = typeof forceState === 'boolean' ? forceState : !drawer.classList.contains('open');
   // the menu always opens with every section expanded
-  if (nextOpen) ['vpDrawerUserSec', 'vpDrawerSettingsSec', 'vpDrawerHistSec'].forEach(id => { const s = $(id); if (!s) return; s.classList.remove('min'); const head = s.querySelector('.vpd-sec-head'), body = s.querySelector('.vpd-sec-body, .vph-body'); if (body) body.hidden = false; if (head) { head.setAttribute('aria-expanded', 'true'); const ar = head.querySelector('.vpd-arrow'); if (ar) ar.textContent = '▾'; } });
+  if (nextOpen) ['vpDrawerUserSec', 'vpDrawerSettingsSec', 'vpDrawerDlSec', 'vpDrawerHistSec'].forEach(id => { const s = $(id); if (!s) return; s.classList.remove('min'); const head = s.querySelector('.vpd-sec-head'), body = s.querySelector('.vpd-sec-body, .vph-body'); if (body) body.hidden = false; if (head) { head.setAttribute('aria-expanded', 'true'); const ar = head.querySelector('.vpd-arrow'); if (ar) ar.textContent = '▾'; } });
   drawer.classList.toggle('open', nextOpen);
   drawer.setAttribute('aria-hidden', String(!nextOpen));
   if (backdrop) backdrop.hidden = !nextOpen;
@@ -5023,7 +5023,23 @@ function bindDrawerCollapsibleSection(secId, headId, bodyId, arrowSelector) {
 }
 bindDrawerCollapsibleSection('vpDrawerUserSec', 'vpDrawerUserHead', 'vpDrawerUserBody', '#vpDrawerUserArrow');
 bindDrawerCollapsibleSection('vpDrawerSettingsSec', 'vpDrawerSettingsHead', 'vpDrawerSettingsBody', '.vpd-sec-arr');
+bindDrawerCollapsibleSection('vpDrawerDlSec', 'vpDrawerDlHead', 'vpDrawerDlBody', '#vpDrawerDlArrow');
 bindDrawerCollapsibleSection('vpDrawerHistSec', 'vpDrawerHistHead', 'vpHistoryList', '#vpHistoryMinArrow');
+// Downloads: the newest Windows installer of the latest GitHub release (its file name has the version in it)
+$('vpDlDesktop')?.addEventListener('click', async e => {
+  e.preventDefault();
+  const page = e.currentTarget.href;
+  try {
+    const rel = await fetch('https://api.github.com/repos/framesbyismail/VisionPilot/releases/latest', {cache:'no-store'}).then(r => r.ok ? r.json() : null);
+    const exe = rel && (rel.assets || []).find(a => /\.exe$/i.test(a.name));
+    if (exe) { location.href = exe.browser_download_url; toast('Downloading ' + exe.name); return; }
+  } catch (err) {}
+  window.open(page, '_blank', 'noopener');
+});
+$('vpDlExtension')?.addEventListener('click', async () => {
+  try { await window.VPAIBridge.downloadExtensionZip(); toast('Extension zip downloaded: unzip it, then Load unpacked in chrome://extensions'); }
+  catch (err) { toast('Could not download the extension'); }
+});
 
 // Clicking anywhere outside the open 3-dot drawer automatically slides it back in
 document.addEventListener('pointerdown', (e) => {

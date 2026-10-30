@@ -1196,23 +1196,42 @@
     return new Blob([...localParts, ...centralParts, eocd], { type: 'application/zip' });
   }
 
+  // the zip the GitHub build makes from the extension folder (scripts/build-site.mjs): always complete
+  async function downloadPrebuiltExtensionZip() {
+    try {
+      const res = await fetch('visionpilot-ai-bridge-extension.zip', { cache: 'no-store' });
+      if (!res.ok) return false;
+      const blob = await res.blob();
+      if (blob.size < 1000) return false;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'visionpilot-ai-bridge-extension.zip';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 500);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // every file the extension's manifest names (scripts, popup, icons), plus the popup's own files
+  async function extensionFileNames() {
+    const names = new Set(['manifest.json', 'popup.html', 'popup.js', 'visionpilot-app-icon.svg', 'visionpilot-icon-dark.svg']);
+    try {
+      const m = await fetch('extension/manifest.json', { cache: 'no-store' }).then(r => r.json());
+      if (m.background && m.background.service_worker) names.add(m.background.service_worker);
+      (m.content_scripts || []).forEach(cs => (cs.js || []).concat(cs.css || []).forEach(f => names.add(f)));
+      if (m.action && m.action.default_popup) names.add(m.action.default_popup);
+      [m.icons, m.action && m.action.default_icon].forEach(ic => { if (ic && typeof ic === 'object') Object.values(ic).forEach(f => names.add(f)); });
+    } catch (e) {}
+    return [...names];
+  }
+
   async function downloadExtensionZip() {
-    const fileNames = [
-      'manifest.json',
-      'background.js',
-      'content.js',
-      'claude-content.js',
-      'chatgpt-content.js',
-      'gemini-content.js',
-      'popup.html',
-      'popup.js',
-      'visionpilot-app-icon.svg',
-      'visionpilot-icon-dark.svg',
-      'icon16.png',
-      'icon32.png',
-      'icon48.png',
-      'icon128.png'
-    ];
+    if (await downloadPrebuiltExtensionZip()) return;
+    const fileNames = await extensionFileNames();
     const files = [];
     for (const name of fileNames) {
       try {

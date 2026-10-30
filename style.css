@@ -2940,3 +2940,7 @@ html[data-desktop-app="true"] .vp-loading-screen{display:none!important}
 #focusSinglePane .labrow{display:flex;align-items:center;justify-content:space-between;gap:4px 6px;flex-wrap:wrap;min-width:0}
 #focusSinglePane .labrow label{white-space:nowrap}
 #focusSinglePane .labrow .tog.pin{white-space:nowrap;flex:none;padding:4px 9px;margin-left:auto}
+
+/* three-dot menu: Downloads (links look like the Settings items; the desktop app is hidden inside the desktop app) */
+a.vpd-dl-item{text-decoration:none}
+html[data-desktop-app="true"] #vpDlDesktop{display:none}
