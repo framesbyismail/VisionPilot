@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "VisionPilot AI Bridge (Claude · ChatGPT · Gemini)",
   "short_name": "VisionPilot AI",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "description": "Real web-interface bridge connecting VisionPilot to your logged-in Claude, ChatGPT, and Google Gemini accounts without API keys.",
   "icons": {
     "16": "icon16.png",
