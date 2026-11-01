@@ -35,7 +35,7 @@ async function checkAndUpdate({userData, bundled, onStatus = () => {}}) {
   try { remote = await fetchWithTimeout(REMOTE + 'version.json?t=' + Date.now(), 7000); }
   catch (e) { onStatus({text:'Offline — starting the installed version', pct:100}); return {updated:false, offline:true, dir:active, version:local.version, error:e.message}; }
   if (!remote || !remote.files) { onStatus({text:'Starting…', pct:100}); return {updated:false, dir:active, version:local.version}; }
-  if (remote.version === local.version) { onStatus({text:`Up to date (${String(remote.version).slice(0, 7)})`, pct:100}); return {updated:false, dir:active, version:local.version}; }
+  if (remote.version === local.version || (local.built && remote.built && Date.parse(local.built) >= Date.parse(remote.built))) { onStatus({text:`Up to date (${String(local.version).slice(0, 7)})`, pct:100}); return {updated:false, dir:active, version:local.version}; }
 
   // build the next copy: unchanged files are copied from the current one, changed ones downloaded and checked
   const next = path.join(userData, 'site-next');

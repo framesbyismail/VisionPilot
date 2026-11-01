@@ -49,22 +49,30 @@
     }
   };
 
-  // Image Generation Models (PART 3: Nano Banana 2 inside Gemini & ChatGPT Image 2 / GPT Image 1.5 inside ChatGPT)
+  // Image Generation Models (PART 3: Nano Banana 2.1 inside Google Flow & ChatGPT Image 2 / GPT Image 2 inside ChatGPT)
   const IMAGE_GEN_MODELS = {
     gemini: {
       id: 'gemini',
-      provider: 'gemini',
-      name: 'Nano Banana 2',
-      subName: 'Gemini 2.5 Flash Image (Latest)',
-      fullName: 'Nano Banana 2 (Gemini)',
+      provider: 'flow',
+      name: 'Nano Banana 2.1',
+      subName: 'Nano Banana 2.1 (Latest)',
+      fullName: 'Nano Banana 2.1 (Google Flow)',
+      color: '#4285f4'
+    },
+    flow: {
+      id: 'flow',
+      provider: 'flow',
+      name: 'Nano Banana 2.1',
+      subName: 'Nano Banana 2.1 (Latest)',
+      fullName: 'Nano Banana 2.1 (Google Flow)',
       color: '#4285f4'
     },
     gpt: {
       id: 'gpt',
       provider: 'gpt',
       name: 'ChatGPT Image 2',
-      subName: 'GPT Image 1.5 (Latest)',
-      fullName: 'ChatGPT Image 2 · GPT Image 1.5 (ChatGPT)',
+      subName: 'GPT Image 2 (Latest)',
+      fullName: 'ChatGPT Image 2 · GPT Image 2 (ChatGPT)',
       color: '#10a37f'
     }
   };
@@ -921,23 +929,17 @@
     };
   }
 
-  // Compute the exact aspect ratio of the main reference image (e.g. "16:9", "4:3", "3:2", "4:5", "1:1", "9:16")
+  // Compute the closest Google Flow aspect ratio of the main reference image ("16:9", "4:3", "1:1", "3:4", "9:16")
   function getImageAspectRatioInfo(img) {
-    const w = (img && (img.naturalWidth || img.width)) || 1024;
-    const h = (img && (img.naturalHeight || img.height)) || 1024;
+    const w = (img && (img.naturalWidth || img.width)) || 1920;
+    const h = (img && (img.naturalHeight || img.height)) || 1080;
     const r = w / Math.max(1, h);
     const stdRatios = [
-      ['1:1', 1 / 1],
-      ['4:5', 4 / 5],
-      ['5:4', 5 / 4],
-      ['3:4', 3 / 4],
-      ['4:3', 4 / 3],
-      ['2:3', 2 / 3],
-      ['3:2', 3 / 2],
       ['16:9', 16 / 9],
-      ['9:16', 9 / 16],
-      ['21:9', 21 / 9],
-      ['6:5', 6 / 5]
+      ['4:3', 4 / 3],
+      ['1:1', 1 / 1],
+      ['3:4', 3 / 4],
+      ['9:16', 9 / 16]
     ];
     let best = stdRatios[0];
     let minDiff = Infinity;
@@ -951,7 +953,7 @@
     const gcd = (a, b) => (b === 0 ? a : gcd(b, a % b));
     const g = gcd(w, h) || 1;
     const exactRatio = `${Math.round(w / g)}:${Math.round(h / g)}`;
-    const ratioLabel = minDiff < 0.04 ? best[0] : exactRatio;
+    const ratioLabel = best[0];
     return {
       width: w,
       height: h,
@@ -961,8 +963,8 @@
     };
   }
 
-  // PART 4: Generate Image inside Gemini (Nano Banana 2) or ChatGPT (ChatGPT Image 2 / GPT Image 1.5) in a fresh new chat
-  async function runImageGenerationStep(ref, promptObj, imgModelId) {
+  // PART 4: Generate Image inside Google Flow (Nano Banana 2.1, reusing 'Visionpilot' project) or ChatGPT (ChatGPT Image 2 / GPT Image 2)
+  async function runImageGenerationStep(ref, promptObj, imgModelId, opts = {}) {
     const imgModel = IMAGE_GEN_MODELS[imgModelId] || IMAGE_GEN_MODELS.gemini;
     if (!isExtensionConnected()) {
       throw new Error(
@@ -975,6 +977,11 @@
 
     const mainImageDataUrl = renderOriginalImageDataUrl(ref.img);
     const aspectInfo = getImageAspectRatioInfo(ref.img);
+    const flowRatios = ['16:9', '4:3', '1:1', '3:4', '9:16'];
+    const uiAspect = window.AC?.S?.aspect;
+    const targetAspect = flowRatios.includes(uiAspect) ? uiAspect : aspectInfo.ratio;
+    const imageCount = Math.max(1, Math.min(4, Number(opts.imageCount || window.AC?.S?.genImgCount) || 1));
+
     const jsonPromptStr =
       typeof promptObj === 'string' && promptObj.trim()
         ? promptObj.trim()
@@ -982,10 +989,11 @@
 
     const instruction =
       `Generate a new photorealistic image using the attached main source image and the following VisionPilot JSON prompt. ` +
-      `Keep the exact same aspect ratio as the attached main image (${aspectInfo.ratio}, ${aspectInfo.orientation}, ${aspectInfo.width}x${aspectInfo.height}). ` +
+      `Use aspect ratio ${targetAspect}. ` +
       `Follow every camera angle, subject, focus, lighting, and background setting in this JSON prompt:\n\n` +
       `${jsonPromptStr}`;
 
+    const streamedImages = [];
     const res = await sendExtensionRequest(
       {
         action: 'generate_image',
@@ -994,8 +1002,11 @@
         model: imgModel.provider,
         imageModelId: imgModel.id,
         imageModelName: imgModel.fullName,
-        freshChat: true,
-        aspectRatio: aspectInfo.ratio,
+        flowProjectName: 'Visionpilot',
+        flowModelName: 'Nano Banana 2.1',
+        freshChat: imgModel.provider !== 'flow',
+        aspectRatio: targetAspect,
+        imageCount,
         width: aspectInfo.width,
         height: aspectInfo.height,
         images: [
@@ -1007,7 +1018,23 @@
         ],
         instruction
       },
-      240000
+      240000,
+      (stage, detail) => {
+        if (stage === 'flow_image_ready' && detail?.imageDataUrl) {
+          const idx = Number(detail.index) || 0;
+          streamedImages[idx] = detail.imageDataUrl;
+          if (typeof opts.onImageReady === 'function') {
+            opts.onImageReady({
+              index: idx,
+              imageDataUrl: detail.imageDataUrl,
+              mainImageDataUrl,
+              promptText: jsonPromptStr,
+              aspectRatio: targetAspect
+            });
+          }
+        }
+        if (typeof opts.onStage === 'function') opts.onStage(stage, detail);
+      }
     );
 
     if (res?.cancelled || ref.cancelled) {
@@ -1015,7 +1042,13 @@
       err.cancelled = true;
       throw err;
     }
-    if (!res || !res.ok || !res.imageDataUrl) {
+    const finalImages = Array.isArray(res?.images) && res.images.length
+      ? res.images.filter(Boolean)
+      : streamedImages.filter(Boolean).length
+      ? streamedImages.filter(Boolean)
+      : (res?.imageDataUrl ? [res.imageDataUrl] : []);
+
+    if (!res || !res.ok || !finalImages.length) {
       throw new Error(
         res?.error || `${imgModel.fullName} failed to generate or return an image.`
       );
@@ -1023,15 +1056,55 @@
 
     return {
       ok: true,
-      imageDataUrl: res.imageDataUrl,
+      imageDataUrl: finalImages[0],
+      images: finalImages,
       mainImageDataUrl,
       promptText: jsonPromptStr,
       promptJson: jsonPromptStr,
       modelId: imgModel.id,
       modelName: imgModel.fullName,
-      aspectRatio: aspectInfo.ratio,
+      aspectRatio: targetAspect,
       createdAt: Date.now()
     };
+  }
+
+  // Request Google Flow's built-in 2K (for 2x) or 4K (for 4x) download/upscale on a generated Nano Banana 2.1 image;
+  // returns { ok: false, fallbackToLocal: true } when 4K/2K is unavailable on the user's Google Flow account.
+  async function runFlowUpscaleStep(scaleFactor = 2, imageIndex = 0, srcDataUrl = '') {
+    if (!isExtensionConnected()) {
+      return { ok: false, fallbackToLocal: true, error: 'Extension not connected' };
+    }
+    try {
+      const res = await sendExtensionRequest(
+        {
+          action: 'upscale_flow_image',
+          model: 'flow',
+          scaleFactor: scaleFactor === 4 ? 4 : 2,
+          scaleLabel: scaleFactor === 4 ? '4K' : '2K',
+          imageIndex: Number(imageIndex) || 0,
+          srcDataUrl: srcDataUrl || ''
+        },
+        90000
+      );
+      if (res && res.ok && res.imageDataUrl) {
+        return {
+          ok: true,
+          imageDataUrl: res.imageDataUrl,
+          scaleLabel: scaleFactor === 4 ? '4K' : '2K'
+        };
+      }
+      return {
+        ok: false,
+        fallbackToLocal: true,
+        error: res?.error || 'Google Flow 2K/4K not available on this account'
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        fallbackToLocal: true,
+        error: err?.message || String(err)
+      };
+    }
   }
 
   const REMOVE_BG_CHATGPT_PROMPT =
@@ -1283,6 +1356,7 @@
     runSingleFocusStep,
     runMultiFocusStep,
     runImageGenerationStep,
+    runFlowUpscaleStep,
     runRemoveBackgroundStep,
     recoverRemovedBackground,
     renderOriginalImageDataUrl,

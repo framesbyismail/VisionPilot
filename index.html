@@ -470,7 +470,7 @@
           <dt>Shot scale</dt><dd id="roShot">–</dd>
           <dt>Sharp zone</dt><dd id="roDof">–</dd>
         </dl>
-        <div class="adv" style="display:flex;flex-direction:column;gap:10px">
+        <div class="adv vonly" style="display:flex;flex-direction:column;gap:10px">
           <div class="sep"></div>
           <div class="row">
             <div class="field" style="flex:.6"><div class="labrow"><label for="focal"><button class="kb vonly" data-kp="cam.focal" aria-label="Keyframe focal length"></button>Focal (mm)</label></div><input type="number" id="focal" min="1" max="2000" step="1"></div>
@@ -614,7 +614,7 @@
       <div class="cbody">
         <div class="row">
           <div class="field"><label for="aspect">Aspect ratio</label>
-            <select id="aspect"><option>1:1</option><option>4:5</option><option>3:4</option><option>2:3</option><option>3:2</option><option>16:9</option><option>9:16</option><option>6:5</option><option>21:9</option><option value="custom" class="c">Custom…</option></select>
+            <select id="aspect"><option value="16:9">16:9</option><option value="4:3">4:3</option><option value="1:1">1:1</option><option value="3:4">3:4</option><option value="9:16">9:16</option></select>
             <input type="text" class="cust" id="aspectCustom" placeholder="e.g. 7:5 or 1080×1350" hidden></div>
           <div class="field"><label for="light">Lighting</label>
             <select id="light">
@@ -661,17 +661,19 @@
         <div class="card-head"><span class="lbl" id="promptKind">Image prompt</span><span id="status" class="status">Not generated yet</span></div>
         <div class="gen-img-model-bar" id="genImgModelBar" hidden role="region" aria-label="Choose Image Model">
           <div class="gen-img-model-head">
-            <span class="lbl">Choose Image Generation Model</span>
+            <span class="lbl">Choose Model</span><div class="gen-img-count-wrap" id="genImgCountWrap" role="group" aria-label="Number of images to generate"><span class="gen-img-count-lbl">Images</span><button type="button" class="gen-img-count-btn active" data-img-count="1" aria-pressed="true">1</button><button type="button" class="gen-img-count-btn" data-img-count="2" aria-pressed="false">2</button><button type="button" class="gen-img-count-btn" data-img-count="3" aria-pressed="false">3</button><button type="button" class="gen-img-count-btn" data-img-count="4" aria-pressed="false">4</button></div>
             <button type="button" class="gen-img-model-close" id="genImgModelClose" aria-label="Close model options"><svg class="vp-x-ico" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 2.5 9.5 9.5M9.5 2.5 2.5 9.5" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg></button>
           </div>
           <div class="gen-img-model-opts">
             <button type="button" class="gen-img-model-opt" data-img-model="gemini">
-              <span class="gim-top"><i class="m-dot gemini"></i><b>Nano Banana 2</b><span class="gim-tag">Gemini</span></span>
-              <small>Gemini 2.5 Flash Image (Latest) · Generates inside Gemini</small>
+              <span class="gim-top"><i class="m-dot gemini"></i><b>Nano Banana 2.1</b></span>
+              <span class="gim-tag">Google Flow</span>
+              <small>Nano Banana 2.1 (Latest) · Generates inside Google Flow</small>
             </button>
             <button type="button" class="gen-img-model-opt" data-img-model="gpt">
-              <span class="gim-top"><i class="m-dot gpt"></i><b>ChatGPT Image 2</b><span class="gim-tag">ChatGPT</span></span>
-              <small>GPT Image 1.5 (Latest) · Generates inside ChatGPT</small>
+              <span class="gim-top"><i class="m-dot gpt"></i><b>ChatGPT Image 2</b></span>
+              <span class="gim-tag">ChatGPT</span>
+              <small>GPT Image 2 (Latest) · Generates inside ChatGPT</small>
             </button>
           </div>
         </div>
@@ -1037,6 +1039,7 @@
       <button type="button" class="genimg-close-x" id="genImgResultCloseBtn" aria-label="Close result window" title="Close"><svg class="vp-x-ico" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 2.5 9.5 9.5M9.5 2.5 2.5 9.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
     </div>
     <div class="cbody genimg-result-body">
+      <div class="genimg-multi-grid" id="genImgMultiGrid" hidden></div>
       <div class="genimg-preview-box" id="genImgPreviewBox">
         <!-- Standard single image/video view (Generated Image or 3D Export) -->
         <img id="genImgResultPic" alt="Result image">
@@ -1147,8 +1150,8 @@
 <div class="vp-drawer-backdrop" id="vpHistoryDrawerBackdrop" hidden></div>
 <aside class="vp-history-drawer" id="vpHistoryDrawer" aria-label="Account, Settings &amp; History Library" aria-hidden="true">
   <!-- 1. User / Account Section (Top) -->
-  <div class="vpd-section vpd-user-sec" id="vpDrawerUserSec">
-    <button type="button" class="vpd-sec-head vpd-user-head" id="vpDrawerUserHead" aria-expanded="true" title="Expand or minimize user account info">
+  <div class="vpd-section vpd-user-sec min" id="vpDrawerUserSec">
+    <button type="button" class="vpd-sec-head vpd-user-head" id="vpDrawerUserHead" aria-expanded="false" title="Expand or minimize user account info">
       <div class="vpd-user-head-left">
         <span class="vpd-user-avatar" id="vpDrawerUserAvatar">
           <img id="vpDrawerUserPic" alt="" referrerpolicy="no-referrer" hidden>
@@ -1157,9 +1160,9 @@
         <span class="vpd-user-name" id="vpDrawerUserName">Guest</span>
         <span class="vpd-mode-badge" id="vpDrawerUserMode">Normal</span>
       </div>
-      <span class="vpd-arrow" id="vpDrawerUserArrow" aria-hidden="true">▾</span>
+      <span class="vpd-arrow" id="vpDrawerUserArrow" aria-hidden="true">▸</span>
     </button>
-    <div class="vpd-sec-body vpd-user-body" id="vpDrawerUserBody">
+    <div class="vpd-sec-body vpd-user-body" id="vpDrawerUserBody" hidden>
       <div class="authm vpd-authm" id="authM">
         <button class="navbtn" id="authBtn" aria-haspopup="true" aria-expanded="false" hidden><span>Sign in</span></button>
         <div class="menu vpd-inline-menu" id="authMenu" role="menu"></div>
@@ -1168,13 +1171,14 @@
   </div>
 
   <!-- 2. Settings Section (Above History / Library) -->
-  <div class="vpd-section vpd-settings-sec" id="vpDrawerSettingsSec">
-    <button type="button" class="vpd-sec-head vpd-settings-head" id="vpDrawerSettingsHead" aria-expanded="true" title="Expand or minimize reset settings">
+  <div class="vpd-section vpd-settings-sec min" id="vpDrawerSettingsSec">
+    <button type="button" class="vpd-sec-head vpd-settings-head" id="vpDrawerSettingsHead" aria-expanded="false" title="Expand or minimize reset settings">
       <span class="vpd-sec-title">Settings</span>
-      <span class="vpd-arrow" id="vpDrawerSettingsArrow" aria-hidden="true">▾</span>
+      <span class="vpd-arrow" id="vpDrawerSettingsArrow" aria-hidden="true">▸</span>
     </button>
-    <div class="vpd-sec-body vpd-settings-body" id="vpDrawerSettingsBody">
+    <div class="vpd-sec-body vpd-settings-body" id="vpDrawerSettingsBody" hidden>
       <div class="vpd-reset-list" role="menu">
+        <div class="vpd-theme-item" id="vpThemeRow" role="group" aria-label="Theme color"><div class="vpd-theme-meta"><b>Theme</b><small>Choose UI accent color</small></div><div class="vpd-theme-swatches" id="vpThemeSwatches"><button type="button" class="vpd-theme-swatch active" data-theme-color="#e85d2b" style="--sw:#e85d2b" aria-label="Orange theme (Default)" title="Orange"></button><button type="button" class="vpd-theme-swatch" data-theme-color="#3b82f6" style="--sw:#3b82f6" aria-label="Blue theme" title="Blue"></button><button type="button" class="vpd-theme-swatch" data-theme-color="#10b981" style="--sw:#10b981" aria-label="Green theme" title="Green"></button><button type="button" class="vpd-theme-swatch" data-theme-color="#8b5cf6" style="--sw:#8b5cf6" aria-label="Purple theme" title="Purple"></button><button type="button" class="vpd-theme-swatch is-rainbow" id="vpThemeCustomBtn" data-theme-custom="1" aria-label="Custom color" data-tooltip="Custom"><span class="vpd-custom-tip">Custom</span><input type="color" id="vpThemeCustomInput" value="#e85d2b" tabindex="-1" aria-label="Pick custom theme color"></button></div></div>
         <button type="button" id="resetLayout" class="vpd-reset-item" role="menuitem"><b>Reset layout</b><small>Put every panel back in its default place</small></button>
         <button type="button" id="resetAll" class="vpd-reset-item danger" role="menuitem"><b>Full reset</b><small>Clear images, objects, keyframes and every setting</small></button>
       </div>
@@ -1182,12 +1186,12 @@
   </div>
 
   <!-- Downloads: the desktop app and the MCP come from the latest GitHub release, the extension from this site -->
-  <div class="vpd-section vpd-dl-sec" id="vpDrawerDlSec">
-    <button type="button" class="vpd-sec-head vpd-dl-head" id="vpDrawerDlHead" aria-expanded="true" title="Expand or minimize downloads">
+  <div class="vpd-section vpd-dl-sec min" id="vpDrawerDlSec">
+    <button type="button" class="vpd-sec-head vpd-dl-head" id="vpDrawerDlHead" aria-expanded="false" title="Expand or minimize downloads">
       <span class="vpd-sec-title">Downloads</span>
-      <span class="vpd-arrow" id="vpDrawerDlArrow" aria-hidden="true">▾</span>
+      <span class="vpd-arrow" id="vpDrawerDlArrow" aria-hidden="true">▸</span>
     </button>
-    <div class="vpd-sec-body vpd-dl-body" id="vpDrawerDlBody">
+    <div class="vpd-sec-body vpd-dl-body" id="vpDrawerDlBody" hidden>
       <div class="vpd-reset-list" role="menu">
         <a id="vpDlDesktop" class="vpd-reset-item vpd-dl-item" role="menuitem" href="https://github.com/framesbyismail/VisionPilot/releases/latest" target="_blank" rel="noopener"><b>Desktop app (Windows)</b><small>Works offline and updates itself from GitHub</small></a>
         <button type="button" id="vpDlExtension" class="vpd-reset-item vpd-dl-item" role="menuitem"><b>Chrome extension</b><small>AI Bridge for ChatGPT, Claude and Gemini (zip)</small></button>

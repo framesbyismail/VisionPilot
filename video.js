@@ -330,10 +330,12 @@ function positionPersonOnBike(person, bike, slot, blend = 1) {
   const L = (bike.w || 2.0) * (bike.sx ?? 1);
   // rider on the saddle just behind the tank, passenger on the raised pillion behind them (matches the seat shape in the bike model)
   const seatOffsetZ = slot === 0 ? -L * .105 : -L * .262;
-  const ang = rad(bike.ry || 0);
-  const tx = (bike.x || 0) + Math.sin(ang) * seatOffsetZ;
-  const tz = (bike.z || 0) + Math.cos(ang) * seatOffsetZ;
-  const ty = Math.max(0, bike.y || 0);
+  // the seat is a point on the bike's own forward axis, so carry it through the bike's heading AND pitch (wheelie / ramp):
+  // the rider then stays on the saddle instead of floating above it when the nose lifts
+  const ang = rad(bike.ry || 0), pitch = rad(bike.rx || 0);
+  const tx = (bike.x || 0) + Math.sin(ang) * Math.cos(pitch) * seatOffsetZ;
+  const tz = (bike.z || 0) + Math.cos(ang) * Math.cos(pitch) * seatOffsetZ;
+  const ty = Math.max(0, (bike.y || 0) - Math.sin(pitch) * seatOffsetZ);
   person.x = rnd((person.x || 0) + (tx - (person.x || 0)) * blend, 3);
   person.z = rnd((person.z || 0) + (tz - (person.z || 0)) * blend, 3);
   person.y = rnd((person.y || 0) + (ty - (person.y || 0)) * blend, 3);
@@ -2846,12 +2848,20 @@ function buildSingleModel(o) {
       const wheels = [], frontSteer = [];
 
       // 7. Front Steerable Assembly: Inverted (USD) Gold Forks, Triple Clamps, Digital Dash, Handlebars, Levers, Mirrors & Front Fender
+      // The bars turn about the raked fork axis (like a real motorbike), not about a vertical post:
+      // steerHead (tilted by the rake) -> steerYaw (the steering angle) -> steerGrp (tilt undone, so its frame is the plain front-axle frame)
+      const forkRake = -.28;
+      const steerHead = new THREE.Group();
+      steerHead.position.set(0, wheelR, wb);
+      steerHead.rotation.x = forkRake;
+      g.add(steerHead);
+      const steerYaw = new THREE.Group();
+      steerHead.add(steerYaw);
       const steerGrp = new THREE.Group();
-      steerGrp.position.set(0, wheelR, wb);
-      g.add(steerGrp);
+      steerGrp.rotation.x = -forkRake;
+      steerYaw.add(steerGrp);
       frontSteer.push(steerGrp);
 
-      const forkRake = -.28;
       [-1, 1].forEach(sx => {
         const forkSub = new THREE.Group();
         forkSub.position.set(sx * W * .135, 0, 0);
@@ -2951,7 +2961,7 @@ function buildSingleModel(o) {
       g.add(rearWheelHolder);
       buildBikeWheel(rearWheelHolder, true);
 
-      g.userData.rig = {type:'bike', h, L, W, bodyGrp, wheels, frontSteer, wheelR};
+      g.userData.rig = {type:'bike', h, L, W, wb, bodyGrp, wheels, frontSteer, steerYaw, wheelR};
       break;
     }
     case 'stairs': {
@@ -3670,8 +3680,10 @@ function updateRigPoseAndMotion(o, g, t) {
     }
   } else if (rig.type === 'cat' || rig.type === 'animal') {
     animateQuadruped(rig, o, st, {isRunning, isMoving, isActivelyMoving, posePhi, locoBlend, isPrep, isAirborne, airBlend, crouchPrep, t, vy});
-  } else if (rig.type === 'car' || rig.type === 'bike') {
+  } else if (rig.type === 'car') {
     animateCar(rig, o, st, {vx, vz, vy, vRy, timelineSpeed, isAirborne, dt, isReverse:Boolean(pd?.rev || o._reverseDrag)});
+  } else if (rig.type === 'bike') {
+    animateBike(rig, o, st, {vx, vz, vRy, timelineSpeed, isAirborne, dt, isReverse:Boolean(pd?.rev || o._reverseDrag)});
   }
 }
 
@@ -3853,6 +3865,32 @@ function animateCar(rig, o, st, c) {
   frontSteer.forEach(fs => { fs.rotation.y = st.steer; });
   if (bodyGrp) { bodyGrp.rotation.set(st.pitch, 0, st.roll); bodyGrp.position.y = st.sus; }
 }
+// Motorbike rig: wheels roll with the distance travelled; the bars turn a little about the raked fork axis
+// (steer = atan(wheelbase · curvature), reduced by the lean like a real bike at speed). The whole bike leans
+// through its rz keys (see bikePathAnim), so the body never rolls or pitches apart from the frame and wheels.
+function animateBike(rig, o, st, c) {
+  const {bodyGrp, wheels, steerYaw} = rig;
+  wheels.forEach(w => { w.rotation.x = st.wheelSpin; });
+  const speed = Math.max(c.timelineSpeed || 0, Math.hypot(c.vx || 0, c.vz || 0));
+  let target = 0;
+  if (speed > .25) {
+    const kappa = rad(c.vRy || 0) / speed; // 1/m, + = turning left
+    const wbFull = 2 * (rig.wb || rig.L * .345);
+    target = Math.atan(wbFull * kappa) * Math.cos(rad(o.rz || 0)) * .3;
+    if (c.isReverse) target = -target;
+  }
+  // front wheel in the air (wheelie / jump): the bars stay almost straight
+  if ((o.rx || 0) < -4 || c.isAirborne) target *= .25;
+  target = clamp(target, -.2, .2);
+  // the timeline is already smooth, so follow it exactly (frame-accurate scrubbing / export); drags are eased
+  if ((c.timelineSpeed || 0) > .05) st.steer = target;
+  else {
+    const alpha = 1 - Math.exp(-clamp(c.dt || .016, .004, .08) * 14);
+    st.steer = (st.steer ?? target) + (target - (st.steer ?? target)) * alpha;
+  }
+  if (steerYaw) steerYaw.rotation.y = st.steer;
+  if (bodyGrp) { bodyGrp.rotation.set(0, 0, 0); bodyGrp.position.y = 0; }
+}
 // exact lowest world-space vertex of an object (Box3 on rotated parts over-estimates, which made spinning wheels / swinging limbs bounce the model)
 function preciseMinY(root) {
   let minY = Infinity;
@@ -3908,7 +3946,10 @@ function syncScene(showSelUI = true) {
     // Strict ground-plane collision & anti-floating clamp (exact lowest vertex, so spinning wheels / swinging limbs never bounce the object)
     const carFlatOnGround = isVehicleModel(o.model) && (o.y || 0) <= .001 && !JUMP_POSES.has(o.pose) && Math.abs(o.rx || 0) < .05 && Math.abs(o.rz || 0) < .05;
     const charMovingOnGround = isRiggedChar(o.model) && e.g.userData.rig?.st?.isMoving && (o.y || 0) <= .001 && !JUMP_POSES.has(o.pose);
-    if (!carFlatOnGround && !charMovingOnGround && o.model !== 'custom' && o.model !== 'group' && o.collideG !== false) {
+    // (a rider sitting on a bike is carried by the bike, which is already kept on the ground: clamping the rider too would
+    // lift them off the saddle whenever a knee dips toward the road in a deep lean)
+    const ridingBike = Boolean(o.seatedBikeId) && (o.pose === 'riding_bike' || o.pose === 'riding_bike_back');
+    if (!carFlatOnGround && !charMovingOnGround && !ridingBike && o.model !== 'custom' && o.model !== 'group' && o.collideG !== false) {
       e.g.updateMatrixWorld(true);
       const minY = preciseMinY(e.g);
       if (isFinite(minY)) {
@@ -7112,27 +7153,107 @@ function parabolicArcY(u, u0, u1, hPeak, u2 = 0, hBounce = 0) {
   return 0;
 }
 
-// Bike along a path: heading follows the path, the bike leans into each turn like a real rider
-// (lean = atan(v² · curvature / g) for a steady riding speed), pitch / lift for wheelies come from extra(u)
-function bikePathAnim(o, d, steps, path, {speed = 7, maxLean = 38, extra = null} = {}) {
-  const at = u => path(clamp(u, 0, 1));
-  // measuring windows stay inside the path, so the first and last frames get the right direction too
-  const win = (u, h) => clamp(u - h, 0, 1 - 2 * h);
-  const heading = u => { const lo = win(u, .002), a = at(lo), b = at(lo + .004); return Math.atan2(b.x - a.x, b.z - a.z); };
-  let lastRy = null;
+// ---------- motorbike tracks & riding physics for the Bike animation presets ----------
+// A track is a ground path measured in metres along its length: {len, at(s) -> {x, z}}.
+function bikeTrackFromPoints(pts) {
+  const S = [0];
+  for (let i = 1; i < pts.length; i++) S.push(S[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z));
+  const len = S[S.length - 1] || 1e-6;
+  const at = s => {
+    s = clamp(s, 0, len);
+    let lo = 0, hi = S.length - 1;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (S[mid] <= s) lo = mid; else hi = mid; }
+    const f = (s - S[lo]) / Math.max(1e-9, S[hi] - S[lo]);
+    return {x:pts[lo].x + (pts[hi].x - pts[lo].x) * f, z:pts[lo].z + (pts[hi].z - pts[lo].z) * f};
+  };
+  return {len, at};
+}
+// track from straights and arcs. heading in degrees (0 = +Z, 90 = +X, like ry); arc turn > 0 = left, < 0 = right
+function bikeTrackFromSegments(x0, z0, heading0, segs) {
+  let x = x0, z = z0, h = rad(heading0);
+  const pts = [{x, z}], step = .02;
+  segs.forEach(sg => {
+    const len = sg.line !== undefined ? sg.line : Math.abs(rad(sg.turn)) * sg.r;
+    const n = Math.max(1, Math.ceil(len / step)), ds = len / n;
+    const dh = sg.line !== undefined ? 0 : rad(sg.turn) / n;
+    for (let i = 0; i < n; i++) {
+      h += dh / 2; x += Math.sin(h) * ds; z += Math.cos(h) * ds; h += dh / 2;
+      pts.push({x, z});
+    }
+  });
+  return bikeTrackFromPoints(pts);
+}
+function bikeTrackFromFn(fn, n = 600) {
+  return bikeTrackFromPoints(Array.from({length:n + 1}, (_, i) => fn(i / n)));
+}
+// Bike riding a track: position follows a speed profile along the track, heading follows the track,
+// and the bike leans into every turn like a real rider: lean = atan(v² · curvature / g).
+// The lean is filtered forward + backward (no lag), so it builds up and releases smoothly instead of snapping.
+// profile(sNorm) = relative speed at that point of the track (1 = cruising); extra(u, state) adds pitch / lift (wheelie).
+function bikePathAnim(o, d, steps, track, {speed = 6, maxLean = 38, profile = null, extra = null, smoothS = .2} = {}) {
+  const prof = profile || (() => 1);
+  // time -> distance from the speed profile (dt = ds / v)
+  const M = 600, tCum = [0];
+  for (let i = 1; i <= M; i++) tCum.push(tCum[i - 1] + 1 / Math.max(.05, prof((i - .5) / M)));
+  const sOfU = u => {
+    const target = clamp(u, 0, 1) * tCum[M];
+    let lo = 0, hi = M;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (tCum[mid] <= target) lo = mid; else hi = mid; }
+    const f = (target - tCum[lo]) / Math.max(1e-9, tCum[hi] - tCum[lo]);
+    return clamp((lo + f) / M, 0, 1) * track.len;
+  };
+  const N = 480, dtS = d / N, ds = .06;
+  const X = [], Z = [], S = [], H = [], LEAN = [];
+  const headingAt = s => {
+    const a = track.at(clamp(s - ds, 0, track.len - 2 * ds)), b = track.at(clamp(s - ds, 0, track.len - 2 * ds) + 2 * ds);
+    return Math.atan2(b.x - a.x, b.z - a.z);
+  };
+  for (let i = 0; i <= N; i++) {
+    const s = sOfU(i / N), p = track.at(s);
+    S.push(s); X.push(p.x); Z.push(p.z);
+    let h = headingAt(s);
+    if (i) h = H[i - 1] + Math.atan2(Math.sin(h - H[i - 1]), Math.cos(h - H[i - 1])); // unwrap: turn past 180° without a flip
+    H.push(h);
+  }
+  const vAvg = track.len / d;
+  for (let i = 0; i <= N; i++) {
+    const s = S[i];
+    const h0 = headingAt(s - .25), h1 = headingAt(s + .25);
+    const span = Math.max(1e-3, Math.min(track.len, s + .25) - Math.max(0, s - .25));
+    const kappa = Math.atan2(Math.sin(h1 - h0), Math.cos(h1 - h0)) / span; // signed curvature (1/m), + = left
+    const i0 = Math.max(0, i - 1), i1 = Math.min(N, i + 1);
+    const v = (S[i1] - S[i0]) / Math.max(1e-6, (i1 - i0) * dtS);
+    const vEff = speed * v / Math.max(1e-3, vAvg); // cinematic riding speed that still slows / speeds up with the profile
+    LEAN.push(clamp(-deg(Math.atan(vEff * vEff * kappa / 9.81)), -maxLean, maxLean));
+  }
+  // zero-phase smoothing (forward + backward) of the lean
+  const a = 1 - Math.exp(-dtS / Math.max(.02, smoothS));
+  for (let pass = 0; pass < 2; pass++) {
+    for (let i = 1; i <= N; i++) LEAN[i] += (LEAN[i - 1] - LEAN[i]) * (1 - a);
+    for (let i = N - 1; i >= 0; i--) LEAN[i] += (LEAN[i + 1] - LEAN[i]) * (1 - a);
+  }
+  // the bike starts and finishes upright
+  for (let i = 0; i <= N; i++) { const r = clamp(Math.min(i, N - i) / (N * .05), 0, 1); LEAN[i] *= r * r * (3 - 2 * r); }
+  // a leaning tyre rolls onto its rounded shoulder: lift the bike by exactly how far the (slightly oval) rear tyre
+  // section would dip below the ground at that lean, so it never sinks in and the ground clamp never has to step in
+  const W = Math.max(.52, (o.w || 2) * .34), tubeR = clamp(W * .135, .072, .105) * (o.sy ?? 1), tubeA = tubeR * 1.15;
+  const leanLift = lean => { const th = rad(Math.abs(lean)); return Math.hypot(tubeA * Math.sin(th), tubeR * Math.cos(th)) - tubeR * Math.cos(th); };
+  const lerpArr = (A, f) => { const i = Math.min(N - 1, Math.floor(f)), w = f - i; return A[i] + (A[i + 1] - A[i]) * w; };
   return sampleAnimCurve(o, d, steps, u => {
-    const p = at(u), lo = win(u, .012), h0 = heading(lo), h1 = heading(lo + .024);
-    const a = at(lo), b = at(lo + .024), len = Math.max(1e-4, Math.hypot(b.x - a.x, b.z - a.z));
-    const kappa = signed(deg(h1 - h0)) * Math.PI / 180 / len; // signed curvature, 1/m
-    let ry = deg(heading(u));
-    if (lastRy !== null) ry = lastRy + signed(ry - lastRy); // keep turning past 180° without a flip
-    lastRy = ry;
-    // the bike starts and finishes upright: the lean eases in over the first and out over the last 8 %
-    const r = clamp(Math.min(u, 1 - u) / .08, 0, 1), settle = r * r * (3 - 2 * r);
-    const lean = settle * clamp(-deg(Math.atan(speed * speed * kappa / 9.81)), -maxLean, maxLean);
-    return {x:rnd(p.x, 3), z:rnd(p.z, 3), y:0, ry:rnd(ry, 1), rz:rnd(lean, 1), rx:0, ...(extra ? extra(u) : {})};
+    const f = clamp(u, 0, 1) * N;
+    const lean = lerpArr(LEAN, f), ry = deg(lerpArr(H, f));
+    const st = {x:lerpArr(X, f), z:lerpArr(Z, f), y:leanLift(lean), ry, rz:lean, rx:0};
+    if (extra) {
+      const ex = extra(u, st) || {};
+      if (ex.dFwd) { st.x += Math.sin(rad(ry)) * ex.dFwd; st.z += Math.cos(rad(ry)) * ex.dFwd; }
+      if (ex.y !== undefined) st.y += ex.y;
+      if (ex.rx !== undefined) st.rx = ex.rx;
+    }
+    // no rounding here: sampleAnimCurve measures the key tangents from tiny steps of this function (it rounds the stored values itself)
+    return {x:st.x, z:st.z, y:Math.max(0, st.y), ry:st.ry, rz:st.rz, rx:st.rx};
   });
 }
+const smooth01 = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
 const ANIM_PRESET_GROUPS = [
   {
     id:'__person_anim',
@@ -7384,31 +7505,46 @@ const ANIM_PRESET_GROUPS = [
     title:'Bike (Ride, Lean & Wheelie)',
     items:[
       {id:'bike_ride', name:'Bike Riding', model:'bike',
-        prompt:'The motorbike rides smoothly forward through the scene at a steady cruising speed, wheels spinning and the rider balanced and relaxed on the saddle.',
-        apply:(d, o) => bikePathAnim(o, d, 8, u => { const s = .12 * u + .88 * (u * u * (3 - 2 * u)); return {x:.06 * Math.sin(s * Math.PI * 2), z:-4.2 + 8.4 * s}; }, {maxLean:4})},
+        prompt:'The motorbike cruises smoothly forward through the scene at a steady speed, drifting gently across one lane with a light natural lean, wheels spinning and the rider balanced and relaxed on the saddle.',
+        // straight cruise with one gentle lane change in the middle
+        apply:(d, o) => bikePathAnim(o, d, 10, bikeTrackFromFn(u => ({x:-.25 + .5 * smooth01(.3, .7, u), z:-4.2 + 8.4 * u})), {speed:6, maxLean:12})},
       {id:'bike_corner', name:'Bike Corner Lean', model:'bike',
-        prompt:'The motorbike sweeps through a fast corner, the rider tipping the bike deep into the lean at the apex and standing it back up smoothly on the exit.',
-        apply:(d, o) => {
-          const P0 = [-3.6, -2.2], P1 = [-.4, -2.4], P2 = [2.6, -.6], P3 = [2.4, 3.2];
-          return bikePathAnim(o, d, 12, u => { const m = 1 - u; return {
-            x:m * m * m * P0[0] + 3 * m * m * u * P1[0] + 3 * m * u * u * P2[0] + u * u * u * P3[0],
-            z:m * m * m * P0[1] + 3 * m * m * u * P1[1] + 3 * m * u * u * P2[1] + u * u * u * P3[1]}; }, {speed:6.5, maxLean:40});
-        }},
+        prompt:'The motorbike rides in on a straight, brakes gently and tips into a fast right-hand corner, holding a deep lean through the apex, then stands the bike back up and accelerates out on the exit straight.',
+        // straight in, 90° right-hand arc, straight out; slows a little into the apex and drives out of it
+        apply:(d, o) => bikePathAnim(o, d, 20,
+          bikeTrackFromSegments(-3.6, -2.1, 90, [{line:2.4}, {r:2.5, turn:-90}, {line:2.6}]),
+          {speed:6.4, maxLean:42, profile:s => 1.12 - .3 * Math.exp(-Math.pow((s - .5) / .17, 2)) + .08 * smooth01(.62, 1, s)})},
       {id:'bike_slalom', name:'Bike Slalom Weave', model:'bike',
-        prompt:'The motorbike weaves a rhythmic slalom, flicking from lean to lean left and right as it rides forward through the scene.',
-        apply:(d, o) => bikePathAnim(o, d, 16, u => { const e = Math.min(1, u / .14, (1 - u) / .14), env = e * e * (3 - 2 * e); return {x:1.15 * env * Math.sin((u - .14) / .72 * Math.PI * 3), z:-4 + 8 * u}; }, {speed:5.5, maxLean:32})},
+        prompt:'The motorbike weaves a smooth rhythmic slalom, flicking from lean to lean left and right between imaginary cones as it rides forward through the scene.',
+        // linked arcs of equal radius (left, right, left, right): a steady weave with a clean flick between every lean
+        apply:(d, o) => bikePathAnim(o, d, 28,
+          bikeTrackFromSegments(-.37, -4.4, 0, [{line:.8}, {r:1.6, turn:40}, {r:1.6, turn:-80}, {r:1.6, turn:80}, {r:1.6, turn:-80}, {r:1.6, turn:40}, {line:.8}]),
+          {speed:6, maxLean:34, smoothS:.12})},
       {id:'bike_wheelie', name:'Bike Wheelie', model:'bike',
-        prompt:'The motorbike accelerates hard and lifts its front wheel into a controlled wheelie, holds it balanced on the rear wheel, then sets the front wheel back down smoothly.',
-        apply:(d, o) => bikePathAnim(o, d, 12, u => { const s = u * u * (3 - 2 * u); return {x:0, z:-4.2 + 8.4 * s}; }, {maxLean:0, extra:u => {
-          // nose up 0.18-0.32, hold with a small balance wobble, back down 0.72-0.88; the rear wheel stays on the ground
-          const up = clamp((u - .18) / .14, 0, 1), down = clamp((u - .72) / .16, 0, 1);
-          const k = up * up * (3 - 2 * up) * (1 - down * down * (3 - 2 * down));
-          const pitch = k * (24 + 2.5 * Math.sin(u * Math.PI * 9));
-          return {rx:rnd(-pitch, 1), y:rnd(.62 * Math.sin(rad(pitch)), 3)};
-        }})},
+        prompt:'The motorbike accelerates hard and lifts its front wheel high into a controlled wheelie, balances on the rear wheel for a moment, then sets the front wheel back down smoothly and rides on.',
+        apply:(d, o) => {
+          // the bike pitches about its REAR AXLE (the rear tyre keeps rolling on the ground), so the rear wheel never sinks or floats
+          const L = Math.max(1.35, o.w || 2) * (o.sz ?? 1), wb = L * .345;
+          const wheelR = clamp((o.h || 1.12) * .285, .27, .34) * (o.sy ?? 1);
+          // extra keys while the nose lifts and drops, so the pitch and the lift stay locked together between keys
+          const knots = [...new Set([
+            ...Array.from({length:11}, (_, i) => i / 10),
+            ...Array.from({length:14}, (_, i) => .14 + i * .02),
+            ...Array.from({length:14}, (_, i) => .68 + i * .02)
+          ].map(u => rnd(u, 3)))].sort((a, b) => a - b);
+          return bikePathAnim(o, d, knots, bikeTrackFromFn(u => ({x:0, z:-4.4 + 8.8 * u})), {maxLean:0,
+            // hard launch, then keeps pulling: a wheelie happens under acceleration
+            profile:s => .55 + .75 * smooth01(0, .55, s),
+            extra:u => {
+              const up = smooth01(.16, .34, u), down = smooth01(.70, .88, u), k = up * (1 - down);
+              const pitch = rad(k * (26 + 2.2 * Math.sin(u * Math.PI * 8) * up * (1 - down)));
+              return {rx:-deg(pitch), y:wheelR * (1 - Math.cos(pitch)) + wb * Math.sin(pitch), dFwd:wheelR * Math.sin(pitch) - wb * (1 - Math.cos(pitch))};
+            }});
+        }},
       {id:'bike_circle', name:'Bike Circle 360', model:'bike',
-        prompt:'The motorbike rides one full leaning circle around the center of the scene, holding a steady lean the whole way round.',
-        apply:(d, o) => bikePathAnim(o, d, 16, u => { const a = u * Math.PI * 2 - Math.PI / 2; return {x:2.4 * Math.cos(a), z:2.4 * Math.sin(a) + 0}; }, {speed:5, maxLean:34})}
+        prompt:'The motorbike rides in on a straight, leans over and carves one full 360-degree circle around the center of the scene holding a steady deep lean, then stands up and rides out the way it was going.',
+        // straight in, one full left-hand loop, straight out
+        apply:(d, o) => bikePathAnim(o, d, 28, bikeTrackFromSegments(-2.6, 2.3, 90, [{line:2.6}, {r:2.3, turn:360}, {line:2.6}]), {speed:5.2, maxLean:36})}
     ]
   },
   {

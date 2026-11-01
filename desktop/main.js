@@ -11,7 +11,7 @@ const extLink = require('./extension-link');
 if (process.platform === 'linux') { app.commandLine.appendSwitch('enable-transparent-visuals'); app.commandLine.appendSwitch('disable-gpu-compositing'); }
 if (!app.requestSingleInstanceLock()) { app.quit(); process.exit(0); }
 
-const BUNDLED = [path.join(process.resourcesPath || '', 'site'), path.join(__dirname, 'site')].find(d => fs.existsSync(path.join(d, 'index.html'))) || path.join(__dirname, 'site');
+const BUNDLED = [path.join(process.resourcesPath || '', 'site'), path.join(__dirname, 'site'), path.resolve(__dirname, '..')].find(d => fs.existsSync(path.join(d, 'index.html'))) || path.join(__dirname, 'site');
 const MAX_SPLASH_MS = 10000;
 const SITE_ORIGINS = ['https://framesbyismail.github.io', 'https://visionpilot.us.ci'];
 const MIME = {'.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf-8', '.js':'application/javascript; charset=utf-8', '.mjs':'application/javascript; charset=utf-8',
@@ -89,9 +89,27 @@ function createMain() {
   win = new BrowserWindow({width:WIN_W, height:WIN_H, minWidth:1024, minHeight:640, show:false, autoHideMenuBar:true, backgroundColor:'#0c0d10', title:'Vision Pilot',
     icon:path.join(__dirname, 'build', 'icon.png'),
     webPreferences:{preload:path.join(__dirname, 'preload.js'), contextIsolation:true, nodeIntegration:false, backgroundThrottling:false}});
+  try { win.setMenuBarVisibility(false); win.removeMenu(); } catch (e) {}
+  const notifyFullscreen = () => {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('vp:fullscreen-changed', Boolean(win.isFullScreen()));
+    }
+  };
+  win.on('enter-full-screen', notifyFullscreen);
+  win.on('leave-full-screen', notifyFullscreen);
+  win.on('enter-html-full-screen', notifyFullscreen);
+  win.on('leave-html-full-screen', notifyFullscreen);
+  win.webContents.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown' && input.key === 'F11') {
+      event.preventDefault();
+      win.setFullScreen(!win.isFullScreen());
+    }
+  });
   win.webContents.setWindowOpenHandler(({url}) => {
     if (url.startsWith(baseUrl)) return {action:'allow'};
-    shell.openExternal(url).catch(() => {}); // sign-in and links open in the user's own browser
+    extLink.openUrlInActiveBrowser(url).then(opened => {
+      if (!opened) shell.openExternal(url).catch(() => {});
+    });
     return {action:'deny'};
   });
   win.on('closed', () => { win = null; });
@@ -112,10 +130,22 @@ ipcMain.handle('vp:check-updates', async () => {
   const r = await updater.checkAndUpdate({userData:app.getPath('userData'), bundled:BUNDLED});
   return {status:r.updated ? 'updated' : r.offline ? 'offline' : 'up-to-date', version:r.version, restartNeeded:r.updated};
 });
-ipcMain.handle('vp:open-external-signin', async (_e, url) => { if (/^https?:\/\//i.test(url || '')) { await shell.openExternal(url); return {ok:true}; } return {ok:false}; });
+ipcMain.handle('vp:open-external-signin', async (_e, url) => {
+  if (/^https?:\/\//i.test(url || '')) {
+    const openedInChrome = await extLink.openUrlInActiveBrowser(url);
+    if (!openedInChrome) await shell.openExternal(url);
+    return {ok:true};
+  }
+  return {ok:false};
+});
+ipcMain.handle('vp:toggle-fullscreen', () => {
+  if (!win || win.isDestroyed()) return false;
+  win.setFullScreen(!win.isFullScreen());
+  return win.isFullScreen();
+});
 ipcMain.handle('vp:silent-ai-bridge', async (_e, payload = {}) => {
   const action = payload.action || 'status';
-  if (action === 'status') return {ok:true, installed:extLink.connected(), desktop:true, ...extLink.status(), models:['visionpilot', 'claude', 'gpt', 'gemini']};
+  if (action === 'status') return {ok:true, installed:extLink.connected(), desktop:true, ...extLink.status(), models:['visionpilot', 'claude', 'gpt', 'gemini', 'flow']};
   if (action === 'open_login') return extLink.request({...payload, focusTab:true});
   return extLink.request(payload);
 });

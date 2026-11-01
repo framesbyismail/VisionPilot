@@ -135,7 +135,7 @@ async function refresh() {
     if (r.status === 401) { token = null; store.set(KEY, null); me = null; AC.setPro(false); }
     else if (r.ok) {
       const was = me?.approved; me = await r.json(); AC.setPro(me.approved);
-      if (me.approved && was === false) { AC.hideAdv(); AC.toast('Advanced mode is open. Enjoy!'); }
+      if (me.approved) { AC.hideAdv(); if (was === false) AC.toast('Advanced mode is open. Enjoy!'); }
       pushSharedSyncState();
     }
   } catch (e) { /* offline: keep the last known state */ }
@@ -173,7 +173,7 @@ async function pullSharedSyncState() {
     }
     if (data.user && (!me || me.email !== data.user.email)) {
       me = data.user;
-      if (me.approved) AC.setPro(true);
+      if (me.approved || data.pro === '1') { store.set('vp-pro', '1'); AC.setPro(true); AC.hideAdv(); }
       changed = true;
     }
     if (data.history && !store.get('vp_gen_history_v1')) {
@@ -236,6 +236,6 @@ pullSharedSyncState().catch(() => {}).then(() => refresh()).then(() => {
   authSettled();
   if (token) pushSharedSyncState();
   poll();
-  if (store.get(AFTER)) { store.set(AFTER, null); if (me && !me.approved) AC.needAdv(); }
+  if (store.get(AFTER)) { store.set(AFTER, null); if (me && !me.approved && !AC.isPro()) AC.needAdv(); }
 }).catch(authSettled);
 })();

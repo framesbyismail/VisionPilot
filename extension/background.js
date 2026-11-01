@@ -23,6 +23,13 @@ const PROVIDERS = {
     newChatUrl: 'https://gemini.google.com/app',
     matchUrls: ['https://gemini.google.com/*'],
     scriptFile: 'gemini-content.js'
+  },
+  flow: {
+    id: 'flow',
+    name: 'Google Flow',
+    newChatUrl: 'https://labs.google/fx/tools/flow',
+    matchUrls: ['https://labs.google/*', 'https://flow.google.com/*', 'https://*.flow.google.com/*'],
+    scriptFile: 'flow-content.js'
   }
 };
 
@@ -60,7 +67,7 @@ async function connectDesktop() {
   ws.onopen = () => {
     desktopLink.connected = true;
     desktopLink.send = (m) => { try { ws.send(JSON.stringify(m)); } catch (e) {} };
-    desktopLink.send({ type: 'hello', version: chrome.runtime.getManifest().version, models: ['claude', 'gpt', 'gemini'] });
+    desktopLink.send({ type: 'hello', version: chrome.runtime.getManifest().version, models: ['claude', 'gpt', 'gemini', 'flow'] });
   };
   ws.onmessage = async (ev) => {
     let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
@@ -69,16 +76,25 @@ async function connectDesktop() {
     const result = await handleBridgeRequest({ ...(m.payload || {}), reqId: m.payload?.reqId || m.id }, null).catch((err) => ({ ok: false, error: err?.message || String(err) }));
     desktopLink.send?.({ type: 'response', id: m.id, result });
   };
-  ws.onclose = ws.onerror = () => { desktopLink.connected = false; desktopLink.send = null; if (desktopLink.ws === ws) desktopLink.ws = null; };
+  ws.onclose = ws.onerror = () => {
+    desktopLink.connected = false;
+    desktopLink.send = null;
+    if (desktopLink.ws === ws) desktopLink.ws = null;
+    setTimeout(connectDesktop, 2500);
+  };
 }
-let desktopWindowId = null;
+// Always reuse the user's already-open normal Chrome window (with their active profile/session data)
+// instead of spawning a new blank browser window.
 async function desktopWorkWindow() {
-  try { if (desktopWindowId !== null && await chrome.windows.get(desktopWindowId)) return desktopWindowId; } catch (e) { desktopWindowId = null; }
   try {
-    const w = await chrome.windows.create({ url: 'about:blank', state: 'minimized', focused: false });
-    desktopWindowId = w.id;
-    return w.id;
-  } catch (e) { return undefined; }
+    const lastFocused = await chrome.windows.getLastFocused({ windowTypes: ['normal'] });
+    if (lastFocused && typeof lastFocused.id === 'number') return lastFocused.id;
+  } catch (e) {}
+  try {
+    const allNormal = await chrome.windows.getAll({ windowTypes: ['normal'] });
+    if (allNormal && allNormal.length > 0) return allNormal[0].id;
+  } catch (e) {}
+  return undefined;
 }
 // try now, on browser start, and every 30 s (a live connection also keeps this worker awake)
 connectDesktop();
@@ -89,14 +105,16 @@ try { chrome.alarms.create('vp-desktop-link', { periodInMinutes: 0.5 }); chrome.
 const activeProviderTabIds = {
   claude: null,
   gpt: null,
-  gemini: null
+  gemini: null,
+  flow: null
 };
 
 // Track whether each provider tab has been started as a fresh new chat in this session
 const freshChatStarted = {
   claude: false,
   gpt: false,
-  gemini: false
+  gemini: false,
+  flow: false
 };
 
 const knownVisionPilotTabIds = new Set();
@@ -111,7 +129,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function isProviderUrl(url) {
   if (!url) return false;
-  return /^https:\/\/(claude\.ai|chatgpt\.com|chat\.openai\.com|gemini\.google\.com)\//i.test(url);
+  return /^https:\/\/(claude\.ai|chatgpt\.com|chat\.openai\.com|gemini\.google\.com|labs\.google|(?:[\w-]+\.)?flow\.google\.com)\//i.test(url);
 }
 
 function isVisionPilotTab(tab) {
@@ -150,17 +168,123 @@ chrome.runtime.onStartup.addListener(() => {
   injectVisionPilotContentScripts();
 });
 
+let ownedStateRestored = false;
+async function saveOwnedTabState() {
+  try {
+    await chrome.storage.local.set({
+      vpOwnedProviderTabIds: { ...activeProviderTabIds },
+      vpOwnedTabGroupId: vpTabGroupId
+    });
+  } catch (e) {}
+}
+
+async function restoreOwnedTabState() {
+  if (ownedStateRestored) return;
+  ownedStateRestored = true;
+  try {
+    const st = await chrome.storage.local.get(['vpOwnedProviderTabIds', 'vpOwnedTabGroupId']);
+    if (st && typeof st.vpOwnedTabGroupId === 'number' && st.vpOwnedTabGroupId >= 0 && vpTabGroupId === null) {
+      vpTabGroupId = st.vpOwnedTabGroupId;
+    }
+    if (st && st.vpOwnedProviderTabIds && typeof st.vpOwnedProviderTabIds === 'object') {
+      for (const k of Object.keys(activeProviderTabIds)) {
+        if (!activeProviderTabIds[k] && st.vpOwnedProviderTabIds[k]) {
+          try {
+            const t = await chrome.tabs.get(st.vpOwnedProviderTabIds[k]);
+            if (t && t.id && isProviderUrl(t.url)) {
+              activeProviderTabIds[k] = t.id;
+              freshChatStarted[k] = true;
+            }
+          } catch (e) {}
+        }
+      }
+    }
+  } catch (e) {}
+}
+
+async function getOwnedProviderTab(model) {
+  await restoreOwnedTabState();
+  const prov = PROVIDERS[model];
+  if (!prov) return null;
+
+  if (activeProviderTabIds[model]) {
+    try {
+      const t = await chrome.tabs.get(activeProviderTabIds[model]);
+      if (t && t.id) return t;
+    } catch (e) {
+      activeProviderTabIds[model] = null;
+      freshChatStarted[model] = false;
+    }
+  }
+
+  // Also check if a tab for this provider already exists inside our dedicated VisionPilot AI tab group
+  if (typeof vpTabGroupId === 'number' && vpTabGroupId >= 0) {
+    try {
+      const groupedTabs = await chrome.tabs.query({ groupId: vpTabGroupId });
+      const match = (groupedTabs || []).find((t) => {
+        if (!t || !t.id || !t.url) return false;
+        if (model === 'flow') return /^https:\/\/(labs\.google\/fx\/tools\/flow|(?:[\w-]+\.)?flow\.google\.com)/i.test(t.url);
+        if (model === 'claude') return /^https:\/\/claude\.ai\//i.test(t.url);
+        if (model === 'gpt') return /^https:\/\/(chatgpt\.com|chat\.openai\.com)\//i.test(t.url);
+        if (model === 'gemini') return /^https:\/\/gemini\.google\.com\//i.test(t.url);
+        return false;
+      });
+      if (match) {
+        activeProviderTabIds[model] = match.id;
+        freshChatStarted[model] = true;
+        await saveOwnedTabState();
+        return match;
+      }
+    } catch (e) {}
+  }
+
+  // For Google Flow, ALWAYS reuse any existing open Google Flow tab (especially the Visionpilot project tab)
+  // rather than ever opening a duplicate Google Flow tab.
+  if (model === 'flow') {
+    try {
+      const allTabs = await chrome.tabs.query({});
+      const flowTabs = (allTabs || []).filter(
+        (t) => t && t.id && /^https:\/\/(labs\.google\/fx\/tools\/flow|(?:[\w-]+\.)?flow\.google\.com)/i.test(t.url || '')
+      );
+      if (flowTabs.length > 0) {
+        flowTabs.sort((a, b) => {
+          const aScore = (/\/project\//i.test(a.url || '') ? 10 : 0) + (/visionpilot/i.test(a.title || '') ? 5 : 0);
+          const bScore = (/\/project\//i.test(b.url || '') ? 10 : 0) + (/visionpilot/i.test(b.title || '') ? 5 : 0);
+          return bScore - aScore;
+        });
+        const bestFlowTab = flowTabs[0];
+        // Clean up any duplicate extra Google Flow tabs opened earlier so only 1 Flow tab remains
+        if (flowTabs.length > 1) {
+          for (let i = 1; i < flowTabs.length; i++) {
+            try { await chrome.tabs.remove(flowTabs[i].id); } catch (e) {}
+          }
+        }
+        activeProviderTabIds.flow = bestFlowTab.id;
+        freshChatStarted.flow = true;
+        await saveOwnedTabState();
+        return bestFlowTab;
+      }
+    } catch (e) {}
+  }
+
+  return null;
+}
+
 chrome.tabs.onRemoved.addListener((tabId) => {
   knownVisionPilotTabIds.delete(tabId);
+  let changed = false;
   for (const k of Object.keys(activeProviderTabIds)) {
     if (activeProviderTabIds[k] === tabId) {
       activeProviderTabIds[k] = null;
       freshChatStarted[k] = false;
+      changed = true;
     }
   }
+  if (changed) saveOwnedTabState();
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (!desktopLink.connected) connectDesktop();
   if (changeInfo.status === 'complete' && tab?.url) {
     if (/^(chrome|edge|about|devtools|chrome-extension):/i.test(tab.url)) return;
     if (!isProviderUrl(tab.url)) {
@@ -175,17 +299,19 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }
 });
 
-// CHANGE 3: Put VisionPilot and the tabs for Claude, ChatGPT and Gemini together in one Chrome tab group,
-// and open any missing tab inside that group.
+// Put VisionPilot and ONLY the provider tabs opened by VisionPilot into one dedicated Chrome tab group.
+// Never pull in pre-existing ChatGPT, Gemini, Claude, or Flow tabs that the user already had open outside the group.
 async function ensureVisionPilotTabGroup(senderTabId = null, extraTabIds = []) {
   try {
+    await restoreOwnedTabState();
     if (senderTabId) knownVisionPilotTabIds.add(senderTabId);
 
     const allTabs = await chrome.tabs.query({});
     const vpTabs = allTabs.filter((t) => isVisionPilotTab(t));
-    const providerTabs = allTabs.filter((t) => t.id && isProviderUrl(t.url));
+    const ownedIds = Object.values(activeProviderTabIds).filter(Boolean);
+    const ownedProviderTabs = allTabs.filter((t) => t.id && ownedIds.includes(t.id));
 
-    // Determine target windowId (prefer senderTab's window, then first VisionPilot tab's window, then first provider tab's window)
+    // Determine target windowId (prefer senderTab's window, then first VisionPilot tab's window, then first owned provider tab's window)
     let targetWindowId = null;
     if (senderTabId) {
       const senderTab = allTabs.find((t) => t.id === senderTabId);
@@ -194,15 +320,15 @@ async function ensureVisionPilotTabGroup(senderTabId = null, extraTabIds = []) {
     if (targetWindowId === null && vpTabs.length > 0) {
       targetWindowId = vpTabs[0].windowId;
     }
-    if (targetWindowId === null && providerTabs.length > 0) {
-      targetWindowId = providerTabs[0].windowId;
+    if (targetWindowId === null && ownedProviderTabs.length > 0) {
+      targetWindowId = ownedProviderTabs[0].windowId;
     }
 
     const tabIdsSet = new Set();
     for (const t of vpTabs) {
       if (targetWindowId === null || t.windowId === targetWindowId) tabIdsSet.add(t.id);
     }
-    for (const t of providerTabs) {
+    for (const t of ownedProviderTabs) {
       if (targetWindowId === null || t.windowId === targetWindowId) tabIdsSet.add(t.id);
     }
     for (const id of extraTabIds) {
@@ -216,7 +342,7 @@ async function ensureVisionPilotTabGroup(senderTabId = null, extraTabIds = []) {
     const tabIds = Array.from(tabIdsSet);
     if (!tabIds.length) return null;
 
-    // Find an existing valid groupId among these tabs or vpTabGroupId
+    // Find an existing valid groupId among our owned tabs or vpTabGroupId
     let groupIdToUse = null;
     if (typeof vpTabGroupId === 'number' && vpTabGroupId >= 0) {
       try {
@@ -229,20 +355,10 @@ async function ensureVisionPilotTabGroup(senderTabId = null, extraTabIds = []) {
       }
     }
 
-    if (groupIdToUse === null) {
-      for (const id of tabIds) {
-        const t = allTabs.find((x) => x.id === id);
-        if (t && typeof t.groupId === 'number' && t.groupId >= 0) {
-          groupIdToUse = t.groupId;
-          break;
-        }
-      }
-    }
-
     if (groupIdToUse === null && chrome.tabGroups && typeof chrome.tabGroups.query === 'function') {
       try {
         const groups = await chrome.tabGroups.query(targetWindowId !== null ? { windowId: targetWindowId } : {});
-        const existingVpGroup = groups.find((g) => /visionpilot/i.test(g.title || ''));
+        const existingVpGroup = groups.find((g) => /^visionpilot\s+ai$/i.test((g.title || '').trim()));
         if (existingVpGroup) groupIdToUse = existingVpGroup.id;
       } catch (e) {}
     }
@@ -256,6 +372,7 @@ async function ensureVisionPilotTabGroup(senderTabId = null, extraTabIds = []) {
 
     const finalGroupId = await chrome.tabs.group(groupOpts);
     vpTabGroupId = finalGroupId;
+    await saveOwnedTabState();
 
     if (chrome.tabGroups && typeof chrome.tabGroups.update === 'function') {
       try {
@@ -540,6 +657,58 @@ async function injectProviderHelpers(tabId, scriptFile) {
             } catch (e) {}
           });
         }
+
+        if (!window.__vpFlowMainHooksInstalled) {
+          window.__vpFlowMainHooksInstalled = true;
+          window.addEventListener('vp-main-world-type-prompt', (ev) => {
+            try {
+              const detail = ev?.detail || {};
+              const text = String(detail.text || '');
+              const target =
+                document.querySelector('[aria-label="What do you want to create?"]') ||
+                document.querySelector('div.ProseMirror[contenteditable="true"]') ||
+                document.querySelector('div[contenteditable="true"][role="textbox"]') ||
+                document.querySelector('textarea');
+              if (!target) return;
+              target.focus();
+
+              const pmView =
+                target.pmViewDesc?.view ||
+                target.querySelector?.('*')?.pmViewDesc?.view ||
+                target.__pmView;
+              if (pmView && pmView.state && typeof pmView.dispatch === 'function') {
+                const tr = pmView.state.tr.insertText(text, 0, pmView.state.doc.content.size);
+                pmView.dispatch(tr);
+                document.documentElement.dataset.vpPromptTypedMethod = 'pmView';
+                return;
+              }
+
+              const dt = new window.DataTransfer();
+              dt.setData('text/plain', text);
+              const pasteEv = new window.ClipboardEvent('paste', {
+                bubbles: true,
+                cancelable: true,
+                composed: true,
+                clipboardData: dt
+              });
+              target.dispatchEvent(pasteEv);
+              if ((target.innerText || target.textContent || '').trim().includes(text.slice(0, 12))) {
+                document.documentElement.dataset.vpPromptTypedMethod = 'mainPaste';
+                return;
+              }
+
+              const sel = window.getSelection();
+              const range = document.createRange();
+              range.selectNodeContents(target);
+              sel.removeAllRanges();
+              sel.addRange(range);
+              document.execCommand('insertText', false, text);
+              document.documentElement.dataset.vpPromptTypedMethod = 'mainExecCommand';
+            } catch (err) {
+              document.documentElement.dataset.vpPromptTypedMethod = 'error:' + (err?.message || String(err));
+            }
+          });
+        }
       }
     });
   } catch (e) {}
@@ -567,34 +736,57 @@ async function ensureFreshProviderChatTab(model, options = {}) {
       const sTab = await chrome.tabs.get(senderTabId);
       if (sTab && sTab.windowId !== undefined) targetWindowId = sTab.windowId;
     } catch (e) {}
-  } else if (!options.focusTab) {
-    // a job from the desktop app: work in a minimised window of its own, so no browser window pops up
+  } else {
+    // Request from the desktop app or popup: always reuse the user's open normal Chrome window
     targetWindowId = await desktopWorkWindow();
+  }
+
+  // For Google Flow ('flow'), reuse the stored Visionpilot project URL if available and NEVER reset an existing Flow project tab
+  let targetUrl = prov.newChatUrl;
+  if (model === 'flow') {
+    try {
+      const st = await chrome.storage.local.get(['vpFlowProjectUrl']);
+      if (st?.vpFlowProjectUrl && /^https:\/\/(labs\.google\/fx\/tools\/flow|(?:[\w-]+\.)?flow\.google\.com)/i.test(st.vpFlowProjectUrl)) {
+        targetUrl = st.vpFlowProjectUrl;
+      }
+    } catch (e) {}
   }
 
   let tab = null;
   try {
-    const existingTabs = await chrome.tabs.query({ url: prov.matchUrls });
-    if (existingTabs && existingTabs.length > 0) {
-      // Reuse existing tab for this provider, preferring the tracked one or one in the same window
-      tab =
-        existingTabs.find((t) => t.id === activeProviderTabIds[model]) ||
-        (targetWindowId !== undefined ? existingTabs.find((t) => t.windowId === targetWindowId) : null) ||
-        existingTabs[0];
-
-      console.log(`[VP Background] Reusing existing ${prov.name} tab (id=${tab.id}) and starting a fresh new chat: ${prov.newChatUrl}`);
-      tab = await chrome.tabs.update(tab.id, {
-        url: prov.newChatUrl,
-        active: Boolean(options.focusTab)
-      });
+    tab = await getOwnedProviderTab(model);
+    if (tab) {
+      // Reuse our dedicated extension-owned tab for this provider inside the VisionPilot AI group
+      if (model === 'flow' && /^https:\/\/(labs\.google\/fx\/tools\/flow|(?:[\w-]+\.)?flow\.google\.com)/i.test(tab.url || '')) {
+        console.log(`[VP Background] Reusing existing Google Flow Visionpilot tab (id=${tab.id}) without opening a new tab or project: ${tab.url}`);
+        if (options.focusTab) {
+          tab = await chrome.tabs.update(tab.id, { active: true });
+          if (tab.windowId !== undefined) {
+            try { await chrome.windows.update(tab.windowId, { focused: true }); } catch (e) {}
+          }
+        }
+      } else {
+        console.log(`[VP Background] Reusing dedicated ${prov.name} group tab (id=${tab.id}) and navigating to: ${targetUrl}`);
+        tab = await chrome.tabs.update(tab.id, {
+          url: targetUrl,
+          active: Boolean(options.focusTab)
+        });
+        if (options.focusTab && tab.windowId !== undefined) {
+          try { await chrome.windows.update(tab.windowId, { focused: true }); } catch (e) {}
+        }
+      }
     } else {
+      // Open a brand new tab dedicated to the VisionPilot AI group (never hijacking pre-existing user tabs)
       const createOpts = {
-        url: prov.newChatUrl,
+        url: targetUrl,
         active: Boolean(options.focusTab)
       };
       if (targetWindowId !== undefined) createOpts.windowId = targetWindowId;
       tab = await chrome.tabs.create(createOpts);
-      console.log(`[VP Background] Created new ${prov.name} tab (id=${tab.id}) at ${prov.newChatUrl}`);
+      if (options.focusTab && tab.windowId !== undefined) {
+        try { await chrome.windows.update(tab.windowId, { focused: true }); } catch (e) {}
+      }
+      console.log(`[VP Background] Created new dedicated ${prov.name} group tab (id=${tab.id}) at ${targetUrl}`);
     }
   } catch (err) {
     return {
@@ -604,11 +796,12 @@ async function ensureFreshProviderChatTab(model, options = {}) {
   }
 
   activeProviderTabIds[model] = tab.id;
+  await saveOwnedTabState();
   // keep the AI tab loaded while it works in the background
   try { await chrome.tabs.update(tab.id, { autoDiscardable: false }); } catch (e) {}
   freshChatStarted[model] = true;
 
-  // Put VisionPilot and all open Claude/ChatGPT/Gemini tabs (including this tab) into one Chrome tab group
+  // Put VisionPilot and ONLY its dedicated group tabs into the VisionPilot AI tab group
   await ensureVisionPilotTabGroup(senderTabId, [tab.id]);
 
   try {
@@ -661,31 +854,14 @@ async function getOrOpenProviderTabForPrompt(model, senderTabId = null) {
     return { ok: false, error: `Unknown AI model: ${model}` };
   }
 
-  // If this provider hasn't started a fresh chat in this session yet, start a fresh chat even if an old tab was already open
+  // If this provider hasn't started a fresh chat in this session yet, start a fresh chat in our dedicated group tab
   if (!freshChatStarted[model]) {
     return await ensureFreshProviderChatTab(model, { focusTab: false, senderTabId });
   }
 
-  let tab = null;
-  if (activeProviderTabIds[model]) {
-    try {
-      tab = await chrome.tabs.get(activeProviderTabIds[model]);
-    } catch (e) {
-      tab = null;
-    }
-  }
+  const tab = await getOwnedProviderTab(model);
 
-  if (!tab) {
-    const existingTabs = await chrome.tabs.query({ url: prov.matchUrls });
-    if (existingTabs && existingTabs.length > 0) {
-      tab = existingTabs[0];
-      activeProviderTabIds[model] = tab.id;
-      // Ensure this newly adopted tab starts a fresh new chat and joins the tab group
-      return await ensureFreshProviderChatTab(model, { focusTab: false, senderTabId });
-    }
-  }
-
-  // If no tab is open at all, open a fresh new chat tab inside the group
+  // If no dedicated group tab is open yet, open a fresh new chat tab inside the group
   if (!tab) {
     return await ensureFreshProviderChatTab(model, { focusTab: false, senderTabId });
   }
@@ -966,7 +1142,7 @@ async function runProviderImageGeneration(model, payload, senderTabId = null) {
   if (!instruction.trim()) {
     return { ok: false, error: 'Image generation prompt is missing.' };
   }
-  if (images.length === 0) {
+  if (images.length === 0 && model !== 'flow') {
     return { ok: false, error: 'Main reference image is missing.' };
   }
 
@@ -974,7 +1150,7 @@ async function runProviderImageGeneration(model, payload, senderTabId = null) {
     `[VP Background] Starting Image Generation on ${prov.name} (${payload.imageModelName || model}), aspect=${payload.aspectRatio || 'auto'}`
   );
 
-  // Always start a fresh new chat for image generation
+  // Start a fresh new chat for image generation (or reuse the existing Visionpilot project tab in Google Flow without switching focus)
   const tabStatus = await ensureFreshProviderChatTab(model, {
     focusTab: false,
     senderTabId
@@ -994,14 +1170,16 @@ async function runProviderImageGeneration(model, payload, senderTabId = null) {
 
   try {
     await injectProviderHelpers(tabStatus.tabId, prov.scriptFile);
+    const imageCount = Math.max(1, Math.min(4, Number(payload.imageCount) || 1));
     const result = await sendTabMessageUntilComplete(tabStatus.tabId, prov.name, {
       type: 'VP_SITE_GENERATE_IMAGE',
       payload: {
         images,
         instruction,
-        aspectRatio: payload.aspectRatio || '1:1',
-        width: payload.width || 1024,
-        height: payload.height || 1024,
+        aspectRatio: payload.aspectRatio || '16:9',
+        width: payload.width || 1408,
+        height: payload.height || 792,
+        imageCount,
         imageModelName: payload.imageModelName || prov.name,
         refId,
         reqId
@@ -1020,25 +1198,42 @@ async function runProviderImageGeneration(model, payload, senderTabId = null) {
       };
     }
 
-    let finalDataUrl = result.imageDataUrl || '';
-    lastImageJob = { model, tabId: tabStatus.tabId, imageUrl: result.imageUrl || '', at: Date.now() };
-    if (!finalDataUrl && result.imageUrl) {
+    const resolveSingleImgUrl = async (itemDataUrl, itemUrl) => {
+      if (itemDataUrl && String(itemDataUrl).startsWith('data:image/')) return itemDataUrl;
+      if (!itemUrl) return '';
+      const inPage = await readImageInPage(tabStatus.tabId, itemUrl);
+      if (inPage && inPage.ok && inPage.dataUrl) return inPage.dataUrl;
+      const fetched = await fetchImageAsDataUrl(itemUrl);
+      if (fetched && fetched.ok && fetched.dataUrl) return fetched.dataUrl;
+      return '';
+    };
+
+    const finalImages = [];
+    if (Array.isArray(result.images) && result.images.length > 0) {
       reportStage(reqId, 'reading');
-      const inPage = await readImageInPage(tabStatus.tabId, result.imageUrl);
-      if (inPage.ok) finalDataUrl = inPage.dataUrl;
-    }
-    if (!finalDataUrl && result.imageUrl) {
-      const fetched = await fetchImageAsDataUrl(result.imageUrl);
-      if (fetched && fetched.ok && fetched.dataUrl) {
-        finalDataUrl = fetched.dataUrl;
-      } else {
-        return {
-          ok: false,
-          provider: model,
-          error: fetched?.error || `Generated image could not be downloaded from ${prov.name}.`
-        };
+      for (let i = 0; i < result.images.length; i++) {
+        const entry = result.images[i];
+        const dUrl = typeof entry === 'string'
+          ? await resolveSingleImgUrl(entry.startsWith('data:image/') ? entry : '', entry.startsWith('data:image/') ? '' : entry)
+          : await resolveSingleImgUrl(entry?.imageDataUrl || '', entry?.imageUrl || entry?.src || '');
+        if (dUrl) finalImages.push(dUrl);
       }
     }
+
+    let finalDataUrl = finalImages[0] || result.imageDataUrl || '';
+    if (!finalDataUrl && result.imageUrl) {
+      reportStage(reqId, 'reading');
+      finalDataUrl = await resolveSingleImgUrl('', result.imageUrl);
+      if (finalDataUrl && finalImages.length === 0) finalImages.push(finalDataUrl);
+    }
+
+    lastImageJob = {
+      model,
+      tabId: tabStatus.tabId,
+      imageUrl: result.imageUrl || '',
+      images: finalImages,
+      at: Date.now()
+    };
 
     if (!finalDataUrl || !String(finalDataUrl).startsWith('data:image/')) {
       return {
@@ -1051,7 +1246,8 @@ async function runProviderImageGeneration(model, payload, senderTabId = null) {
     return {
       ok: true,
       provider: model,
-      imageDataUrl: finalDataUrl
+      imageDataUrl: finalDataUrl,
+      images: finalImages.length > 0 ? finalImages : [finalDataUrl]
     };
   } catch (err) {
     if (isCancelledNow()) {
@@ -1062,6 +1258,56 @@ async function runProviderImageGeneration(model, payload, senderTabId = null) {
       provider: model,
       error: `Error generating image with ${prov.name}: ${err?.message || err}`
     };
+  }
+}
+
+// Upscale a Nano Banana 2.1 image in Google Flow (2K or 4K download), or signal fallback to local VisionPilot 4K upscale
+async function runFlowImageUpscale(payload, senderTabId = null) {
+  const prov = PROVIDERS.flow;
+  const ownedTab = await getOwnedProviderTab('flow');
+  let tabId = ownedTab?.id || activeProviderTabIds.flow || (lastImageJob?.model === 'flow' ? lastImageJob.tabId : null);
+  if (!tabId) {
+    try {
+      const tabs = await chrome.tabs.query({ url: prov.matchUrls });
+      if (tabs && tabs.length > 0) tabId = tabs[0].id;
+    } catch (e) {}
+  }
+  if (!tabId) {
+    return { ok: false, fallbackToLocal: true, error: 'No active Google Flow session found.' };
+  }
+  try {
+    await injectProviderHelpers(tabId, prov.scriptFile);
+    const res = await sendTabMessageUntilComplete(tabId, prov.name, {
+      type: 'VP_SITE_UPSCALE_FLOW_IMAGE',
+      payload: {
+        scaleFactor: Number(payload.scaleFactor) === 4 ? 4 : 2,
+        resolution: payload.resolution || (Number(payload.scaleFactor) === 4 ? '4K' : '2K'),
+        imageIndex: Number(payload.imageIndex) || 0,
+        reqId: payload.reqId || ''
+      }
+    });
+    if (!res || !res.ok) {
+      return {
+        ok: false,
+        fallbackToLocal: true,
+        error: res?.error || 'Google Flow 2K/4K download not available; falling back to VisionPilot upscale.'
+      };
+    }
+    let dataUrl = res.imageDataUrl || '';
+    if (!dataUrl && res.imageUrl) {
+      const inPage = await readImageInPage(tabId, res.imageUrl);
+      if (inPage && inPage.ok) dataUrl = inPage.dataUrl;
+      if (!dataUrl) {
+        const fetched = await fetchImageAsDataUrl(res.imageUrl);
+        if (fetched && fetched.ok) dataUrl = fetched.dataUrl;
+      }
+    }
+    if (!dataUrl || !String(dataUrl).startsWith('data:image/')) {
+      return { ok: false, fallbackToLocal: true, error: 'Google Flow upscale image could not be read.' };
+    }
+    return { ok: true, provider: 'flow', imageDataUrl: dataUrl };
+  } catch (err) {
+    return { ok: false, fallbackToLocal: true, error: err?.message || String(err) };
   }
 }
 
@@ -1111,6 +1357,7 @@ async function checkOpenProviderStatus(model) {
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!desktopLink.connected) connectDesktop();
   if (!msg) return false;
 
   // Never switch away from the VisionPilot tab when working in the background.
@@ -1130,14 +1377,42 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg.type === 'VP_CHECK_PROVIDERS') {
     (async () => {
-      const [claude, gpt, gemini] = await Promise.all([
+      const [claude, gpt, gemini, flow] = await Promise.all([
         checkOpenProviderStatus('claude'),
         checkOpenProviderStatus('gpt'),
-        checkOpenProviderStatus('gemini')
+        checkOpenProviderStatus('gemini'),
+        checkOpenProviderStatus('flow')
       ]);
-      sendResponse({ ok: true, providers: { claude, gpt, gemini } });
+      sendResponse({ ok: true, providers: { claude, gpt, gemini, flow } });
     })();
     return true;
+  }
+
+  if (msg.type === 'VP_FLOW_PROGRESS') {
+    (async () => {
+      try {
+        const reqId = msg.reqId || '';
+        const flowTabId = sender?.tab?.id || activeProviderTabIds.flow;
+        let dataUrl = msg.imageDataUrl || '';
+        if (!dataUrl && msg.imageUrl && flowTabId) {
+          const inPage = await readImageInPage(flowTabId, msg.imageUrl);
+          if (inPage && inPage.ok) dataUrl = inPage.dataUrl;
+        }
+        if (!dataUrl && msg.imageUrl) {
+          const fetched = await fetchImageAsDataUrl(msg.imageUrl);
+          if (fetched && fetched.ok) dataUrl = fetched.dataUrl;
+        }
+        if (reqId && dataUrl && dataUrl.startsWith('data:image/')) {
+          reportStage(reqId, 'flow_image_ready', {
+            index: Number(msg.index) || 0,
+            totalCount: Number(msg.totalCount) || 1,
+            imageDataUrl: dataUrl
+          });
+        }
+      } catch (e) {}
+    })();
+    sendResponse({ ok: true });
+    return false;
   }
 
   if (msg.type === 'VP_OPEN_VISION_PILOT') {
@@ -1260,6 +1535,66 @@ async function handleBridgeRequest(payload, senderTabId = null) {
       reportStage(payload.reqId, 'opening');
       return await runProviderImageGeneration(model, payload, senderTabId);
     }
+    if (action === 'upscale_flow_image') {
+      return await runFlowImageUpscale(payload, senderTabId);
+    }
+    if (action === 'reload_extension') {
+      setTimeout(() => { try { chrome.runtime.reload(); } catch (e) {} }, 150);
+      return { ok: true, reloading: true };
+    }
+    if (action === 'inspect_flow_dom') {
+      const flowTab = await getOwnedProviderTab('flow');
+      const tabId = flowTab?.id || activeProviderTabIds.flow;
+      if (!tabId) return { ok: false, error: 'No open Flow tab found' };
+      const res = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => {
+          const vis = (el) => {
+            if (!el) return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+          };
+          const buttons = Array.from(document.querySelectorAll('button, [role="button"]')).filter(vis).map(b => ({
+            tag: b.tagName,
+            text: (b.innerText || b.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80),
+            aria: b.getAttribute('aria-label') || '',
+            disabled: Boolean(b.disabled),
+            ariaDisabled: b.getAttribute('aria-disabled') || '',
+            title: b.getAttribute('title') || '',
+            rect: (() => { const r = b.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; })(),
+            html: (b.outerHTML || '').slice(0, 220)
+          }));
+          const inputs = Array.from(document.querySelectorAll('textarea, input, [contenteditable="true"], [role="textbox"]')).filter(vis).map(i => ({
+            tag: i.tagName,
+            type: i.getAttribute('type') || '',
+            placeholder: i.getAttribute('placeholder') || i.getAttribute('data-placeholder') || '',
+            aria: i.getAttribute('aria-label') || '',
+            text: (i.value || i.innerText || i.textContent || '').trim().slice(0, 120),
+            html: (i.outerHTML || '').slice(0, 300)
+          }));
+          const imgs = Array.from(document.querySelectorAll('img')).filter(vis).map(im => ({
+            w: Math.round(im.getBoundingClientRect().width),
+            h: Math.round(im.getBoundingClientRect().height),
+            nw: im.naturalWidth,
+            nh: im.naturalHeight,
+            alt: (im.alt || '').slice(0, 40),
+            src: (im.currentSrc || im.src || '').slice(0, 90)
+          }));
+          return { url: location.href, title: document.title, buttons, inputs, imgs };
+        }
+      });
+      return { ok: true, tabId, dom: res?.[0]?.result || null };
+    }
+    if (action === 'open_external_url' && payload.url) {
+      const targetWindowId = await desktopWorkWindow();
+      const createOpts = { url: payload.url, active: true };
+      if (targetWindowId !== undefined) createOpts.windowId = targetWindowId;
+      const t = await chrome.tabs.create(createOpts);
+      if (t?.windowId !== undefined) {
+        try { await chrome.windows.update(t.windowId, { focused: true }); } catch (e) {}
+      }
+      return { ok: true, opened: payload.url, tabId: t?.id || null };
+    }
     // Retry without generating again: pick up the image ChatGPT already made in the last image chat
     if (action === 'recover_image') return await recoverLastImage(payload.reqId);
     if (action === 'open_login') {
@@ -1269,7 +1604,7 @@ async function handleBridgeRequest(payload, senderTabId = null) {
       return { ok: true, opened: prov.newChatUrl, tabId: res.tabId };
     }
     // Basic extension installation ping
-    return { ok: true, installed: true, version: chrome.runtime.getManifest().version, models: ['visionpilot', 'claude', 'gpt', 'gemini'], desktopLinked: desktopLink.connected };
+    return { ok: true, installed: true, version: chrome.runtime.getManifest().version, models: ['visionpilot', 'claude', 'gpt', 'gemini', 'flow'], desktopLinked: desktopLink.connected };
   } finally {
     if (payload.reqId) setTimeout(() => requestSenders.delete(payload.reqId), 60000);
   }

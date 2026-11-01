@@ -8,11 +8,8 @@
         document.documentElement.setAttribute('data-vp-extension', 'installed');
         document.documentElement.setAttribute('data-vp-extension-version', VP_EXT_VERSION);
       }
-      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local && location.href.startsWith('http')) {
-        try { chrome.storage.local.set({ vpLastUrl: location.href }); } catch (e) {}
-      }
       window.dispatchEvent(new CustomEvent('vp-ai-extension-ready', {
-        detail: { installed: true, version: VP_EXT_VERSION, models: ['claude', 'gpt', 'gemini'] }
+        detail: { installed: true, version: VP_EXT_VERSION, models: ['claude', 'gpt', 'gemini', 'flow'] }
       }));
     } catch (e) {}
     return;
@@ -28,11 +25,11 @@
         document.documentElement.setAttribute('data-vp-extension', 'installed');
         document.documentElement.setAttribute('data-vp-extension-version', VP_EXT_VERSION);
       }
-      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local && location.href.startsWith('http')) {
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local && /visionpilot/i.test(location.href)) {
         try { chrome.storage.local.set({ vpLastUrl: location.href }); } catch (e) {}
       }
       window.dispatchEvent(new CustomEvent('vp-ai-extension-ready', {
-        detail: { installed: true, version: VP_EXT_VERSION, models: ['claude', 'gpt', 'gemini'] }
+        detail: { installed: true, version: VP_EXT_VERSION, models: ['claude', 'gpt', 'gemini', 'flow'] }
       }));
     } catch (e) {} finally {
       announcing = false;
@@ -57,9 +54,9 @@
         sendResponse({ ok: true, isVisionPilot: Boolean(document.getElementById('aiModelBtn')) });
         return true;
       }
-      // live stage of a running request (uploading, generating, reading...)
+      // live stage of a running request (uploading, generating, reading, flow_image_ready...)
       if (msg.type === 'VP_PROGRESS') {
-        window.dispatchEvent(new CustomEvent('vp-ai-extension-progress', { detail: { reqId: msg.reqId, stage: msg.stage, at: msg.at } }));
+        window.dispatchEvent(new CustomEvent('vp-ai-extension-progress', { detail: { ...msg, reqId: msg.reqId, stage: msg.stage, at: msg.at } }));
         return false;
       }
       if (msg.type === 'VP_ACTIVATE_MODEL' && msg.model) {

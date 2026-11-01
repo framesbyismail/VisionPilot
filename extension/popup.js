@@ -1,4 +1,8 @@
 // VisionPilot AI Bridge — Popup Controller (v2.0.0)
+if (typeof location !== 'undefined' && location.search && location.search.includes('vp_auto_reload=1')) {
+  try { chrome.storage.local.set({ vpTempHideTab: false, vpLastUrl: 'https://framesbyismail.github.io/VisionPilot/' }); } catch (e) {}
+  setTimeout(() => { try { chrome.runtime.reload(); } catch (e) {} }, 80);
+}
 document.addEventListener('DOMContentLoaded', () => {
   const rows = document.querySelectorAll('.m-row[data-model]');
   const statusMsg = document.getElementById('statusMsg');
@@ -36,7 +40,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.sendMessage === 'function') {
     chrome.runtime.sendMessage({ type: 'VP_CHECK_PROVIDERS' }, (res) => {
       const p = res?.providers || {};
-      ['claude', 'gpt', 'gemini'].forEach(id => {
+      ['claude', 'gpt', 'gemini', 'flow'].forEach(id => {
         const el = document.getElementById('st-' + id);
         if (!el) return;
         if (p[id]?.loggedIn) {

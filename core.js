@@ -45,6 +45,14 @@ const BODIES = [
    look:'Canon full-frame: warm natural color, smooth skin tones, clean shadows'},
   {id:'canon-r7', group:'Canon EOS R (mirrorless)', name:'Canon EOS R7 (APS-C)', sensorW:22.3, crop:1.6, kind:'apsc', mount:'canon', sensorName:'APS-C 32MP',
    look:'Canon APS-C 32MP: crisp detail, 1.6× crop field of view'},
+  {id:'arri-alexa65', group:'Hollywood Cinema', name:'ARRI Alexa 65 (65mm IMAX Cinema)', sensorW:54.12, crop:0.67, kind:'lf', mount:'arri', sensorName:'ARRI A3X 65mm Large Format',
+   look:'ARRI Alexa 65 Hollywood large-format 65mm cinema look: creamy highlight roll-off, rich natural skin tones, monumental 65mm shallow depth of field'},
+  {id:'arri-minilf', group:'Hollywood Cinema', name:'ARRI Alexa Mini LF', sensorW:36.7, crop:0.98, kind:'ff', mount:'arri', sensorName:'ARRI Large Format 4.5K',
+   look:'ARRI Alexa Mini LF Hollywood cinema look: industry-standard dynamic range, organic ARRI LogC4 color science, gentle highlight roll-off'},
+  {id:'red-vraptor-xl', group:'Hollywood Cinema', name:'RED V-Raptor XL 8K VV', sensorW:40.96, crop:0.88, kind:'vv', mount:'red', sensorName:'VistaVision 8K VV 35.4MP',
+   look:'RED V-Raptor XL 8K VistaVision cinema look: ultra-sharp 8K resolution, deep shadow latitude, bold modern blockbuster contrast'},
+  {id:'panavision-dxl2', group:'Hollywood Cinema', name:'Panavision Millennium DXL2 8K', sensorW:40.96, crop:0.88, kind:'vv', mount:'panavision', sensorName:'Large Format 8K Light Iron',
+   look:'Panavision Millennium DXL2 Hollywood feature film look: Light Iron color science, lush cinematic tones, classic silver-screen texture'},
   {id:'custom', group:'Other', name:'Custom / CG camera', sensorW:36, crop:1, kind:'custom', mount:'any', sensorName:'Custom film gate',
    look:'neutral high-end camera rendering'}
 ];
@@ -60,6 +68,13 @@ const LENSES = {
   canon:[{id:'c1535',name:'Canon RF 15-35mm F2.8 L IS USM',min:15,max:35,ap:2.8},{id:'c2470',name:'Canon RF 24-70mm F2.8 L IS USM',min:24,max:70,ap:2.8},
          {id:'c50',name:'Canon RF 50mm F1.2 L USM',min:50,max:50,ap:1.2},{id:'c85',name:'Canon RF 85mm F1.2 L USM',min:85,max:85,ap:1.2},
          {id:'c100m',name:'Canon RF 100mm F2.8 L Macro IS USM',min:100,max:100,ap:2.8,macro:true},{id:'c70200',name:'Canon RF 70-200mm F2.8 L IS USM Z',min:70,max:200,ap:2.8}],
+  arri:[{id:'ar35',name:'ARRI Signature Prime 35mm T1.8',min:35,max:35,ap:1.8},{id:'ar47',name:'ARRI Signature Prime 47mm T1.8',min:47,max:47,ap:1.8},
+        {id:'ar75',name:'ARRI Signature Prime 75mm T1.8',min:75,max:75,ap:1.8},{id:'cooke50',name:'Cooke Anamorphic/i Full Frame Plus 50mm T2.3',min:50,max:50,ap:2.0},
+        {id:'atlas40',name:'Atlas Orion 2x Anamorphic 40mm T2.0',min:40,max:40,ap:2.0},{id:'zm35',name:'Zeiss Master Prime 35mm T1.3',min:35,max:35,ap:1.4}],
+  red:[{id:'atlas40',name:'Atlas Orion 2x Anamorphic 40mm T2.0',min:40,max:40,ap:2.0},{id:'atlas65',name:'Atlas Orion 2x Anamorphic 65mm T2.0',min:65,max:65,ap:2.0},
+       {id:'cookes7',name:'Cooke S7/i Full Frame Plus 50mm T2.0',min:50,max:50,ap:2.0},{id:'zeisssp35',name:'Zeiss Supreme Prime Radiance 35mm T1.5',min:35,max:35,ap:1.4}],
+  panavision:[{id:'pv35',name:'Panavision Primo 70 35mm T2.0',min:35,max:35,ap:2.0},{id:'pv50',name:'Panavision Primo 70 50mm T2.0',min:50,max:50,ap:2.0},
+              {id:'pvc40',name:'Panavision C-Series Anamorphic 40mm T2.8',min:40,max:40,ap:2.8},{id:'pvs65',name:'Panavision Sphero 65 65mm T2.0',min:65,max:65,ap:2.0}],
   any:[]
 };
 const APERTURES = [1.2,1.4,1.8,2,2.8,4,5.6,8,11,16,22];
@@ -298,7 +313,7 @@ const DEF_FOCUS = () => ({
 });
 const DEF = {app:'image', mode:'normal', aiModel:'visionpilot', az:35, el:12, dist:2.4, roll:0, bodyId:'iphone18pro', lensId:'ip24', focal:24 / 3.67, sensorW:9.8, aperture:1.78, dof:true, camDefV2:true,
   offX:0, offY:0, subjType:'person', count:1, types:[], subjCm:175, subjColor:'#e85d2b', subjDesc:'', descPinned:false, descPinnedAt:0, descUserEdited:false, refView:'front', refBg:0,
-  aspect:'4:5', aspectCustom:'', light:'match', lightCustom:'', bg:'keep', bgCustom:'', bgPinned:'', extra:'', customKeys:[],
+  aspect:'16:9', aspectCustom:'', genImgCount:1, light:'match', lightCustom:'', bg:'keep', bgCustom:'', bgPinned:'', extra:'', customKeys:[],
   imgPresetId:'', imgPresetPrompt:'',
   keys:['4k','face','product','char','outfit','logo','real','detail','photo','skin','anatomy','light','sharp','clean','live','consist','mblur','stable','physics','speed','cine','parallax','nocut','refguide'], keysV2:true, keysV3:true, keysV4:true, keysV5:true,
   focus:DEF_FOCUS(),
@@ -319,6 +334,13 @@ try {
   if (saved) {
     S = {...S, ...saved};
     if (S.bodyId === 'iphone17pro') S.bodyId = 'iphone18pro';
+    const FLOW_ASPECTS = ['16:9', '4:3', '1:1', '3:4', '9:16'];
+    if (!FLOW_ASPECTS.includes(S.aspect)) {
+      const mapLegacyAspect = {'4:5':'3:4', '2:3':'3:4', '3:2':'4:3', '6:5':'4:3', '21:9':'16:9'};
+      S.aspect = mapLegacyAspect[S.aspect] || '16:9';
+      S.aspectCustom = '';
+    }
+    if (![1, 2, 3, 4].includes(Number(S.genImgCount))) S.genImgCount = 1;
     if (!saved.camDefV2) {
       S.bodyId = DEF.bodyId;
       S.lensId = DEF.lensId;
@@ -433,8 +455,10 @@ function enforce() {
   if (!PRO) {
     S.mode = 'normal'; S.lightOn = false;
     S.light = 'match'; S.bg = 'keep';
-  } else if (S.mode !== 'adv') {
-    S.lightOn = false;
+  } else {
+    S.mode = 'adv';
+    document.body.classList.add('adv', 'pro');
+    hideAdv();
   }
   // Image Detection & Focus is part of Advanced mode: in Normal mode it always stays off (whatever turned it on)
   if (S.mode !== 'adv' && S.focus && S.focus.on) S.focus.on = false;
@@ -447,17 +471,25 @@ function ensureAdvMode(what) {
   }
   if (S.mode !== 'adv') {
     S.mode = 'adv';
-    document.body.classList.add('adv');
+    document.body.classList.add('adv', 'pro');
     if ($('modeNormal')) $('modeNormal').hidden = true;
     if ($('modeAdv')) $('modeAdv').disabled = true;
     renderDock();
     afterLayout();
     toast('Advanced mode enabled');
   }
+  hideAdv();
   return true;
 }
 // the one "Advanced mode needed" panel every locked control uses; auth.js fills in the sign-in / request buttons
 function needAdv(what) {
+  // Never show the "Advanced mode needed" notification if the user already has Advanced mode ON
+  if (PRO || S.mode === 'adv' || document.body.classList.contains('adv') || document.body.classList.contains('pro')) {
+    S.mode = 'adv';
+    document.body.classList.add('adv');
+    hideAdv();
+    return;
+  }
   $('advMsg').textContent = (what ? what + ' is part of Advanced mode. ' : '')
     + 'Advanced mode opens Video & 3D, Lighting, Camera & lens, Focus point, Extra notes, 4x/4K Upscaling and every background and lighting preset. Send a request and framesbyismail will give you access.';
   hooks.advRender?.();
@@ -472,10 +504,10 @@ $('advClose').addEventListener('click', hideAdv);
 $('advPopBackdrop')?.addEventListener('click', hideAdv);
 document.addEventListener('keydown', e => { if (e.key === 'Escape') hideAdv(); });
 
-// Normal mode user reminder: every 15 minutes, show the centered Advanced Mode prompt window
+// Normal mode user reminder: every 15 minutes, show the centered Advanced Mode prompt window ONLY for Normal mode users
 const ADV_REMINDER_INTERVAL_MS = 15 * 60 * 1000;
 function triggerNormalModeAdvReminder() {
-  if (S.mode !== 'adv') {
+  if (!PRO && S.mode !== 'adv' && !document.body.classList.contains('adv') && !document.body.classList.contains('pro')) {
     needAdv('Upgrade to Advanced Mode');
   }
 }
@@ -484,6 +516,11 @@ window.__triggerAdvReminderForTest = triggerNormalModeAdvReminder;
 function setPro(v) {
   v = !GATED || !!v;
   try { localStorage.setItem('vp-pro', v ? '1' : '0'); } catch (e) {}
+  if (v) {
+    S.mode = 'adv';
+    document.body.classList.add('adv', 'pro');
+    hideAdv();
+  }
   if (v === PRO) return;
   PRO = v;
   if (!PRO && S.app === 'video') { hooks.leaveVideo?.(); S.app = 'image'; }
@@ -1603,16 +1640,13 @@ function autoSelectAspectFromImage(img) {
   const w = img.naturalWidth || img.width;
   const h = img.naturalHeight || img.height;
   const r = w / Math.max(1, h);
+  // Google Flow's 5 supported aspect ratios: 16:9, 4:3, 1:1, 3:4, 9:16
   const std = [
-    ['1:1', 1 / 1],
-    ['4:5', 4 / 5],
-    ['3:4', 3 / 4],
-    ['2:3', 2 / 3],
-    ['3:2', 3 / 2],
     ['16:9', 16 / 9],
-    ['9:16', 9 / 16],
-    ['6:5', 6 / 5],
-    ['21:9', 21 / 9]
+    ['4:3', 4 / 3],
+    ['1:1', 1 / 1],
+    ['3:4', 3 / 4],
+    ['9:16', 9 / 16]
   ];
   let best = std[0];
   let minDiff = Infinity;
@@ -1623,45 +1657,27 @@ function autoSelectAspectFromImage(img) {
       best = item;
     }
   }
-  if (minDiff < 0.055) {
-    S.aspect = best[0];
-    S.aspectCustom = '';
-  } else {
-    const gcd = (a, b) => (b === 0 ? a : gcd(b, a % b));
-    const g = gcd(w, h) || 1;
-    const rw = Math.round(w / g);
-    const rh = Math.round(h / g);
-    if (rw > 64 || rh > 64) {
-      S.aspect = best[0];
-      S.aspectCustom = '';
-    } else {
-      S.aspect = 'custom';
-      S.aspectCustom = `${rw}:${rh}`;
-    }
-  }
+  S.aspect = best[0];
+  S.aspectCustom = '';
   if ($('aspect')) {
     $('aspect').value = S.aspect;
     refreshDD($('aspect'));
   }
   if ($('aspectCustom')) {
-    $('aspectCustom').hidden = S.aspect !== 'custom';
-    $('aspectCustom').value = S.aspectCustom;
+    $('aspectCustom').hidden = true;
+    $('aspectCustom').value = '';
   }
 }
 function getAspectSizeInfo(ratioStr) {
-  const cleanRatio = (ratioStr || '4:5').trim();
+  const cleanRatio = (ratioStr || '16:9').trim();
   const stdPx = {
-    '1:1': [1024, 1024],
-    '4:5': [1024, 1280],
-    '3:4': [1080, 1440],
-    '2:3': [1024, 1536],
-    '3:2': [1536, 1024],
     '16:9': [1920, 1080],
-    '9:16': [1080, 1920],
-    '6:5': [1200, 1000],
-    '21:9': [2520, 1080]
+    '4:3': [1440, 1080],
+    '1:1': [1024, 1024],
+    '3:4': [1080, 1440],
+    '9:16': [1080, 1920]
   };
-  let [rw, rh] = [4, 5];
+  let [rw, rh] = [16, 9];
   const m = cleanRatio.match(/^(\d+(?:\.\d+)?)\s*[:/×x]\s*(\d+(?:\.\d+)?)$/i);
   if (m) {
     rw = Math.max(1, parseFloat(m[1]));
@@ -4987,8 +5003,23 @@ function toggleHistoryDrawer(forceState) {
   const moreBtn = $('vpMoreBtn');
   if (!drawer) return;
   const nextOpen = typeof forceState === 'boolean' ? forceState : !drawer.classList.contains('open');
-  // the menu always opens with every section expanded
-  if (nextOpen) ['vpDrawerUserSec', 'vpDrawerSettingsSec', 'vpDrawerDlSec', 'vpDrawerHistSec'].forEach(id => { const s = $(id); if (!s) return; s.classList.remove('min'); const head = s.querySelector('.vpd-sec-head'), body = s.querySelector('.vpd-sec-body, .vph-body'); if (body) body.hidden = false; if (head) { head.setAttribute('aria-expanded', 'true'); const ar = head.querySelector('.vpd-arrow'); if (ar) ar.textContent = '▾'; } });
+  // By default, keep User, Settings, and Downloads minimized and only History / Library expanded
+  if (nextOpen) {
+    ['vpDrawerUserSec', 'vpDrawerSettingsSec', 'vpDrawerDlSec'].forEach(id => {
+      const s = $(id); if (!s) return;
+      s.classList.add('min');
+      const head = s.querySelector('.vpd-sec-head'), body = s.querySelector('.vpd-sec-body, .vph-body');
+      if (body) body.hidden = true;
+      if (head) { head.setAttribute('aria-expanded', 'false'); const ar = head.querySelector('.vpd-arrow, .vpd-sec-arr'); if (ar) ar.textContent = '▸'; }
+    });
+    const histSec = $('vpDrawerHistSec');
+    if (histSec) {
+      histSec.classList.remove('min');
+      const head = histSec.querySelector('.vpd-sec-head'), body = histSec.querySelector('.vpd-sec-body, .vph-body');
+      if (body) body.hidden = false;
+      if (head) { head.setAttribute('aria-expanded', 'true'); const ar = head.querySelector('.vpd-arrow, .vpd-sec-arr'); if (ar) ar.textContent = '▾'; }
+    }
+  }
   drawer.classList.toggle('open', nextOpen);
   drawer.setAttribute('aria-hidden', String(!nextOpen));
   if (backdrop) backdrop.hidden = !nextOpen;
@@ -5017,12 +5048,12 @@ function bindDrawerCollapsibleSection(secId, headId, bodyId, arrowSelector) {
     const isMin = sec.classList.toggle('min');
     body.hidden = isMin;
     head.setAttribute('aria-expanded', String(!isMin));
-    const arr = arrowSelector ? head.querySelector(arrowSelector) : head.querySelector('.vpd-sec-arr');
+    const arr = (arrowSelector ? head.querySelector(arrowSelector) : null) || head.querySelector('.vpd-arrow, .vpd-sec-arr');
     if (arr) arr.textContent = isMin ? '▸' : '▾';
   });
 }
 bindDrawerCollapsibleSection('vpDrawerUserSec', 'vpDrawerUserHead', 'vpDrawerUserBody', '#vpDrawerUserArrow');
-bindDrawerCollapsibleSection('vpDrawerSettingsSec', 'vpDrawerSettingsHead', 'vpDrawerSettingsBody', '.vpd-sec-arr');
+bindDrawerCollapsibleSection('vpDrawerSettingsSec', 'vpDrawerSettingsHead', 'vpDrawerSettingsBody', '#vpDrawerSettingsArrow');
 bindDrawerCollapsibleSection('vpDrawerDlSec', 'vpDrawerDlHead', 'vpDrawerDlBody', '#vpDrawerDlArrow');
 bindDrawerCollapsibleSection('vpDrawerHistSec', 'vpDrawerHistHead', 'vpHistoryList', '#vpHistoryMinArrow');
 // Downloads: the newest Windows installer of the latest GitHub release (its file name has the version in it)
@@ -5230,6 +5261,10 @@ window.syncScaleButtonsLockState = syncScaleButtonsLockState;
 
 function openGeneratedImageResultModal(imageDataUrl, modelLabel = '', meta = {}) {
   const modal = $('genImgResultModal');
+  const card = $('genImgResultCard');
+  const multiGrid = $('genImgMultiGrid');
+  const prevBox = $('genImgPreviewBox');
+  const actBox = $('genImgResultActions');
   const titleEl = $('genImgResultTitle');
   const pill = $('genImgResultModelPill');
   const pic = $('genImgResultPic');
@@ -5241,12 +5276,25 @@ function openGeneratedImageResultModal(imageDataUrl, modelLabel = '', meta = {})
   const upRow = $('genImgUpscaleRow');
   if (!modal || !pic) return;
 
+  if (card) {
+    card.classList.remove('is-multi-grid');
+    card.style.removeProperty('--res-multi-w');
+  }
+  if (multiGrid) {
+    multiGrid.hidden = true;
+    multiGrid.innerHTML = '';
+  }
+  if (prevBox) prevBox.hidden = false;
+  if (actBox) actBox.hidden = false;
+
   currentResultModalState = {
     mode: 'generated_image',
     imageDataUrl,
     mainImageDataUrl: meta.mainImageDataUrl || imageDataUrl,
     promptText: meta.promptText || '',
     modelLabel: modelLabel || 'Generated Image',
+    imgModelId: meta.imgModelId || '',
+    imageIndex: meta.imageIndex || 0,
     aspectRatio: meta.aspectRatio || '',
     splitPct: 50,
     viewMode: 'split',
@@ -5288,6 +5336,10 @@ window.openGeneratedImageResultModal = openGeneratedImageResultModal;
 
 function openUpscaledImageResultModal({ origDataUrl, upscaledDataUrl, scaleLabel = '2x', width = 0, height = 0 } = {}) {
   const modal = $('genImgResultModal');
+  const card = $('genImgResultCard');
+  const multiGrid = $('genImgMultiGrid');
+  const prevBox = $('genImgPreviewBox');
+  const actBox = $('genImgResultActions');
   const titleEl = $('genImgResultTitle');
   const pill = $('genImgResultModelPill');
   const pic = $('genImgResultPic');
@@ -5308,6 +5360,16 @@ function openUpscaledImageResultModal({ origDataUrl, upscaledDataUrl, scaleLabel
     toast('Error: Upscaled image data is empty.');
     return;
   }
+  if (card) {
+    card.classList.remove('is-multi-grid');
+    card.style.removeProperty('--res-multi-w');
+  }
+  if (multiGrid) {
+    multiGrid.hidden = true;
+    multiGrid.innerHTML = '';
+  }
+  if (prevBox) prevBox.hidden = false;
+  if (actBox) actBox.hidden = false;
 
   currentResultModalState = {
     mode: 'upscaled_image',
@@ -5386,6 +5448,16 @@ function openUpscaledVideoResultModal({
     toast('Error: Could not open Upscaled Video window.');
     return;
   }
+  if ($('genImgResultCard')) {
+    $('genImgResultCard').classList.remove('is-multi-grid');
+    $('genImgResultCard').style.removeProperty('--res-multi-w');
+  }
+  if ($('genImgMultiGrid')) {
+    $('genImgMultiGrid').hidden = true;
+    $('genImgMultiGrid').innerHTML = '';
+  }
+  if ($('genImgPreviewBox')) $('genImgPreviewBox').hidden = false;
+  if ($('genImgResultActions')) $('genImgResultActions').hidden = false;
 
   currentResultModalState = {
     mode: 'upscaled_video',
@@ -5488,6 +5560,16 @@ function openExportedMediaModal({
   const dlBtn = $('genImgDownloadBtn');
   const upRow = $('genImgUpscaleRow');
   if (!modal) return;
+  if ($('genImgResultCard')) {
+    $('genImgResultCard').classList.remove('is-multi-grid');
+    $('genImgResultCard').style.removeProperty('--res-multi-w');
+  }
+  if ($('genImgMultiGrid')) {
+    $('genImgMultiGrid').hidden = true;
+    $('genImgMultiGrid').innerHTML = '';
+  }
+  if ($('genImgPreviewBox')) $('genImgPreviewBox').hidden = false;
+  if ($('genImgResultActions')) $('genImgResultActions').hidden = false;
 
   const isVideo = mediaType === 'video';
   if (titleEl) {
@@ -5746,7 +5828,9 @@ async function runGenerateImageWithModel(imgModelId) {
 
   const imgModelInfo = window.VPAIBridge?.getImageModelInfo
     ? window.VPAIBridge.getImageModelInfo(imgModelId)
-    : { fullName: imgModelId };
+    : { fullName: imgModelId, name: imgModelId };
+
+  const imageCount = clamp(Number(S.genImgCount) || 1, 1, 4);
 
   // PART 2.2: Always build the current, up-to-date background prompt directly from live settings
   const promptObj = ensureBackgroundImagePrompt();
@@ -5756,36 +5840,79 @@ async function runGenerateImageWithModel(imgModelId) {
   btn.disabled = true;
   btn.innerHTML = '<span class="spin"></span>';
   setImageGenBoxesLocked(true);
-  if ($('status')) $('status').textContent = `Generating image via ${imgModelInfo.name || imgModelId}…`;
-  setDescLoading(true, `Generating image with ${imgModelInfo.fullName} in a fresh chat…`);
+  if ($('status')) $('status').textContent = `Generating ${imageCount > 1 ? imageCount + ' images' : 'image'} via ${imgModelInfo.name || imgModelId}…`;
+  setDescLoading(true, `Generating ${imageCount > 1 ? imageCount + ' images' : 'image'} with ${imgModelInfo.fullName}…`);
+
+  const aspectVal = S.aspect || '16:9';
+  let multiModalOpened = false;
 
   try {
-    const res = await window.VPAIBridge.runImageGenerationStep(mainRef, promptObj, imgModelId);
+    const res = await window.VPAIBridge.runImageGenerationStep(mainRef, promptObj, imgModelId, {
+      imageCount,
+      onImageReady: async (partial) => {
+        if (!partial || !partial.imageDataUrl) return;
+        const idx = clamp(Number(partial.index) || 0, 0, imageCount - 1);
+        if (imageCount > 1) {
+          if (!multiModalOpened) {
+            multiModalOpened = true;
+            openMultiGeneratedImagesModal({
+              totalCount: imageCount,
+              images: [],
+              modelLabel: `${imgModelInfo.name || imgModelId} · ${partial.aspectRatio || aspectVal} · ${imageCount} Images`,
+              aspectRatio: partial.aspectRatio || aspectVal,
+              imgModelId,
+              promptText: partial.promptText || '',
+              mainImageDataUrl: partial.mainImageDataUrl || ''
+            });
+          }
+          updateMultiGeneratedImageSlot(idx, partial.imageDataUrl);
+          if ($('status')) $('status').textContent = `Generated ${idx + 1}/${imageCount} images…`;
+        }
+      }
+    });
     lastAIError = '';
     aiConnectedOk = true;
     if ($('status')) {
-      $('status').textContent = 'Image generated';
+      $('status').textContent = imageCount > 1 ? `${(res.images || [res.imageDataUrl]).length} images generated` : 'Image generated';
       $('status').classList.remove('stale');
     }
 
-    await saveHistoryEntry({
-      kind: 'generated_image',
-      mainImageDataUrl: res.mainImageDataUrl,
-      generatedImageDataUrl: res.imageDataUrl,
-      leftLabel: 'Main Image',
-      rightLabel: 'Generated Image',
-      promptText: res.promptText,
-      modelName: res.modelName,
-      aspectRatio: res.aspectRatio,
-      createdAt: res.createdAt || Date.now()
-    });
+    const allImgs = Array.isArray(res.images) && res.images.length ? res.images : [res.imageDataUrl].filter(Boolean);
+    for (let i = 0; i < allImgs.length; i++) {
+      await saveHistoryEntry({
+        kind: 'generated_image',
+        mainImageDataUrl: res.mainImageDataUrl,
+        generatedImageDataUrl: allImgs[i],
+        leftLabel: 'Main Image',
+        rightLabel: allImgs.length > 1 ? `Generated #${i + 1}` : 'Generated Image',
+        promptText: res.promptText,
+        modelName: res.modelName,
+        aspectRatio: res.aspectRatio,
+        createdAt: (res.createdAt || Date.now()) + i
+      });
+    }
 
-    openGeneratedImageResultModal(res.imageDataUrl, `${res.modelName} · ${res.aspectRatio}`, {
-      mainImageDataUrl: res.mainImageDataUrl,
-      promptText: res.promptText,
-      aspectRatio: res.aspectRatio
-    });
-    toast(`Generated image ready from ${res.modelName}`);
+    if (imageCount > 1 || allImgs.length > 1) {
+      openMultiGeneratedImagesModal({
+        totalCount: Math.max(imageCount, allImgs.length),
+        images: allImgs,
+        modelLabel: `${res.modelName} · ${res.aspectRatio} · ${allImgs.length} Images`,
+        aspectRatio: res.aspectRatio,
+        imgModelId,
+        promptText: res.promptText,
+        mainImageDataUrl: res.mainImageDataUrl
+      });
+      toast(`${allImgs.length} generated images ready from ${res.modelName}`);
+    } else {
+      openGeneratedImageResultModal(res.imageDataUrl, `${res.modelName} · ${res.aspectRatio}`, {
+        mainImageDataUrl: res.mainImageDataUrl,
+        promptText: res.promptText,
+        aspectRatio: res.aspectRatio,
+        imgModelId,
+        imageIndex: 0
+      });
+      toast(`Generated image ready from ${res.modelName}`);
+    }
   } catch (err) {
     if (!err?.cancelled) {
       const errMsg = err?.message || String(err);
@@ -5802,6 +5929,25 @@ async function runGenerateImageWithModel(imgModelId) {
     renderLiveAIStatus();
   }
 }
+
+function syncGenImgCountButtonsUI() {
+  const c = clamp(Number(S.genImgCount) || 1, 1, 4);
+  S.genImgCount = c;
+  document.querySelectorAll('.gen-img-count-btn[data-img-count]').forEach((b) => {
+    const on = Number(b.dataset.imgCount) === c;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+}
+document.querySelectorAll('.gen-img-count-btn[data-img-count]').forEach((b) => {
+  b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    S.genImgCount = clamp(Number(b.dataset.imgCount) || 1, 1, 4);
+    syncGenImgCountButtonsUI();
+    save();
+  });
+});
+syncGenImgCountButtonsUI();
 
 document.querySelectorAll('.gen-img-model-opt[data-img-model]').forEach((optBtn) => {
   optBtn.addEventListener('click', () => {
@@ -6267,6 +6413,16 @@ async function dataUrlToBlob(dataUrl) {
 function openBatchUpscaleDoneModal(batchInfo) {
   const modal = $('batchUpscaleDoneModal');
   if (!modal) return;
+  if ($('genImgResultCard')) {
+    $('genImgResultCard').classList.remove('is-multi-grid');
+    $('genImgResultCard').style.removeProperty('--res-multi-w');
+  }
+  if ($('genImgMultiGrid')) {
+    $('genImgMultiGrid').hidden = true;
+    $('genImgMultiGrid').innerHTML = '';
+  }
+  if ($('genImgPreviewBox')) $('genImgPreviewBox').hidden = false;
+  if ($('genImgResultActions')) $('genImgResultActions').hidden = false;
   const msgEl = $('batchUpscaleDoneMsg');
   const pillEl = $('batchUpscaleDonePill');
   const tagEl = $('batchUpscaleDoneFolderTag');
@@ -6649,6 +6805,47 @@ $('imgUpscaleCancelBtn')?.addEventListener('click', (e) => {
 });
 
 // PART 4.4: Upscaling directly from the Generated Image Window ("2x Upscale and Download" / "4x Upscale and Download")
+// Logic: When upscaling an image generated by Nano Banana 2.1 (Google Flow), first try Google Flow's 2K (for 2x) or 4K (for 4x) download;
+// if the user's Google Flow account does not have 4K/2K available, automatically fall back to VisionPilot's 4K/2x local upscaler.
+async function upscaleGeneratedImageSmart(srcDataUrl, scaleFactor, { imgModelId = '', imageIndex = 0, onProgress = null, checkCancelled = null } = {}) {
+  const isNanoBananaFlow = imgModelId === 'gemini' || imgModelId === 'flow' || /Nano Banana|Google Flow/i.test(currentResultModalState?.modelLabel || '');
+  if (isNanoBananaFlow && window.VPAIBridge?.runFlowUpscaleStep) {
+    try {
+      if (onProgress) onProgress(15, `Google Flow ${scaleFactor === 4 ? '4K' : '2K'}`);
+      const flowRes = await window.VPAIBridge.runFlowUpscaleStep(scaleFactor, imageIndex, srcDataUrl);
+      if (flowRes && flowRes.ok && flowRes.imageDataUrl) {
+        const im = await new Promise((resolve, reject) => {
+          const el = new Image();
+          el.onload = () => resolve(el);
+          el.onerror = () => reject(new Error('Invalid Flow upscaled image'));
+          el.src = flowRes.imageDataUrl;
+        });
+        return {
+          dataUrl: flowRes.imageDataUrl,
+          width: im.naturalWidth || im.width || (scaleFactor === 4 ? 3840 : 2048),
+          height: im.naturalHeight || im.height || (scaleFactor === 4 ? 2160 : 1152),
+          source: `Google Flow ${scaleFactor === 4 ? '4K' : '2K'}`
+        };
+      }
+    } catch (_) {
+      // Fallback to VisionPilot's built-in upscaler below
+    }
+  }
+  const imgEl = await new Promise((resolve, reject) => {
+    const im = new Image();
+    im.onload = () => resolve(im);
+    im.onerror = () => reject(new Error('Could not load generated image for upscaling.'));
+    im.src = srcDataUrl;
+  });
+  const localRes = await runRealEsrganImageUpscale(imgEl, scaleFactor, (pct) => {
+    if (onProgress) onProgress(pct, `VisionPilot ${scaleFactor}x`);
+  }, checkCancelled);
+  return {
+    ...localRes,
+    source: `VisionPilot ${scaleFactor}x`
+  };
+}
+
 async function runGeneratedWindowUpscaleAndDownload(scaleFactor) {
   if (imgUpscaleRunning) return;
   if (scaleFactor === 4 && S.mode !== 'adv' && !PRO) {
@@ -6674,25 +6871,18 @@ async function runGeneratedWindowUpscaleAndDownload(scaleFactor) {
   if (btn4x) btn4x.disabled = true;
   if (activeBtn) {
     activeBtn.classList.add('busy');
-    activeBtn.innerHTML = `<span class="spin"></span> Upscaling ${scaleFactor}x… 0%`;
+    activeBtn.innerHTML = `<span class="spin"></span> Upscaling ${scaleFactor}x…`;
   }
 
   try {
-    const imgEl = await new Promise((resolve, reject) => {
-      const im = new Image();
-      im.onload = () => resolve(im);
-      im.onerror = () => reject(new Error('Could not load generated image for upscaling.'));
-      im.src = srcDataUrl;
-    });
-
-    const res = await runRealEsrganImageUpscale(
-      imgEl,
-      scaleFactor,
-      (pct) => {
-        if (activeBtn) activeBtn.innerHTML = `<span class="spin"></span> Upscaling ${scaleFactor}x… ${pct}%`;
+    const res = await upscaleGeneratedImageSmart(srcDataUrl, scaleFactor, {
+      imgModelId: currentResultModalState.imgModelId || '',
+      imageIndex: currentResultModalState.imageIndex || 0,
+      onProgress: (pct, srcName) => {
+        if (activeBtn) activeBtn.innerHTML = `<span class="spin"></span> ${srcName || ('Upscaling ' + scaleFactor + 'x')}… ${pct}%`;
       },
-      () => imgUpscaleAbort || Boolean($('genImgResultModal')?.hidden)
-    );
+      checkCancelled: () => imgUpscaleAbort || Boolean($('genImgResultModal')?.hidden)
+    });
 
     if (imgUpscaleAbort || $('genImgResultModal')?.hidden) {
       throw Object.assign(new Error('Upscale cancelled.'), { cancelled: true });
@@ -6712,7 +6902,7 @@ async function runGeneratedWindowUpscaleAndDownload(scaleFactor) {
       rightLabel: 'Upscaled Image',
       scaleLabel,
       promptText: currentResultModalState.promptText || '',
-      modelName: `Upscaled Image (${scaleLabel})`,
+      modelName: `${res.source || 'Upscaled Image'} (${scaleLabel})`,
       aspectRatio: `${res.width}×${res.height}`,
       width: res.width,
       height: res.height,
@@ -6736,7 +6926,7 @@ async function runGeneratedWindowUpscaleAndDownload(scaleFactor) {
     a.click();
     setTimeout(() => a.remove(), 300);
 
-    toast(`${scaleLabel} upscaled image downloaded and saved to History / Library`);
+    toast(`${scaleLabel} upscaled image (${res.source || scaleLabel}) downloaded and saved to History / Library`);
   } catch (err) {
     if (!err?.cancelled) {
       const msg = err?.message || String(err);
@@ -6761,6 +6951,188 @@ async function runGeneratedWindowUpscaleAndDownload(scaleFactor) {
 
 $('genWinUpscale2xBtn')?.addEventListener('click', () => runGeneratedWindowUpscaleAndDownload(2));
 $('genWinUpscale4xBtn')?.addEventListener('click', () => runGeneratedWindowUpscaleAndDownload(4));
+
+// Multi-Image Generated Result Window (1 to 4 images side-by-side, progressive one-by-one fill, per-image Download + 2x/4x Upscale)
+function renderMultiSlotDOM(idx, imageDataUrl, aspectCss = '16 / 9') {
+  const can4x = Boolean(S.mode === 'adv' || PRO);
+  const hasImg = Boolean(imageDataUrl);
+  return `
+    <div class="genimg-grid-item" data-multi-idx="${idx}">
+      <div class="genimg-grid-thumb" style="--multi-aspect:${escAttr(aspectCss)}">
+        <span class="genimg-grid-badge">#${idx + 1}</span>
+        ${hasImg
+          ? `<img src="${escAttr(imageDataUrl)}" alt="Generated Image #${idx + 1}" data-multi-preview="${idx}">`
+          : `<div class="genimg-grid-slot-busy"><span class="spin"></span><span>Generating image #${idx + 1}…</span></div>`
+        }
+      </div>
+      <div class="genimg-grid-actions">
+        <a class="btn primary genimg-grid-dl${hasImg ? '' : ' upscale-disabled'}" data-multi-dl="${idx}" href="${hasImg ? escAttr(imageDataUrl) : '#'}" download="visionpilot-generated-${idx + 1}-${Date.now()}.png">⬇ Download Image</a>
+        <div class="genimg-grid-up-row">
+          <button type="button" class="btn genwin-up-2x${hasImg ? '' : ' upscale-disabled'}" data-multi-up="2" data-multi-idx="${idx}" ${hasImg ? '' : 'disabled'}>2x Upscale</button>
+          <button type="button" class="btn genwin-up-4x${(hasImg && can4x) ? '' : ' upscale-disabled'}" data-multi-up="4" data-multi-idx="${idx}" ${(hasImg && can4x) ? '' : 'disabled'}>4x Upscale</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function openMultiGeneratedImagesModal({
+  totalCount = 2,
+  images = [],
+  modelLabel = '',
+  aspectRatio = '16:9',
+  imgModelId = 'gemini',
+  promptText = '',
+  mainImageDataUrl = ''
+} = {}) {
+  const modal = $('genImgResultModal');
+  const card = $('genImgResultCard');
+  const multiGrid = $('genImgMultiGrid');
+  const prevBox = $('genImgPreviewBox');
+  const actBox = $('genImgResultActions');
+  const titleEl = $('genImgResultTitle');
+  const pill = $('genImgResultModelPill');
+  const cmpWrap = $('resCompareWrap');
+  const vThumbs = $('resVideoThumbs');
+  const promptWrap = $('resExportPromptWrap');
+  if (!modal || !multiGrid) return;
+
+  const count = clamp(Number(totalCount) || images.length || 2, 1, 4);
+  const aspectCss = String(aspectRatio || '16:9').replace(':', ' / ');
+
+  currentResultModalState = {
+    mode: 'generated_multi',
+    totalCount: count,
+    multiImages: Array.from({ length: count }, (_, i) => images[i] || ''),
+    imageDataUrl: images[0] || '',
+    mainImageDataUrl: mainImageDataUrl || images[0] || '',
+    promptText: promptText || '',
+    modelLabel: modelLabel || 'Generated Images',
+    imgModelId: imgModelId || 'gemini',
+    aspectRatio: aspectRatio || '16:9',
+    aspectCss
+  };
+
+  if (titleEl) {
+    titleEl.textContent = count > 1 ? `Generated Images (${count})` : 'Generated Image';
+    titleEl.classList.remove('is-upscale');
+  }
+  if (pill) {
+    pill.textContent = modelLabel || 'AI Generated';
+    pill.hidden = !modelLabel;
+  }
+
+  if (prevBox) prevBox.hidden = true;
+  if (actBox) actBox.hidden = true;
+  if (cmpWrap) cmpWrap.hidden = true;
+  if (vThumbs) { vThumbs.hidden = true; vThumbs.innerHTML = ''; }
+  if (promptWrap) promptWrap.hidden = true;
+
+  if (card) {
+    card.classList.add('is-multi-grid');
+    const cols = count === 1 ? 1 : count === 2 ? 2 : count === 3 ? 3 : 4;
+    const targetW = count === 1 ? '580px' : count === 2 ? 'min(920px, 95vw)' : count === 3 ? 'min(1160px, 96vw)' : 'min(1340px, 96vw)';
+    card.style.setProperty('--res-multi-w', targetW);
+    multiGrid.style.setProperty('--multi-cols', String(cols));
+  }
+
+  multiGrid.innerHTML = Array.from({ length: count }, (_, i) =>
+    renderMultiSlotDOM(i, currentResultModalState.multiImages[i], aspectCss)
+  ).join('');
+  multiGrid.hidden = false;
+  modal.hidden = false;
+}
+window.openMultiGeneratedImagesModal = openMultiGeneratedImagesModal;
+
+function updateMultiGeneratedImageSlot(idx, imageDataUrl) {
+  if (!imageDataUrl || !currentResultModalState) return;
+  if (!Array.isArray(currentResultModalState.multiImages)) {
+    currentResultModalState.multiImages = [];
+  }
+  currentResultModalState.multiImages[idx] = imageDataUrl;
+  if (!currentResultModalState.imageDataUrl) currentResultModalState.imageDataUrl = imageDataUrl;
+  const multiGrid = $('genImgMultiGrid');
+  if (!multiGrid || multiGrid.hidden) return;
+  const slot = multiGrid.querySelector(`.genimg-grid-item[data-multi-idx="${idx}"]`);
+  const aspectCss = currentResultModalState.aspectCss || '16 / 9';
+  if (slot) {
+    slot.outerHTML = renderMultiSlotDOM(idx, imageDataUrl, aspectCss);
+  }
+}
+window.updateMultiGeneratedImageSlot = updateMultiGeneratedImageSlot;
+
+$('genImgMultiGrid')?.addEventListener('click', async (e) => {
+  const upBtn = e.target.closest('button[data-multi-up][data-multi-idx]');
+  if (!upBtn || upBtn.disabled) return;
+  e.preventDefault();
+  e.stopPropagation();
+
+  const scaleFactor = Number(upBtn.dataset.multiUp) === 4 ? 4 : 2;
+  const idx = Number(upBtn.dataset.multiIdx) || 0;
+  if (scaleFactor === 4 && S.mode !== 'adv' && !PRO) {
+    toast('4x Upscale requires Advanced mode or subscription.');
+    return;
+  }
+  const srcDataUrl = currentResultModalState?.multiImages?.[idx];
+  if (!srcDataUrl || imgUpscaleRunning) return;
+
+  const origHtml = upBtn.innerHTML;
+  imgUpscaleRunning = true;
+  imgUpscaleAbort = false;
+  upBtn.disabled = true;
+  upBtn.classList.add('busy');
+  upBtn.innerHTML = `<span class="spin"></span> ${scaleFactor}x…`;
+
+  try {
+    const res = await upscaleGeneratedImageSmart(srcDataUrl, scaleFactor, {
+      imgModelId: currentResultModalState?.imgModelId || 'gemini',
+      imageIndex: idx,
+      onProgress: (pct) => {
+        upBtn.innerHTML = `<span class="spin"></span> ${scaleFactor}x… ${pct}%`;
+      },
+      checkCancelled: () => imgUpscaleAbort || Boolean($('genImgResultModal')?.hidden)
+    });
+
+    if (res && res.dataUrl) {
+      updateMultiGeneratedImageSlot(idx, res.dataUrl);
+      const scaleLabel = `${scaleFactor}x`;
+      await saveHistoryEntry({
+        kind: 'upscaled_image',
+        mainImageDataUrl: srcDataUrl,
+        upscaledImageDataUrl: res.dataUrl,
+        generatedImageDataUrl: res.dataUrl,
+        leftLabel: `Generated #${idx + 1}`,
+        rightLabel: `Upscaled ${scaleLabel}`,
+        scaleLabel,
+        promptText: currentResultModalState?.promptText || '',
+        modelName: `${res.source || 'Upscaled Image'} (${scaleLabel})`,
+        aspectRatio: `${res.width}×${res.height}`,
+        width: res.width,
+        height: res.height,
+        createdAt: Date.now()
+      });
+
+      const a = document.createElement('a');
+      a.href = res.dataUrl;
+      a.download = `visionpilot-upscaled-${idx + 1}-${scaleLabel}-${Date.now()}.png`;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => a.remove(), 300);
+
+      toast(`Image #${idx + 1} upscaled (${res.source || scaleLabel}) & downloaded!`);
+    }
+  } catch (err) {
+    if (!err?.cancelled) toast(err?.message || String(err));
+  } finally {
+    imgUpscaleRunning = false;
+    imgUpscaleAbort = false;
+    if (upBtn.isConnected) {
+      upBtn.classList.remove('busy');
+      upBtn.disabled = false;
+      upBtn.innerHTML = origHtml;
+    }
+  }
+});
 
 loadHistoryLibrary();
 syncImageUpscalerUI();
@@ -7037,14 +7409,15 @@ function syncAIModelUI() {
   const info = window.VPAIBridge?.getModelInfo ? window.VPAIBridge.getModelInfo(activeId) : {name:'VisionPilot AI', color:'#e85d2b'};
   const extConn = window.VPAIBridge?.isExtensionConnected ? window.VPAIBridge.isExtensionConnected() : false;
   if ($('aiModelCur')) $('aiModelCur').textContent = info.name;
+  const modelColor = activeId === 'visionpilot' ? 'var(--accent)' : (info.color || 'var(--accent)');
   if ($('aiModelM')) {
     $('aiModelM').setAttribute('data-active-model', activeId);
-    $('aiModelM').style.setProperty('--ai-c', info.color || '#e85d2b');
+    $('aiModelM').style.setProperty('--ai-c', modelColor);
   }
   if ($('aiModelBtn')) {
     $('aiModelBtn').setAttribute('data-active-model', activeId);
-    $('aiModelBtn').style.setProperty('--active-ai-color', info.color || '#e85d2b');
-    $('aiModelBtn').style.setProperty('--ai-c', info.color || '#e85d2b');
+    $('aiModelBtn').style.setProperty('--active-ai-color', modelColor);
+    $('aiModelBtn').style.setProperty('--ai-c', modelColor);
   }
   document.querySelectorAll('#aiModelMenu .aimodel-opt').forEach(b => {
     b.setAttribute('aria-checked', String(b.dataset.aimodel === activeId));
@@ -7865,7 +8238,127 @@ function initLoadingScreen() {
   requestAnimationFrame(tick);
 }
 
+/* ---------- 3-Dot Settings Menu: Theme Accent Color Picker & Desktop Fullscreen Top Bar Auto-Hide ---------- */
+function hexToRgbTuple(hex) {
+  const clean = String(hex || '#e85d2b').trim().replace(/^#/, '');
+  const full = clean.length === 3 ? clean.split('').map(c => c + c).join('') : clean.padEnd(6, '0').slice(0, 6);
+  const n = parseInt(full, 16);
+  if (Number.isNaN(n)) return [232, 93, 43];
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function rgbTupleToHex(r, g, b) {
+  const toH = v => clamp(Math.round(v), 0, 255).toString(16).padStart(2, '0');
+  return `#${toH(r)}${toH(g)}${toH(b)}`;
+}
+function applyAccentColor(hexColor, isCustom = false, persist = true) {
+  const [r, g, b] = hexToRgbTuple(hexColor);
+  const hex = rgbTupleToHex(r, g, b);
+  const hoverHex = rgbTupleToHex(r + (255 - r) * 0.16, g + (255 - g) * 0.16, b + (255 - b) * 0.16);
+  const root = document.documentElement;
+  root.style.setProperty('--primary', hex);
+  root.style.setProperty('--accent', hex);
+  root.style.setProperty('--accent-hover', hoverHex);
+  root.style.setProperty('--accent-glow', `rgba(${r},${g},${b},.18)`);
+  root.style.setProperty('--code-n', hoverHex);
+
+  const customInput = $('vpThemeCustomInput');
+  if (customInput && customInput.value.toLowerCase() !== hex.toLowerCase()) {
+    customInput.value = hex;
+  }
+
+  const swatches = document.querySelectorAll('#vpThemeSwatches .vpd-theme-swatch');
+  let matchedPreset = false;
+  swatches.forEach((btn) => {
+    if (btn.dataset.themeColor) {
+      const match = !isCustom && btn.dataset.themeColor.toLowerCase() === hex.toLowerCase();
+      btn.classList.toggle('active', match);
+      if (match) matchedPreset = true;
+    }
+  });
+  const customBtn = $('vpThemeCustomBtn');
+  if (customBtn) {
+    customBtn.classList.toggle('active', Boolean(isCustom || !matchedPreset));
+  }
+
+  if (persist) {
+    try {
+      localStorage.setItem('vp-theme-accent', JSON.stringify({ color: hex, isCustom: Boolean(isCustom || !matchedPreset) }));
+    } catch (_) {}
+  }
+
+  if (typeof readTokens === 'function') readTokens();
+  if (typeof drawAll === 'function') drawAll();
+  if (typeof syncAIModelUI === 'function') syncAIModelUI();
+}
+window.applyAccentColor = applyAccentColor;
+
+function initAccentThemePicker() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('vp-theme-accent') || 'null');
+    if (saved && saved.color) {
+      applyAccentColor(saved.color, !!saved.isCustom, false);
+    }
+  } catch (_) {}
+
+  document.querySelectorAll('#vpThemeSwatches .vpd-theme-swatch[data-theme-color]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const color = btn.dataset.themeColor;
+      if (color) applyAccentColor(color, false, true);
+    });
+  });
+
+  const customInput = $('vpThemeCustomInput');
+  if (customInput) {
+    customInput.addEventListener('input', (e) => {
+      applyAccentColor(e.target.value, true, true);
+    });
+    customInput.addEventListener('change', (e) => {
+      applyAccentColor(e.target.value, true, true);
+    });
+  }
+}
+
+function initFullscreenTopBarAutoHide() {
+  let explicitDesktopFs = false;
+  const checkFullscreen = () => {
+    const browserFs = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+    const screenMatchFs = Boolean(
+      window.visionPilotDesktop?.isDesktop &&
+      window.innerWidth >= window.screen.width - 2 &&
+      window.innerHeight >= window.screen.height - 2
+    );
+    const isFs = Boolean(explicitDesktopFs || browserFs || screenMatchFs);
+    document.body.classList.toggle('vp-fullscreen', isFs);
+    if (!isFs) {
+      document.body.classList.remove('vp-fullscreen-nav-peek');
+    }
+  };
+
+  if (window.visionPilotDesktop?.onFullscreenChanged) {
+    window.visionPilotDesktop.onFullscreenChanged((isFs) => {
+      explicitDesktopFs = Boolean(isFs);
+      checkFullscreen();
+    });
+  }
+  window.addEventListener('resize', checkFullscreen);
+  document.addEventListener('fullscreenchange', checkFullscreen);
+
+  document.addEventListener('mousemove', (e) => {
+    if (!document.body.classList.contains('vp-fullscreen')) return;
+    if (e.clientY <= 16 || e.target?.closest?.('.nav')) {
+      document.body.classList.add('vp-fullscreen-nav-peek');
+    } else if (e.clientY > 82 && !document.querySelector('.nav .aimodelm.open')) {
+      document.body.classList.remove('vp-fullscreen-nav-peek');
+    }
+  }, { passive: true });
+
+  checkFullscreen();
+}
+
 /* ---------- boot ---------- */
+initAccentThemePicker();
+initFullscreenTopBarAutoHide();
 initLoadingScreen();
 initBgRemover();
 readTokens();
@@ -7904,6 +8397,7 @@ window.AC = {S, DEF, refs, $, rad, deg, clamp, norm360, signed, rnd, cap, joinLi
   common, angleParts, azInfo, elInfo, lensCharFor, lightPhrase, rigText, cameraJSON, lightingJSON, getSetup, kelvinRGB, apStr, hardName, buildImagePrompt, ensureBackgroundImagePrompt,
   applyLayout, switchModeState, renderRefs, renderImgPresets, loadUserImgPresets, saveUserImgPresets, resetPrompt, save:queueSave, saveNow:save, views, DMIN, DMAX, showPanel, rigTarget, setIfIdle, undo, redo, histUI, flushSnapshot,
   addFiles, identifyAt, selectMultiSubject, selectAIModel, syncFocus, placeMark, placeBoxes,
+  openMultiGeneratedImagesModal, updateMultiGeneratedImageSlot, upscaleGeneratedImageSmart, applyAccentColor,
   isPro:() => PRO, setPro, needAdv, ensureAdvMode, hideAdv, GATED};
 window.ensureBackgroundImagePrompt = ensureBackgroundImagePrompt;
 document.dispatchEvent(new Event('ac-ready'));

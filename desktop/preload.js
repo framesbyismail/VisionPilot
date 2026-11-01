@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld('visionPilotDesktop', {
   onBridgeProgress: cb => listen('vp:bridge-progress', cb),
   onUpdateStatus: cb => listen('vp:update-status', cb),
   onAuthToken: cb => listen('vp:auth-token', cb),
+  onFullscreenChanged: cb => listen('vp:fullscreen-changed', cb),
+  toggleFullscreen: () => ipcRenderer.invoke('vp:toggle-fullscreen'),
   // the page's real loading steps drive the splash bar, and it says when it is ready
   loadProgress: (pct, label) => ipcRenderer.send('vp:load-progress', pct, label),
   appReady: () => ipcRenderer.send('vp:app-ready')
