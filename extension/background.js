@@ -30,8 +30,29 @@ const PROVIDERS = {
 // The desktop app listens on this computer only (127.0.0.1). This browser keeps a connection to it, so the app can send
 // prompts and image jobs that run here, in the browser where you are signed in to ChatGPT, Claude and Gemini.
 const DESKTOP_PORT = 47821;
-const desktopLink = { ws: null, connected: false, send: null };
-function connectDesktop() {
+const desktopLink = { ws: null, connected: false, send: null, probing: false };
+// Chrome writes "WebSocket connection ... failed: ERR_CONNECTION_REFUSED" to the extension Errors page every time a
+// WebSocket fails, even inside try/catch. So first check quietly with fetch (a caught fetch failure is not logged) and
+// only open the WebSocket when the desktop app is really listening. Any HTTP reply (the app answers 426) means it is up.
+async function desktopAppListening() {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 1500);
+  try {
+    await fetch(`http://127.0.0.1:${DESKTOP_PORT}/vp-extension`, { method: 'GET', cache: 'no-store', signal: ctrl.signal });
+    return true;
+  } catch (e) {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function connectDesktop() {
+  if (desktopLink.ws && desktopLink.ws.readyState <= 1) return;
+  if (desktopLink.probing) return;
+  desktopLink.probing = true;
+  let up = false;
+  try { up = await desktopAppListening(); } finally { desktopLink.probing = false; }
+  if (!up) return; // desktop app is not running: stay silent, try again on the next alarm
   if (desktopLink.ws && desktopLink.ws.readyState <= 1) return;
   let ws;
   try { ws = new WebSocket(`ws://127.0.0.1:${DESKTOP_PORT}/vp-extension`); } catch (e) { return; }
