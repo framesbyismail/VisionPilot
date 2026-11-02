@@ -803,6 +803,75 @@ async function injectProviderHelpers(tabId, scriptFile) {
             } catch (e) {}
           });
         }
+
+        // MAIN-world Google Flow 2K / 4K upscale download interceptor (bypasses CSP via chrome.scripting world: 'MAIN')
+        if (!window.__vpFlowDlHooked) {
+          window.__vpFlowDlHooked = true;
+          const blobMap = new Map();
+          const emitCapturedUpscale = (dataUrl, url = '', nativeDownloadTriggered = true) => {
+            if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:')) return;
+            try {
+              document.documentElement.dataset.vpFlowUpscaleDataUrl = dataUrl;
+              window.postMessage({
+                __vpFlowUpscaleCaptured: true,
+                dataUrl,
+                url: url || '',
+                nativeDownloadTriggered: Boolean(nativeDownloadTriggered)
+              }, '*');
+            } catch (_) {}
+          };
+          const readBlobToDataUrl = (blob, url = '', nativeDownloadTriggered = true) => {
+            try {
+              if (!blob || !(blob instanceof Blob) || blob.size < 15000) return;
+              const reader = new FileReader();
+              reader.onloadend = () => {
+                if (typeof reader.result === 'string' && reader.result.startsWith('data:')) {
+                  emitCapturedUpscale(reader.result, url, nativeDownloadTriggered);
+                }
+              };
+              reader.readAsDataURL(blob);
+            } catch (_) {}
+          };
+
+          const origCreateObjectURL = URL.createObjectURL.bind(URL);
+          URL.createObjectURL = function (obj) {
+            const objectUrl = origCreateObjectURL(obj);
+            try {
+              if (obj instanceof Blob && obj.size > 15000) {
+                blobMap.set(objectUrl, obj);
+                setTimeout(() => blobMap.delete(objectUrl), 120000);
+                if (document.documentElement.dataset.vpFlowUpscaleWatching === 'true' || document.documentElement.dataset.vpFlowCapturingUpscale === 'true') {
+                  readBlobToDataUrl(obj, objectUrl, true);
+                }
+              }
+            } catch (_) {}
+            return objectUrl;
+          };
+
+          const origA = HTMLAnchorElement.prototype.click;
+          HTMLAnchorElement.prototype.click = function (...args) {
+            try {
+              const href = this && this.href ? String(this.href) : '';
+              const isWatching = document.documentElement.dataset.vpFlowUpscaleWatching === 'true' || document.documentElement.dataset.vpFlowCapturingUpscale === 'true';
+              if (href && (this.hasAttribute('download') || isWatching || /blob:|googleusercontent|storage\.googleapis|labs\.google|flow\.google/i.test(href))) {
+                document.documentElement.dataset.vpFlowUpscaleUrl = href;
+                if (isWatching) {
+                  if (blobMap.has(href)) {
+                    readBlobToDataUrl(blobMap.get(href), href, true);
+                  } else if (href.startsWith('data:image/')) {
+                    emitCapturedUpscale(href, href, true);
+                  } else {
+                    fetch(href)
+                      .then(r => (r.ok ? r.blob() : null))
+                      .then(b => { if (b) readBlobToDataUrl(b, href, true); })
+                      .catch(() => {});
+                  }
+                }
+              }
+            } catch (_) {}
+            return origA.apply(this, args);
+          };
+        }
       }
     });
   } catch (e) {}
@@ -1212,6 +1281,83 @@ async function fetchImageAsDataUrl(imageUrl) {
   }
 }
 
+// Track extra parallel ChatGPT tabs opened when generating 2, 3, or 4 images simultaneously
+let extraGptParallelTabIds = [];
+
+async function ensureParallelChatGPTTabs(count, senderTabId = null) {
+  const prov = PROVIDERS.gpt;
+  const primaryStatus = await ensureFreshProviderChatTab('gpt', {
+    focusTab: false,
+    senderTabId
+  });
+  if (!primaryStatus.ok || !primaryStatus.tabId) {
+    return { ok: false, error: primaryStatus.error || 'Failed to prepare primary ChatGPT tab.' };
+  }
+
+  const tabIds = [primaryStatus.tabId];
+  let targetWindowId = undefined;
+  try {
+    const pTab = await chrome.tabs.get(primaryStatus.tabId);
+    if (pTab && pTab.windowId !== undefined) targetWindowId = pTab.windowId;
+  } catch (e) {}
+
+  const validExistingExtras = [];
+  for (const tid of extraGptParallelTabIds) {
+    if (!tid || tid === primaryStatus.tabId) continue;
+    try {
+      const t = await chrome.tabs.get(tid);
+      if (t && !t. discarded) validExistingExtras.push(t);
+    } catch (e) {}
+  }
+
+  const neededExtras = Math.max(0, count - 1);
+  const chosenExtraTabs = [];
+  for (let i = 0; i < neededExtras; i++) {
+    let eTab = validExistingExtras[i] || null;
+    try {
+      if (eTab) {
+        eTab = await chrome.tabs.update(eTab.id, {
+          url: prov.newChatUrl,
+          active: false
+        });
+      } else {
+        const createOpts = { url: prov.newChatUrl, active: false };
+        if (targetWindowId !== undefined) createOpts.windowId = targetWindowId;
+        eTab = await chrome.tabs.create(createOpts);
+      }
+      if (eTab && eTab.id) {
+        try { await chrome.tabs.update(eTab.id, { autoDiscardable: false }); } catch (e) {}
+        chosenExtraTabs.push(eTab.id);
+        tabIds.push(eTab.id);
+      }
+    } catch (err) {
+      console.warn(`[VP Background] Could not open extra ChatGPT tab #${i + 2}:`, err);
+    }
+  }
+
+  extraGptParallelTabIds = chosenExtraTabs;
+  await ensureVisionPilotTabGroup(senderTabId, tabIds);
+
+  // Wait for all extra ChatGPT tabs to finish loading and hydrate in parallel
+  await Promise.all(
+    chosenExtraTabs.map(async (tid) => {
+      try {
+        await waitForTabComplete(tid, 25000);
+        for (let attempt = 0; attempt < 5; attempt++) {
+          await sleep(attempt === 0 ? 900 : 650);
+          try {
+            await injectProviderHelpers(tid, prov.scriptFile);
+            const resp = await chrome.tabs.sendMessage(tid, { type: 'VP_SITE_CHECK_READY' });
+            if (resp && resp.ok) break;
+          } catch (_) {}
+        }
+      } catch (e) {}
+    })
+  );
+
+  return { ok: true, tabIds };
+}
+
 // PART 4: Execute real Image Generation in a fresh new chat on Gemini (Nano Banana 2) or ChatGPT (ChatGPT Image 2)
 async function runProviderImageGeneration(model, payload, senderTabId = null) {
   const prov = PROVIDERS[model];
@@ -1232,12 +1378,151 @@ async function runProviderImageGeneration(model, payload, senderTabId = null) {
 
   const images = Array.isArray(payload.images) ? payload.images : [];
   const instruction = typeof payload.instruction === 'string' ? payload.instruction : '';
+  const imageCount = Math.max(1, Math.min(4, Number(payload.imageCount) || 1));
 
   if (!instruction.trim()) {
     return { ok: false, error: 'Image generation prompt is missing.' };
   }
   if (images.length === 0 && model !== 'flow') {
     return { ok: false, error: 'Main reference image is missing.' };
+  }
+
+  const resolveSingleImgUrlOnTab = async (targetTabId, itemDataUrl, itemUrl) => {
+    if (itemDataUrl && String(itemDataUrl).startsWith('data:image/')) return itemDataUrl;
+    if (!itemUrl) return '';
+    if (targetTabId) {
+      const inPage = await readImageInPage(targetTabId, itemUrl);
+      if (inPage && inPage.ok && inPage.dataUrl) return inPage.dataUrl;
+    }
+    const fetched = await fetchImageAsDataUrl(itemUrl);
+    if (fetched && fetched.ok && fetched.dataUrl) return fetched.dataUrl;
+    return '';
+  };
+
+  // Multi-tab parallel ChatGPT image generation when imageCount > 1 (2, 3, or 4 images)
+  if (model === 'gpt' && imageCount > 1) {
+    console.log(`[VP Background] Starting Parallel ${imageCount}-Tab ChatGPT Image Generation...`);
+    const prep = await ensureParallelChatGPTTabs(imageCount, senderTabId);
+    if (isCancelledNow()) {
+      return { ok: false, cancelled: true, error: 'Image generation cancelled.' };
+    }
+    if (!prep.ok || !Array.isArray(prep.tabIds) || !prep.tabIds.length) {
+      return {
+        ok: false,
+        provider: model,
+        error: prep.error || 'Failed to prepare parallel ChatGPT tabs for multi-image generation.'
+      };
+    }
+
+    const tabIds = prep.tabIds;
+    const slotImages = Array.from({ length: imageCount }, () => '');
+    const slotErrors = [];
+
+    await Promise.all(
+      tabIds.map(async (tid, slotIdx) => {
+        try {
+          await injectProviderHelpers(tid, prov.scriptFile);
+          const slotRes = await sendTabMessageUntilComplete(tid, `${prov.name} #${slotIdx + 1}`, {
+            type: 'VP_SITE_GENERATE_IMAGE',
+            payload: {
+              images,
+              instruction,
+              aspectRatio: payload.aspectRatio || '16:9',
+              width: payload.width || 1408,
+              height: payload.height || 792,
+              imageCount: 1,
+              slotIndex: slotIdx,
+              imageModelName: payload.imageModelName || prov.name,
+              refId,
+              reqId
+            }
+          });
+
+          if (isCancelledNow()) return;
+
+          if (!slotRes || !slotRes.ok) {
+            const errMsg = slotRes?.error || `ChatGPT tab #${slotIdx + 1} failed to generate an image.`;
+            const isLimit = Boolean(slotRes?.limitReached) || /limit|quota|rate.?limit|plus|upgrade|too many/i.test(errMsg);
+            const errObj = { index: slotIdx, error: errMsg, limitReached: isLimit };
+            slotErrors.push(errObj);
+            reportStage(reqId, 'gpt_slot_error', {
+              index: slotIdx,
+              totalCount: imageCount,
+              limitReached: isLimit,
+              error: errMsg
+            });
+            return;
+          }
+
+          const dUrl = await resolveSingleImgUrlOnTab(tid, slotRes.imageDataUrl || '', slotRes.imageUrl || '');
+          if (dUrl && String(dUrl).startsWith('data:image/')) {
+            slotImages[slotIdx] = dUrl;
+            reportStage(reqId, 'flow_image_ready', {
+              index: slotIdx,
+              totalCount: imageCount,
+              imageDataUrl: dUrl
+            });
+          } else {
+            const errMsg = 'ChatGPT finished without returning a readable image.';
+            const errObj = { index: slotIdx, error: errMsg, limitReached: false };
+            slotErrors.push(errObj);
+            reportStage(reqId, 'gpt_slot_error', {
+              index: slotIdx,
+              totalCount: imageCount,
+              limitReached: false,
+              error: errMsg
+            });
+          }
+        } catch (err) {
+          if (isCancelledNow()) return;
+          const errMsg = err?.message || String(err);
+          const isLimit = Boolean(err?.limitReached) || /limit|quota|rate.?limit|plus|upgrade|too many/i.test(errMsg);
+          const errObj = { index: slotIdx, error: errMsg, limitReached: isLimit };
+          slotErrors.push(errObj);
+          reportStage(reqId, 'gpt_slot_error', {
+            index: slotIdx,
+            totalCount: imageCount,
+            limitReached: isLimit,
+            error: errMsg
+          });
+        }
+      })
+    );
+
+    if (isCancelledNow()) {
+      return { ok: false, cancelled: true, error: 'Image generation cancelled.' };
+    }
+
+    const validImages = slotImages.filter(Boolean);
+    const anyLimit = slotErrors.some((s) => s && s.limitReached);
+
+    if (validImages.length === 0) {
+      return {
+        ok: false,
+        provider: model,
+        limitReached: anyLimit,
+        slotErrors,
+        error: slotErrors[0]?.error || 'ChatGPT Image Limit Reached.'
+      };
+    }
+
+    lastImageJob = {
+      model,
+      tabId: tabIds[0],
+      imageUrl: '',
+      images: validImages,
+      at: Date.now()
+    };
+
+    return {
+      ok: true,
+      provider: model,
+      imageDataUrl: validImages[0],
+      images: validImages,
+      slotImages,
+      slotErrors,
+      limitReached: anyLimit
+    };
   }
 
   console.log(
@@ -1264,7 +1549,6 @@ async function runProviderImageGeneration(model, payload, senderTabId = null) {
 
   try {
     await injectProviderHelpers(tabStatus.tabId, prov.scriptFile);
-    const imageCount = Math.max(1, Math.min(4, Number(payload.imageCount) || 1));
     const result = await sendTabMessageUntilComplete(tabStatus.tabId, prov.name, {
       type: 'VP_SITE_GENERATE_IMAGE',
       payload: {
@@ -1285,22 +1569,18 @@ async function runProviderImageGeneration(model, payload, senderTabId = null) {
     }
 
     if (!result || !result.ok) {
+      const errMsg = result?.error || `${prov.name} failed to generate the image.`;
+      const isLimit = Boolean(result?.limitReached) || /limit|quota|rate.?limit|plus|upgrade|too many/i.test(errMsg);
       return {
         ok: false,
         provider: model,
-        error: result?.error || `${prov.name} failed to generate the image.`
+        limitReached: isLimit,
+        error: errMsg
       };
     }
 
-    const resolveSingleImgUrl = async (itemDataUrl, itemUrl) => {
-      if (itemDataUrl && String(itemDataUrl).startsWith('data:image/')) return itemDataUrl;
-      if (!itemUrl) return '';
-      const inPage = await readImageInPage(tabStatus.tabId, itemUrl);
-      if (inPage && inPage.ok && inPage.dataUrl) return inPage.dataUrl;
-      const fetched = await fetchImageAsDataUrl(itemUrl);
-      if (fetched && fetched.ok && fetched.dataUrl) return fetched.dataUrl;
-      return '';
-    };
+    const resolveSingleImgUrl = (itemDataUrl, itemUrl) =>
+      resolveSingleImgUrlOnTab(tabStatus.tabId, itemDataUrl, itemUrl);
 
     const finalImages = [];
     if (Array.isArray(result.images) && result.images.length > 0) {
@@ -1369,6 +1649,77 @@ async function runFlowImageUpscale(payload, senderTabId = null) {
   if (!tabId) {
     return { ok: false, fallbackToLocal: true, error: 'No active Google Flow session found.' };
   }
+
+  let capturedDownloadDataUrl = '';
+  const watchedDownloadIds = new Set();
+  const tryReadDownloadItem = async (downloadId) => {
+    try {
+      const items = await chrome.downloads.search({ id: downloadId });
+      const item = items && items[0];
+      if (!item) return;
+      if (item.filename && item.state === 'complete') {
+        const fileUrl = 'file:///' + String(item.filename).replace(/\\/g, '/').replace(/^\/+/, '');
+        const fileRes = await fetchImageAsDataUrl(fileUrl);
+        if (fileRes && fileRes.ok && fileRes.dataUrl) {
+          capturedDownloadDataUrl = fileRes.dataUrl;
+        }
+      }
+      if (!capturedDownloadDataUrl) {
+        const candidateUrl = item.finalUrl || item.url || '';
+        if (candidateUrl && /^https?:/i.test(candidateUrl)) {
+          const urlRes = await fetchImageAsDataUrl(candidateUrl);
+          if (urlRes && urlRes.ok && urlRes.dataUrl) {
+            capturedDownloadDataUrl = urlRes.dataUrl;
+          }
+        }
+      }
+      if (capturedDownloadDataUrl && tabId) {
+        chrome.tabs.sendMessage(tabId, {
+          type: 'VP_FLOW_DOWNLOAD_CAPTURED',
+          imageDataUrl: capturedDownloadDataUrl
+        }).catch(() => {});
+      }
+    } catch (_) {}
+  };
+
+  const onDownloadCreated = (item) => {
+    try {
+      if (!item || typeof item.id !== 'number') return;
+      const u = `${item.finalUrl || ''} ${item.url || ''} ${item.referrer || ''} ${item.filename || ''}`;
+      if (/labs\.google|flow\.google|googleusercontent|storage\.googleapis|blob:|_2K|_4K|upscale/i.test(u) || item.byExtensionId === chrome.runtime.id || !item.byExtensionId) {
+        watchedDownloadIds.add(item.id);
+        if (item.state === 'complete') {
+          tryReadDownloadItem(item.id);
+        }
+      }
+    } catch (_) {}
+  };
+
+  const onDownloadChanged = (delta) => {
+    try {
+      if (!delta || typeof delta.id !== 'number') return;
+      if (watchedDownloadIds.has(delta.id) && (delta.state?.current === 'complete' || delta.filename?.current)) {
+        tryReadDownloadItem(delta.id);
+      }
+    } catch (_) {}
+  };
+
+  try {
+    if (chrome.downloads && chrome.downloads.onCreated && chrome.downloads.onChanged) {
+      chrome.downloads.onCreated.addListener(onDownloadCreated);
+      chrome.downloads.onChanged.addListener(onDownloadChanged);
+    }
+  } catch (_) {}
+
+  const cleanupDlListeners = () => {
+    try {
+      if (chrome.downloads && chrome.downloads.onCreated && chrome.downloads.onChanged) {
+        chrome.downloads.onCreated.removeListener(onDownloadCreated);
+        chrome.downloads.onChanged.removeListener(onDownloadChanged);
+      }
+    } catch (_) {}
+  };
+
   try {
     await injectProviderHelpers(tabId, prov.scriptFile);
     const res = await sendTabMessageUntilComplete(tabId, prov.name, {
@@ -1377,18 +1728,21 @@ async function runFlowImageUpscale(payload, senderTabId = null) {
         scaleFactor: Number(payload.scaleFactor) === 4 ? 4 : 2,
         resolution: payload.resolution || (Number(payload.scaleFactor) === 4 ? '4K' : '2K'),
         imageIndex: Number(payload.imageIndex) || 0,
+        srcDataUrl: payload.srcDataUrl || '',
         reqId: payload.reqId || ''
       }
     });
-    if (!res || !res.ok) {
+    cleanupDlListeners();
+
+    if ((!res || !res.ok) && !capturedDownloadDataUrl) {
       return {
         ok: false,
         fallbackToLocal: true,
         error: res?.error || 'Google Flow 2K/4K download not available; falling back to VisionPilot upscale.'
       };
     }
-    let dataUrl = res.imageDataUrl || '';
-    if (!dataUrl && res.imageUrl) {
+    let dataUrl = (res && res.imageDataUrl) || capturedDownloadDataUrl || '';
+    if (!dataUrl && res && res.imageUrl) {
       const inPage = await readImageInPage(tabId, res.imageUrl);
       if (inPage && inPage.ok) dataUrl = inPage.dataUrl;
       if (!dataUrl) {
@@ -1396,11 +1750,33 @@ async function runFlowImageUpscale(payload, senderTabId = null) {
         if (fetched && fetched.ok) dataUrl = fetched.dataUrl;
       }
     }
-    if (!dataUrl || !String(dataUrl).startsWith('data:image/')) {
+    if (!dataUrl || !String(dataUrl).startsWith('data:')) {
       return { ok: false, fallbackToLocal: true, error: 'Google Flow upscale image could not be read.' };
     }
-    return { ok: true, provider: 'flow', imageDataUrl: dataUrl };
+    if (!dataUrl.startsWith('data:image/')) {
+      const commaIdx = dataUrl.indexOf(',');
+      if (commaIdx > 0) {
+        const b64 = dataUrl.slice(commaIdx + 1);
+        const mime = b64.startsWith('/9j/') ? 'image/jpeg' : b64.startsWith('UklGR') ? 'image/webp' : 'image/png';
+        dataUrl = `data:${mime};base64,${b64}`;
+      }
+    }
+    return {
+      ok: true,
+      provider: 'flow',
+      imageDataUrl: dataUrl,
+      nativeDownloadTriggered: true
+    };
   } catch (err) {
+    cleanupDlListeners();
+    if (capturedDownloadDataUrl && capturedDownloadDataUrl.startsWith('data:')) {
+      return {
+        ok: true,
+        provider: 'flow',
+        imageDataUrl: capturedDownloadDataUrl,
+        nativeDownloadTriggered: true
+      };
+    }
     return { ok: false, fallbackToLocal: true, error: err?.message || String(err) };
   }
 }
@@ -1412,17 +1788,18 @@ async function cancelPendingRequests(payload = {}) {
   if (payload.reqId) cancelledReqIds.add(payload.reqId);
   console.log('[VP Background] Cancelling pending AI requests:', payload);
 
-  for (const model of Object.keys(PROVIDERS)) {
-    const tabId = activeProviderTabIds[model];
-    if (tabId) {
-      try {
-        await chrome.tabs.sendMessage(tabId, {
-          type: 'VP_SITE_ABORT_PROMPT',
-          refId: payload.refId || null,
-          reqId: payload.reqId || null
-        });
-      } catch (e) {}
-    }
+  const allTabsToAbort = new Set([
+    ...Object.values(activeProviderTabIds).filter(Boolean),
+    ...extraGptParallelTabIds.filter(Boolean)
+  ]);
+  for (const tabId of allTabsToAbort) {
+    try {
+      await chrome.tabs.sendMessage(tabId, {
+        type: 'VP_SITE_ABORT_PROMPT',
+        refId: payload.refId || null,
+        reqId: payload.reqId || null
+      });
+    } catch (e) {}
   }
   return { ok: true, cancelled: true };
 }

@@ -153,6 +153,40 @@
     return false;
   }
 
+  // Detect ChatGPT toast notifications, banners, composer alerts, or upload/image rate-limit warnings
+  function detectChatGPTLimitOrUploadNotification(editor) {
+    try {
+      const limitRe =
+        /\b(?:hit\s+the\s+.*\blimit\b|reached\s+your\s+.*\blimit\b|file\s+upload\s+limit|image\s+generation\s+limit|image\s+creation\s+limit|limit\s+for\s+image|limit\s+for\s+file|limit\s+resets|too\s+many\s+requests|rate\s+limit|upgrade\s+to\s+(?:chatgpt\s+)?plus|unable\s+to\s+upload|upload\s+failed|can\s+create\s+more\s+images|you['’]?ve\s+reached\s+the\s+limit|out\s+of\s+.*uploads|daily\s+limit)\b/i;
+
+      const alertNodes = Array.from(
+        document.querySelectorAll(
+          '[role="alert"], [role="status"], [data-testid*="toast" i], [class*="toast" i], [data-testid*="limit" i], [data-testid*="rate-limit" i], [data-testid*="banner" i], .text-red-500, .text-token-text-error, [role="dialog"]'
+        )
+      );
+      for (const node of alertNodes) {
+        if (!node || node.offsetParent === null) continue;
+        const txt = (node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim();
+        if (txt && txt.length >= 8 && txt.length <= 420 && limitRe.test(txt)) {
+          return txt.slice(0, 220);
+        }
+      }
+
+      if (editor) {
+        const root = getComposerRoot(editor);
+        const rootTxt = (root ? root.innerText || root.textContent || '' : '').replace(/\s+/g, ' ').trim();
+        if (rootTxt && limitRe.test(rootTxt)) {
+          const matchedLine = (root.innerText || '')
+            .split(/\r?\n/)
+            .map((l) => l.trim())
+            .find((l) => limitRe.test(l));
+          return (matchedLine || rootTxt).slice(0, 220);
+        }
+      }
+    } catch (_) {}
+    return '';
+  }
+
   // CHANGE 1: Dedicated ChatGPT Image Upload + Strict Confirmation Logic
   // 1) Attach image(s) first (while prompt box is still empty)
   // 2) Verify new attachment preview elements exist in the composer
@@ -160,6 +194,13 @@
   async function uploadAndConfirmImagesChatGPT(images, editor) {
     if (!Array.isArray(images) || !images.length) return null;
     console.log(`[VP ChatGPT] Step 1: Uploading ${images.length} image(s) before typing prompt...`);
+
+    const preLimit = detectChatGPTLimitOrUploadNotification(editor);
+    if (preLimit) {
+      const err = new Error(`ChatGPT Image Limit Reached: ${preLimit}`);
+      err.limitReached = true;
+      throw err;
+    }
 
     const baseline = snapshotComposerBaseline(editor);
     const files = images.map((img, i) => dataUrlToFile(img.dataUrl, img.name || `image-${i + 1}.png`));
@@ -282,16 +323,35 @@
       await waitForCountAtLeast(images.length, 1200);
     }
 
-    // Wait up to 4 seconds in case the attachment thumbnail tile is still mounting in React
+    // Wait up to 4.5 seconds in case the attachment thumbnail tile is still mounting OR a limit notification pops up
     let attachedInfo = getNewAttachments(editor, baseline);
     if (attachedInfo.count === 0) {
-      await waitForCountAtLeast(1, 3500);
-      attachedInfo = getNewAttachments(editor, baseline);
+      const tWaitAttach = Date.now();
+      while (Date.now() - tWaitAttach < 4200) {
+        if (abortCurrentPrompt) throw new Error('Request cancelled.');
+        const limitNotif = detectChatGPTLimitOrUploadNotification(editor);
+        if (limitNotif) {
+          const err = new Error(`ChatGPT Image Limit Reached: ${limitNotif}`);
+          err.limitReached = true;
+          throw err;
+        }
+        attachedInfo = getNewAttachments(editor, baseline);
+        if (attachedInfo.count >= 1) break;
+        await sleep(250);
+      }
     }
 
     // STRICT CHECK 1: Was the image actually attached to the composer?
     if (attachedInfo.count === 0) {
-      throw new Error('ChatGPT image upload failed: the image was not attached to ChatGPT. Prompt was not sent.');
+      await sleep(1200);
+      const limitNotif = detectChatGPTLimitOrUploadNotification(editor);
+      const err = new Error(
+        limitNotif
+          ? `ChatGPT Image Limit Reached: ${limitNotif}`
+          : 'ChatGPT Image Limit Reached: ChatGPT did not accept the image upload (your ChatGPT image/upload limit is reached).'
+      );
+      err.limitReached = true;
+      throw err;
     }
 
     console.log(
@@ -304,8 +364,26 @@
     let confirmedReadyStreak = 0;
     while (Date.now() - tUpload < 45000) {
       if (abortCurrentPrompt) throw new Error('Request cancelled.');
+      const limitNotif = detectChatGPTLimitOrUploadNotification(editor);
+      if (limitNotif) {
+        const err = new Error(`ChatGPT Image Limit Reached: ${limitNotif}`);
+        err.limitReached = true;
+        throw err;
+      }
       const curAtt = getNewAttachments(editor, baseline);
       const stillUploading = isAttachmentStillUploading(editor, baseline);
+
+      if (curAtt.count === 0 && Date.now() - tUpload > 2500) {
+        await sleep(1000);
+        const lateNotif = detectChatGPTLimitOrUploadNotification(editor);
+        const err = new Error(
+          lateNotif
+            ? `ChatGPT Image Limit Reached: ${lateNotif}`
+            : 'ChatGPT Image Limit Reached: Image attachment was rejected by ChatGPT (daily upload/image limit reached).'
+        );
+        err.limitReached = true;
+        throw err;
+      }
 
       if (curAtt.count >= 1 && !stillUploading) {
         confirmedReadyStreak++;
@@ -320,7 +398,14 @@
 
     const finalAtt = getNewAttachments(editor, baseline);
     if (finalAtt.count === 0) {
-      throw new Error('ChatGPT image upload failed: image attachment disappeared before upload completed.');
+      const limitNotif = detectChatGPTLimitOrUploadNotification(editor);
+      const err = new Error(
+        limitNotif
+          ? `ChatGPT Image Limit Reached: ${limitNotif}`
+          : 'ChatGPT Image Limit Reached: Image attachment disappeared before upload completed.'
+      );
+      err.limitReached = true;
+      throw err;
     }
 
     console.log(
@@ -1227,11 +1312,13 @@
 
   // ChatGPT's answer when the account has used up its image tool (Free plan: "You've hit the Free plan limit for image
   // generations requests ... resets in 14 hours"). Returns that text, or '' when the latest reply is something else.
-  function chatGPTImageLimitText(beforeMsgsCount) {
+  function chatGPTImageLimitText(beforeMsgsCount, editor = null) {
+    const notif = detectChatGPTLimitOrUploadNotification(editor);
+    if (notif) return notif;
     const msgs = getAssistantMessages();
     const last = msgs.length > beforeMsgsCount ? msgs[msgs.length - 1] : null;
     const t = last ? (last.innerText || last.textContent || '').replace(/^\s*ChatGPT said:\s*/i, '').trim() : '';
-    return /\b(?:hit|reached)\b[^.]{0,40}\blimit\b|\bimage generations? (?:requests? )?limit\b|\blimit (?:for|on) image\b|\blimit resets\b|\bcan create more images\b/i.test(t) ? t.slice(0, 220) : '';
+    return /\b(?:hit|reached)\b[^.]{0,55}\blimit\b|\bimage\s+(?:generations?|creations?)\s*(?:requests?\s*)?limit\b|\blimit\s+(?:for|on)\s+image\b|\blimit\s+resets\b|\bcan\s+create\s+more\s+images\b|\btoo\s+many\s+(?:image|requests)\b|\brate\s+limit\b|\bupgrade\s+to\s+plus\b/i.test(t) ? t.slice(0, 220) : '';
   }
   // Remove Background without the image tool: Python in ChatGPT cuts the subject out and saves a transparent PNG
   // (it does not count toward the image limit, and the subject stays pixel for pixel the same)
@@ -1301,6 +1388,12 @@
     while (Date.now() - tStart < 35000) {
       if (abortCurrentPrompt) throw new Error('Image generation cancelled.');
       if (isLoggedOut()) throw new Error('Not logged in to ChatGPT (chatgpt.com).');
+      const earlyLimit = detectChatGPTLimitOrUploadNotification(editor);
+      if (earlyLimit) {
+        const err = new Error(`ChatGPT Image Limit Reached: ${earlyLimit}`);
+        err.limitReached = true;
+        throw err;
+      }
       if (isChatGPTStreaming() || getAssistantMessages().length > beforeMsgs) {
         started = true;
         break;
@@ -1308,6 +1401,12 @@
       await sleep(300);
     }
     if (!started) {
+      const limitAfterWait = chatGPTImageLimitText(beforeMsgs, editor);
+      if (limitAfterWait) {
+        const err = new Error(`ChatGPT Image Limit Reached: ${limitAfterWait}`);
+        err.limitReached = true;
+        throw err;
+      }
       throw new Error('ChatGPT did not start generating the image.');
     }
     stage(payload, 'generating');
@@ -1365,8 +1464,8 @@
           stableImgStreak = 0;
         }
         doneWithoutImgStreak = 0;
-      } else if (!streaming && Date.now() - tGen > 8000) {
-        const limitText = chatGPTImageLimitText(beforeMsgs);
+      } else if (!streaming && Date.now() - tGen > 2200) {
+        const limitText = chatGPTImageLimitText(beforeMsgs, editor);
         if (limitText && !pythonFallbackSent) {
           if (payload && payload.step === 'remove_background') {
             pythonFallbackSent = true;
@@ -1383,7 +1482,9 @@
             await sleep(2500);
             continue;
           }
-          throw new Error('ChatGPT image limit reached: ' + limitText);
+          const limitErr = new Error('ChatGPT Image Limit Reached: ' + limitText);
+          limitErr.limitReached = true;
+          throw limitErr;
         }
         // Check if ChatGPT is still showing an image generation progress card ("Creating image")
         const creatingIndicator = document.querySelector(
@@ -1408,14 +1509,23 @@
     if (!genImg) {
       const fromChat = await fetchConversationImage(sinceSec);
       if (fromChat) return { ok: true, imageDataUrl: fromChat.dataUrl, imageUrl: null, fileName: fromChat.name };
+      const finalLimit = chatGPTImageLimitText(beforeMsgs, editor);
+      if (finalLimit) {
+        const limitErr = new Error('ChatGPT Image Limit Reached: ' + finalLimit);
+        limitErr.limitReached = true;
+        throw limitErr;
+      }
       const msgs = getAssistantMessages();
       const lastMsg = msgs.length > beforeMsgs ? msgs[msgs.length - 1] : null;
       const errTxt = lastMsg ? (lastMsg.innerText || lastMsg.textContent || '').trim().slice(0, 180) : '';
-      throw new Error(
+      const isReplyLimit = /limit|quota|resets|plus|upgrade|too many|unable to create|can't generate more/i.test(errTxt);
+      const finalErr = new Error(
         errTxt
-          ? `ChatGPT did not return a generated image: ${errTxt}`
+          ? (isReplyLimit ? `ChatGPT Image Limit Reached: ${errTxt}` : `ChatGPT did not return a generated image: ${errTxt}`)
           : 'ChatGPT finished without returning a generated image.'
       );
+      if (isReplyLimit) finalErr.limitReached = true;
+      throw finalErr;
     }
 
     stage(payload, 'reading');
@@ -1470,7 +1580,11 @@
     if (msg.type === 'VP_SITE_GENERATE_IMAGE') {
       runChatGPTImageGeneration(msg.payload || msg || {})
         .then((res) => sendResponse(res))
-        .catch((err) => sendResponse({ ok: false, error: err.message || String(err) }));
+        .catch((err) => {
+          const errMsg = err?.message || String(err);
+          const limitReached = Boolean(err?.limitReached) || /limit|quota|rate.?limit|plus|upgrade|too many/i.test(errMsg);
+          sendResponse({ ok: false, limitReached, error: errMsg });
+        });
       return true;
     }
     return false;

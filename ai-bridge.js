@@ -994,6 +994,7 @@
       `${jsonPromptStr}`;
 
     const streamedImages = [];
+    const streamedSlotErrors = [];
     const res = await sendExtensionRequest(
       {
         action: 'generate_image',
@@ -1032,6 +1033,20 @@
               aspectRatio: targetAspect
             });
           }
+        } else if (stage === 'gpt_slot_error' && detail) {
+          const idx = Number(detail.index) || 0;
+          const slotErrObj = {
+            index: idx,
+            error: detail.error || 'ChatGPT Image Limit Reached',
+            limitReached: Boolean(detail.limitReached),
+            mainImageDataUrl,
+            promptText: jsonPromptStr,
+            aspectRatio: targetAspect
+          };
+          streamedSlotErrors.push(slotErrObj);
+          if (typeof opts.onSlotError === 'function') {
+            opts.onSlotError(slotErrObj);
+          }
         }
         if (typeof opts.onStage === 'function') opts.onStage(stage, detail);
       }
@@ -1048,16 +1063,25 @@
       ? streamedImages.filter(Boolean)
       : (res?.imageDataUrl ? [res.imageDataUrl] : []);
 
+    const finalSlotErrors = Array.isArray(res?.slotErrors) && res.slotErrors.length
+      ? res.slotErrors
+      : streamedSlotErrors;
+
     if (!res || !res.ok || !finalImages.length) {
-      throw new Error(
-        res?.error || `${imgModel.fullName} failed to generate or return an image.`
-      );
+      const errMsg = res?.error || finalSlotErrors[0]?.error || `${imgModel.fullName} failed to generate or return an image.`;
+      const err = new Error(errMsg);
+      err.limitReached = Boolean(res?.limitReached || finalSlotErrors.some(s => s && s.limitReached) || /limit|quota|rate.?limit|plus|upgrade|too many|লিমিট/i.test(errMsg));
+      err.slotErrors = finalSlotErrors;
+      throw err;
     }
 
     return {
       ok: true,
       imageDataUrl: finalImages[0],
       images: finalImages,
+      slotImages: Array.isArray(res.slotImages) ? res.slotImages : streamedImages,
+      slotErrors: finalSlotErrors,
+      limitReached: Boolean(res.limitReached || finalSlotErrors.some(s => s && s.limitReached)),
       mainImageDataUrl,
       promptText: jsonPromptStr,
       promptJson: jsonPromptStr,
@@ -1090,7 +1114,8 @@
         return {
           ok: true,
           imageDataUrl: res.imageDataUrl,
-          scaleLabel: scaleFactor === 4 ? '4K' : '2K'
+          scaleLabel: scaleFactor === 4 ? '4K' : '2K',
+          nativeDownloadTriggered: Boolean(res.nativeDownloadTriggered)
         };
       }
       return {

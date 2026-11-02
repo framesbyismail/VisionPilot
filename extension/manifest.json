@@ -18,6 +18,7 @@
     "scripting",
     "clipboardRead",
     "clipboardWrite",
+    "downloads",
     "alarms"
   ],
   "host_permissions": [

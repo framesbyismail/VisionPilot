@@ -5104,17 +5104,17 @@ function reshapeResultWindowForAspect(w, h) {
   const numW = Number(w) || 1024;
   const numH = Number(h) || 1024;
   const ratio = clamp(numW / Math.max(1, numH), 0.45, 2.4);
-  // Reshapes to match the aspect ratio of the image/video while keeping close to its current size
-  let targetCardW = 580;
+  // Reshapes to match the aspect ratio of the image/video (+25% larger window)
+  let targetCardW = 725;
   if (ratio < 0.85) {
-    // Tall portrait (e.g. 9:16 -> ~440px, 3:4 -> ~490px)
-    targetCardW = Math.round(clamp(360 + ratio * 150, 420, 520));
+    // Tall portrait (e.g. 9:16 -> ~550px, 3:4 -> ~615px)
+    targetCardW = Math.round(clamp(450 + ratio * 190, 525, 650));
   } else if (ratio > 1.18) {
-    // Wide landscape (e.g. 16:9 -> ~720px, 3:2 -> ~660px)
-    targetCardW = Math.round(clamp(480 + ratio * 135, 620, 760));
+    // Wide landscape (e.g. 16:9 -> ~900px, 3:2 -> ~825px)
+    targetCardW = Math.round(clamp(600 + ratio * 170, 775, 950));
   } else {
     // Square-ish (1:1, 4:5, 5:4)
-    targetCardW = Math.round(clamp(500 + ratio * 65, 530, 600));
+    targetCardW = Math.round(clamp(625 + ratio * 80, 660, 750));
   }
   card.style.setProperty('--res-card-w', targetCardW + 'px');
   card.style.width = targetCardW + 'px';
@@ -5757,9 +5757,58 @@ function setFocusDetailLoading(loading) {
 }
 window.setFocusDetailLoading = setFocusDetailLoading;
 
+function syncPromptStatusMarquee() {
+  const wrap = $('statusScrollWrap');
+  const st = $('status');
+  if (!wrap || !st) return;
+  wrap.classList.remove('is-overflowing');
+  wrap.style.removeProperty('--status-scroll-px');
+  wrap.style.removeProperty('--status-scroll-dur');
+  requestAnimationFrame(() => {
+    if (!wrap.isConnected || !st.isConnected) return;
+    const wrapW = wrap.clientWidth || 0;
+    const textW = st.scrollWidth || 0;
+    const overflow = Math.ceil(textW - wrapW);
+    if (wrapW > 20 && overflow > 2) {
+      const dist = overflow + 6;
+      const dur = clamp(dist / 26, 3.2, 12).toFixed(2);
+      wrap.style.setProperty('--status-scroll-px', `-${dist}px`);
+      wrap.style.setProperty('--status-scroll-dur', `${dur}s`);
+      wrap.classList.add('is-overflowing');
+    }
+  });
+}
+window.syncPromptStatusMarquee = syncPromptStatusMarquee;
+
+(function initPromptStatusAutoScrollObserver() {
+  const attach = () => {
+    const st = $('status');
+    const wrap = $('statusScrollWrap');
+    const pPrompt = $('pPrompt');
+    if (st && typeof MutationObserver !== 'undefined') {
+      const mo = new MutationObserver(() => syncPromptStatusMarquee());
+      mo.observe(st, { childList: true, characterData: true, subtree: true });
+    }
+    if (typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver(() => syncPromptStatusMarquee());
+      if (wrap) ro.observe(wrap);
+      if (pPrompt) ro.observe(pPrompt);
+    }
+    syncPromptStatusMarquee();
+  };
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', attach, { once: true });
+  } else {
+    setTimeout(attach, 0);
+  }
+})();
+
 function setImageGenBoxesLocked(locked) {
   imgGenBusy = !!locked;
   document.body.classList.toggle('img-gen-busy', imgGenBusy);
+  const promptHead = $('promptCardHead');
+  if (promptHead) promptHead.classList.toggle('is-generating', imgGenBusy);
+  syncPromptStatusMarquee();
   const pRef = $('pRef');
   if (pRef) {
     pRef.classList.toggle('gen-locked', imgGenBusy);
@@ -5847,6 +5896,22 @@ async function runGenerateImageWithModel(imgModelId) {
 
   const aspectVal = S.aspect || '16:9';
   let multiModalOpened = false;
+  const ensureMultiModal = (partial = {}) => {
+    if (multiModalOpened) return;
+    multiModalOpened = true;
+    openMultiGeneratedImagesModal({
+      totalCount: imageCount,
+      images: [],
+      modelLabel: `${imgModelInfo.name || imgModelId} · ${partial.aspectRatio || aspectVal} · ${imageCount} ${imageCount > 1 ? 'Images' : 'Image'}`,
+      aspectRatio: partial.aspectRatio || aspectVal,
+      imgModelId,
+      promptText: partial.promptText || '',
+      mainImageDataUrl: partial.mainImageDataUrl || ''
+    });
+  };
+  if (imageCount > 1) {
+    ensureMultiModal({ aspectRatio: aspectVal });
+  }
 
   try {
     const res = await window.VPAIBridge.runImageGenerationStep(mainRef, promptObj, imgModelId, {
@@ -5855,32 +5920,39 @@ async function runGenerateImageWithModel(imgModelId) {
         if (!partial || !partial.imageDataUrl) return;
         const idx = clamp(Number(partial.index) || 0, 0, imageCount - 1);
         if (imageCount > 1) {
-          if (!multiModalOpened) {
-            multiModalOpened = true;
-            openMultiGeneratedImagesModal({
-              totalCount: imageCount,
-              images: [],
-              modelLabel: `${imgModelInfo.name || imgModelId} · ${partial.aspectRatio || aspectVal} · ${imageCount} Images`,
-              aspectRatio: partial.aspectRatio || aspectVal,
-              imgModelId,
-              promptText: partial.promptText || '',
-              mainImageDataUrl: partial.mainImageDataUrl || ''
-            });
-          }
+          ensureMultiModal(partial);
           updateMultiGeneratedImageSlot(idx, partial.imageDataUrl);
-          if ($('status')) $('status').textContent = `Generated ${idx + 1}/${imageCount} images…`;
+          if ($('status')) $('status').textContent = `Generated ${idx + 1}/${imageCount} images via ${imgModelInfo.name || imgModelId}…`;
+        }
+      },
+      onSlotError: async (slotErr) => {
+        if (!slotErr) return;
+        const idx = clamp(Number(slotErr.index) || 0, 0, imageCount - 1);
+        const errMsg = slotErr.error || 'ChatGPT Image Limit Reached';
+        const isLimit = Boolean(slotErr.limitReached) || /limit|quota|rate.?limit|plus|upgrade|too many/i.test(errMsg);
+        ensureMultiModal(slotErr);
+        updateMultiGeneratedImageSlotError(idx, errMsg, isLimit);
+        if (isLimit && $('status')) {
+          $('status').textContent = `ChatGPT image limit reached (slot #${idx + 1})`;
         }
       }
     });
     lastAIError = '';
     aiConnectedOk = true;
+    const allImgs = Array.isArray(res.images) && res.images.length ? res.images : [res.imageDataUrl].filter(Boolean);
+    const slotErrors = Array.isArray(res.slotErrors) ? res.slotErrors : [];
+    const hasAnyLimit = Boolean(res.limitReached) || slotErrors.some(s => s && s.limitReached);
     if ($('status')) {
-      $('status').textContent = imageCount > 1 ? `${(res.images || [res.imageDataUrl]).length} images generated` : 'Image generated';
+      if (hasAnyLimit && allImgs.length < imageCount) {
+        $('status').textContent = `${allImgs.length}/${imageCount} generated · ChatGPT Image Limit Reached`;
+      } else {
+        $('status').textContent = imageCount > 1 ? `${allImgs.length} images generated` : 'Image generated';
+      }
       $('status').classList.remove('stale');
     }
 
-    const allImgs = Array.isArray(res.images) && res.images.length ? res.images : [res.imageDataUrl].filter(Boolean);
     for (let i = 0; i < allImgs.length; i++) {
+      if (!allImgs[i]) continue;
       await saveHistoryEntry({
         kind: 'generated_image',
         mainImageDataUrl: res.mainImageDataUrl,
@@ -5895,16 +5967,36 @@ async function runGenerateImageWithModel(imgModelId) {
     }
 
     if (imageCount > 1 || allImgs.length > 1) {
-      openMultiGeneratedImagesModal({
-        totalCount: Math.max(imageCount, allImgs.length),
-        images: allImgs,
-        modelLabel: `${res.modelName} · ${res.aspectRatio} · ${allImgs.length} Images`,
-        aspectRatio: res.aspectRatio,
-        imgModelId,
-        promptText: res.promptText,
-        mainImageDataUrl: res.mainImageDataUrl
-      });
-      toast(`${allImgs.length} generated images ready from ${res.modelName}`);
+      if (!multiModalOpened) {
+        openMultiGeneratedImagesModal({
+          totalCount: Math.max(imageCount, allImgs.length),
+          images: allImgs,
+          modelLabel: `${res.modelName} · ${res.aspectRatio} · ${imageCount} Images`,
+          aspectRatio: res.aspectRatio,
+          imgModelId,
+          promptText: res.promptText,
+          mainImageDataUrl: res.mainImageDataUrl
+        });
+      } else {
+        for (let i = 0; i < imageCount; i++) {
+          if (res.slotImages && res.slotImages[i]) {
+            updateMultiGeneratedImageSlot(i, res.slotImages[i]);
+          } else if (allImgs[i] && !currentResultModalState?.multiImages?.[i]) {
+            updateMultiGeneratedImageSlot(i, allImgs[i]);
+          }
+          const se = slotErrors.find(s => Number(s?.index) === i);
+          if (se && !currentResultModalState?.multiImages?.[i]) {
+            updateMultiGeneratedImageSlotError(i, se.error || 'ChatGPT Image Limit Reached', Boolean(se.limitReached));
+          } else if (!currentResultModalState?.multiImages?.[i] && !currentResultModalState?.multiSlotMeta?.[i]?.error) {
+            updateMultiGeneratedImageSlotError(i, hasAnyLimit ? 'ChatGPT Image Limit Reached' : 'Image not returned for this slot', hasAnyLimit);
+          }
+        }
+      }
+      if (hasAnyLimit) {
+        toast(`Generated ${allImgs.length}/${imageCount} images — ChatGPT image limit reached on remaining tab(s).`);
+      } else {
+        toast(`${allImgs.length} generated images ready from ${res.modelName}`);
+      }
     } else {
       openGeneratedImageResultModal(res.imageDataUrl, `${res.modelName} · ${res.aspectRatio}`, {
         mainImageDataUrl: res.mainImageDataUrl,
@@ -5918,9 +6010,20 @@ async function runGenerateImageWithModel(imgModelId) {
   } catch (err) {
     if (!err?.cancelled) {
       const errMsg = err?.message || String(err);
+      const isLimit = Boolean(err?.limitReached) || /limit|quota|rate.?limit|plus|upgrade|too many|লিমিট/i.test(errMsg);
       lastAIError = errMsg;
-      if ($('status')) $('status').textContent = 'Image generation failed';
-      toast(`Image Generation Error: ${errMsg}`);
+      if ($('status')) {
+        $('status').textContent = isLimit ? 'ChatGPT Image Limit Reached' : 'Image generation failed';
+      }
+      if (isLimit || multiModalOpened) {
+        ensureMultiModal({ aspectRatio: aspectVal });
+        for (let i = 0; i < imageCount; i++) {
+          if (!currentResultModalState?.multiImages?.[i]) {
+            updateMultiGeneratedImageSlotError(i, errMsg, isLimit);
+          }
+        }
+      }
+      toast(isLimit ? 'ChatGPT ইমেজ তৈরির লিমিট শেষ হয়েছে (ChatGPT Image Limit Reached).' : `Image Generation Error: ${errMsg}`);
     }
   } finally {
     btn.classList.remove('busy');
@@ -6813,9 +6916,10 @@ async function upscaleGeneratedImageSmart(srcDataUrl, scaleFactor, { imgModelId 
   const isNanoBananaFlow = imgModelId === 'gemini' || imgModelId === 'flow' || /Nano Banana|Google Flow/i.test(currentResultModalState?.modelLabel || '');
   if (isNanoBananaFlow && window.VPAIBridge?.runFlowUpscaleStep) {
     try {
-      if (onProgress) onProgress(15, `Google Flow ${scaleFactor === 4 ? '4K' : '2K'}`);
+      if (onProgress) onProgress(20, `Google Flow ${scaleFactor === 4 ? '4K' : '2K'}`);
       const flowRes = await window.VPAIBridge.runFlowUpscaleStep(scaleFactor, imageIndex, srcDataUrl);
       if (flowRes && flowRes.ok && flowRes.imageDataUrl) {
+        if (onProgress) onProgress(100, `Google Flow ${scaleFactor === 4 ? '4K' : '2K'}`);
         const im = await new Promise((resolve, reject) => {
           const el = new Image();
           el.onload = () => resolve(el);
@@ -6826,11 +6930,13 @@ async function upscaleGeneratedImageSmart(srcDataUrl, scaleFactor, { imgModelId 
           dataUrl: flowRes.imageDataUrl,
           width: im.naturalWidth || im.width || (scaleFactor === 4 ? 3840 : 2048),
           height: im.naturalHeight || im.height || (scaleFactor === 4 ? 2160 : 1152),
-          source: `Google Flow ${scaleFactor === 4 ? '4K' : '2K'}`
+          source: `Google Flow ${scaleFactor === 4 ? '4K' : '2K'}`,
+          nativeDownloadTriggered: Boolean(flowRes.nativeDownloadTriggered),
+          upscaledLabel: scaleFactor === 4 ? '4K Upscaled' : '2K Upscaled'
         };
       }
     } catch (_) {
-      // Fallback to VisionPilot's built-in upscaler below
+      // Fallback to VisionPilot's built-in upscaler below when Google Flow does not offer 4K/2K
     }
   }
   const imgEl = await new Promise((resolve, reject) => {
@@ -6844,7 +6950,9 @@ async function upscaleGeneratedImageSmart(srcDataUrl, scaleFactor, { imgModelId 
   }, checkCancelled);
   return {
     ...localRes,
-    source: `VisionPilot ${scaleFactor}x`
+    source: `VisionPilot ${scaleFactor}x`,
+    nativeDownloadTriggered: false,
+    upscaledLabel: `${scaleFactor}x Upscaled`
   };
 }
 
@@ -6920,15 +7028,17 @@ async function runGeneratedWindowUpscaleAndDownload(scaleFactor) {
       height: res.height
     });
 
-    // Automatically download the upscaled image
-    const a = document.createElement('a');
-    a.href = res.dataUrl;
-    a.download = `visionpilot-upscaled-${scaleLabel}-${Date.now()}.png`;
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => a.remove(), 300);
+    // Automatically download the upscaled image if Google Flow didn't already download it natively
+    if (!res.nativeDownloadTriggered) {
+      const a = document.createElement('a');
+      a.href = res.dataUrl;
+      a.download = `visionpilot-upscaled-${scaleLabel}-${Date.now()}.png`;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => a.remove(), 300);
+    }
 
-    toast(`${scaleLabel} upscaled image (${res.source || scaleLabel}) downloaded and saved to History / Library`);
+    toast(`${scaleLabel} upscaled image (${res.source || scaleLabel}) shown & saved to History / Library`);
   } catch (err) {
     if (!err?.cancelled) {
       const msg = err?.message || String(err);
@@ -6955,17 +7065,37 @@ $('genWinUpscale2xBtn')?.addEventListener('click', () => runGeneratedWindowUpsca
 $('genWinUpscale4xBtn')?.addEventListener('click', () => runGeneratedWindowUpscaleAndDownload(4));
 
 // Multi-Image Generated Result Window (1 to 4 images side-by-side, progressive one-by-one fill, per-image Download + 2x/4x Upscale)
-function renderMultiSlotDOM(idx, imageDataUrl, aspectCss = '16 / 9') {
+function renderMultiSlotDOM(idx, imageDataUrl, aspectCss = '16 / 9', slotMeta = {}) {
   const can4x = Boolean(S.mode === 'adv' || PRO);
   const hasImg = Boolean(imageDataUrl);
+  const errText = slotMeta && slotMeta.error ? String(slotMeta.error) : '';
+  const isLimit = Boolean(slotMeta && slotMeta.limitReached) || /limit|quota|rate.?limit|plus|upgrade|too many|লিমিট/i.test(errText);
+  const upBadge = slotMeta && slotMeta.upscaledLabel
+    ? `<span class="genimg-grid-up-badge">${esc(slotMeta.upscaledLabel)}</span>`
+    : '';
+  let thumbContent = '';
+  if (hasImg) {
+    thumbContent = `<img src="${escAttr(imageDataUrl)}" alt="Generated Image #${idx + 1}" data-multi-preview="${idx}">`;
+  } else if (errText) {
+    const errTitle = isLimit ? 'ChatGPT Image Limit Reached' : 'Image Generation Failed';
+    const errSub = isLimit
+      ? 'আপনার ChatGPT ইমেজ তৈরির লিমিট শেষ হয়েছে। অনুগ্রহ করে কিছুক্ষণ পর চেষ্টা করুন বা অন্য অ্যাকাউন্ট ব্যবহার করুন।'
+      : errText;
+    thumbContent = `
+      <div class="genimg-grid-slot-error">
+        <span class="err-ico">⚠️</span>
+        <span class="err-title">${esc(errTitle)}</span>
+        <span class="err-sub">${esc(errSub)}</span>
+      </div>`;
+  } else {
+    thumbContent = `<div class="genimg-grid-slot-busy"><span class="spin"></span><span>Generating image #${idx + 1}…</span></div>`;
+  }
   return `
     <div class="genimg-grid-item" data-multi-idx="${idx}">
       <div class="genimg-grid-thumb" style="--multi-aspect:${escAttr(aspectCss)}">
         <span class="genimg-grid-badge">#${idx + 1}</span>
-        ${hasImg
-          ? `<img src="${escAttr(imageDataUrl)}" alt="Generated Image #${idx + 1}" data-multi-preview="${idx}">`
-          : `<div class="genimg-grid-slot-busy"><span class="spin"></span><span>Generating image #${idx + 1}…</span></div>`
-        }
+        ${upBadge}
+        ${thumbContent}
       </div>
       <div class="genimg-grid-actions">
         <a class="btn primary genimg-grid-dl${hasImg ? '' : ' upscale-disabled'}" data-multi-dl="${idx}" href="${hasImg ? escAttr(imageDataUrl) : '#'}" download="visionpilot-generated-${idx + 1}-${Date.now()}.png">⬇ Download Image</a>
@@ -7006,6 +7136,7 @@ function openMultiGeneratedImagesModal({
     mode: 'generated_multi',
     totalCount: count,
     multiImages: Array.from({ length: count }, (_, i) => images[i] || ''),
+    multiSlotMeta: Array.from({ length: count }, () => ({})),
     imageDataUrl: images[0] || '',
     mainImageDataUrl: mainImageDataUrl || images[0] || '',
     promptText: promptText || '',
@@ -7033,37 +7164,84 @@ function openMultiGeneratedImagesModal({
   if (card) {
     card.classList.add('is-multi-grid');
     const cols = count === 1 ? 1 : count === 2 ? 2 : count === 3 ? 3 : 4;
-    const targetW = count === 1 ? '580px' : count === 2 ? 'min(920px, 95vw)' : count === 3 ? 'min(1160px, 96vw)' : 'min(1340px, 96vw)';
+    const targetW = count === 1 ? '725px' : count === 2 ? 'min(1150px, 96vw)' : count === 3 ? 'min(1450px, 97vw)' : 'min(1680px, 97.5vw)';
     card.style.setProperty('--res-multi-w', targetW);
     multiGrid.style.setProperty('--multi-cols', String(cols));
   }
 
   multiGrid.innerHTML = Array.from({ length: count }, (_, i) =>
-    renderMultiSlotDOM(i, currentResultModalState.multiImages[i], aspectCss)
+    renderMultiSlotDOM(i, currentResultModalState.multiImages[i], aspectCss, currentResultModalState.multiSlotMeta[i])
   ).join('');
   multiGrid.hidden = false;
   modal.hidden = false;
 }
 window.openMultiGeneratedImagesModal = openMultiGeneratedImagesModal;
 
-function updateMultiGeneratedImageSlot(idx, imageDataUrl) {
+function updateMultiGeneratedImageSlot(idx, imageDataUrl, extraMeta = {}) {
   if (!imageDataUrl || !currentResultModalState) return;
   if (!Array.isArray(currentResultModalState.multiImages)) {
     currentResultModalState.multiImages = [];
   }
+  if (!Array.isArray(currentResultModalState.multiSlotMeta)) {
+    currentResultModalState.multiSlotMeta = [];
+  }
   currentResultModalState.multiImages[idx] = imageDataUrl;
+  currentResultModalState.multiSlotMeta[idx] = {
+    ...(currentResultModalState.multiSlotMeta[idx] || {}),
+    error: '',
+    limitReached: false,
+    ...extraMeta
+  };
   if (!currentResultModalState.imageDataUrl) currentResultModalState.imageDataUrl = imageDataUrl;
   const multiGrid = $('genImgMultiGrid');
   if (!multiGrid || multiGrid.hidden) return;
   const slot = multiGrid.querySelector(`.genimg-grid-item[data-multi-idx="${idx}"]`);
   const aspectCss = currentResultModalState.aspectCss || '16 / 9';
   if (slot) {
-    slot.outerHTML = renderMultiSlotDOM(idx, imageDataUrl, aspectCss);
+    slot.outerHTML = renderMultiSlotDOM(idx, imageDataUrl, aspectCss, currentResultModalState.multiSlotMeta[idx]);
   }
 }
 window.updateMultiGeneratedImageSlot = updateMultiGeneratedImageSlot;
 
+function updateMultiGeneratedImageSlotError(idx, errorMsg, limitReached = false) {
+  if (!currentResultModalState) return;
+  if (!Array.isArray(currentResultModalState.multiSlotMeta)) {
+    currentResultModalState.multiSlotMeta = [];
+  }
+  if (currentResultModalState.multiImages && currentResultModalState.multiImages[idx]) return;
+  currentResultModalState.multiSlotMeta[idx] = {
+    ...(currentResultModalState.multiSlotMeta[idx] || {}),
+    error: errorMsg || 'ChatGPT Image Limit Reached',
+    limitReached: Boolean(limitReached)
+  };
+  const multiGrid = $('genImgMultiGrid');
+  if (!multiGrid || multiGrid.hidden) return;
+  const slot = multiGrid.querySelector(`.genimg-grid-item[data-multi-idx="${idx}"]`);
+  const aspectCss = currentResultModalState.aspectCss || '16 / 9';
+  if (slot) {
+    slot.outerHTML = renderMultiSlotDOM(idx, '', aspectCss, currentResultModalState.multiSlotMeta[idx]);
+  }
+}
+window.updateMultiGeneratedImageSlotError = updateMultiGeneratedImageSlotError;
+
 $('genImgMultiGrid')?.addEventListener('click', async (e) => {
+  const previewImg = e.target.closest('img[data-multi-preview]');
+  if (previewImg) {
+    const idx = Number(previewImg.dataset.multiPreview) || 0;
+    const imgUrl = currentResultModalState?.multiImages?.[idx];
+    const meta = currentResultModalState?.multiSlotMeta?.[idx] || {};
+    if (imgUrl && meta.origDataUrl) {
+      openUpscaledImageResultModal({
+        origDataUrl: meta.origDataUrl,
+        upscaledDataUrl: imgUrl,
+        scaleLabel: meta.upscaledLabel || 'Upscaled',
+        width: meta.width || 0,
+        height: meta.height || 0
+      });
+      return;
+    }
+  }
+
   const upBtn = e.target.closest('button[data-multi-up][data-multi-idx]');
   if (!upBtn || upBtn.disabled) return;
   e.preventDefault();
@@ -7075,7 +7253,7 @@ $('genImgMultiGrid')?.addEventListener('click', async (e) => {
     toast('4x Upscale requires Advanced mode or subscription.');
     return;
   }
-  const srcDataUrl = currentResultModalState?.multiImages?.[idx];
+  const srcDataUrl = currentResultModalState?.multiSlotMeta?.[idx]?.origDataUrl || currentResultModalState?.multiImages?.[idx];
   if (!srcDataUrl || imgUpscaleRunning) return;
 
   const origHtml = upBtn.innerHTML;
@@ -7089,22 +7267,29 @@ $('genImgMultiGrid')?.addEventListener('click', async (e) => {
     const res = await upscaleGeneratedImageSmart(srcDataUrl, scaleFactor, {
       imgModelId: currentResultModalState?.imgModelId || 'gemini',
       imageIndex: idx,
-      onProgress: (pct) => {
-        upBtn.innerHTML = `<span class="spin"></span> ${scaleFactor}x… ${pct}%`;
+      onProgress: (pct, srcName) => {
+        const shortSrc = /Google Flow/i.test(srcName || '') ? (scaleFactor === 4 ? 'Flow 4K' : 'Flow 2K') : `${scaleFactor}x`;
+        upBtn.innerHTML = `<span class="spin"></span> ${shortSrc}… ${pct}%`;
       },
       checkCancelled: () => imgUpscaleAbort || Boolean($('genImgResultModal')?.hidden)
     });
 
     if (res && res.dataUrl) {
-      updateMultiGeneratedImageSlot(idx, res.dataUrl);
       const scaleLabel = `${scaleFactor}x`;
+      const badgeLabel = res.upscaledLabel || (/Google Flow/i.test(res.source || '') ? (scaleFactor === 4 ? '4K Upscaled' : '2K Upscaled') : `${scaleLabel} Upscaled`);
+      updateMultiGeneratedImageSlot(idx, res.dataUrl, {
+        origDataUrl: srcDataUrl,
+        upscaledLabel: badgeLabel,
+        width: res.width,
+        height: res.height
+      });
       await saveHistoryEntry({
         kind: 'upscaled_image',
         mainImageDataUrl: srcDataUrl,
         upscaledImageDataUrl: res.dataUrl,
         generatedImageDataUrl: res.dataUrl,
         leftLabel: `Generated #${idx + 1}`,
-        rightLabel: `Upscaled ${scaleLabel}`,
+        rightLabel: `Upscaled ${badgeLabel}`,
         scaleLabel,
         promptText: currentResultModalState?.promptText || '',
         modelName: `${res.source || 'Upscaled Image'} (${scaleLabel})`,
@@ -7114,14 +7299,16 @@ $('genImgMultiGrid')?.addEventListener('click', async (e) => {
         createdAt: Date.now()
       });
 
-      const a = document.createElement('a');
-      a.href = res.dataUrl;
-      a.download = `visionpilot-upscaled-${idx + 1}-${scaleLabel}-${Date.now()}.png`;
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => a.remove(), 300);
+      if (!res.nativeDownloadTriggered) {
+        const a = document.createElement('a');
+        a.href = res.dataUrl;
+        a.download = `visionpilot-upscaled-${idx + 1}-${scaleLabel}-${Date.now()}.png`;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => a.remove(), 300);
+      }
 
-      toast(`Image #${idx + 1} upscaled (${res.source || scaleLabel}) & downloaded!`);
+      toast(`Image #${idx + 1} upscaled (${res.source || badgeLabel}) & displayed in window!`);
     }
   } catch (err) {
     if (!err?.cancelled) toast(err?.message || String(err));

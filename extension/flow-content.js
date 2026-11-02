@@ -1013,6 +1013,8 @@
             collectedResults.push(extracted);
             collectedElements.push(imgEl);
             collectedMediaIds.push(settledMid || '');
+            window.__vpLastFlowImgElements = collectedElements.slice();
+            window.__vpLastFlowMediaIds = collectedMediaIds.slice();
 
             // Stream this image immediately to VisionPilot so it appears one-by-one in the UI
             try {
@@ -1081,6 +1083,20 @@
     };
   }
 
+  function normalizeImageDataUrlMime(dataUrl) {
+    if (!dataUrl || typeof dataUrl !== 'string') return '';
+    if (dataUrl.startsWith('data:image/')) return dataUrl;
+    if (dataUrl.startsWith('data:')) {
+      const commaIdx = dataUrl.indexOf(',');
+      if (commaIdx > 0) {
+        const b64 = dataUrl.slice(commaIdx + 1);
+        const mime = b64.startsWith('/9j/') ? 'image/jpeg' : b64.startsWith('UklGR') ? 'image/webp' : 'image/png';
+        return `data:${mime};base64,${b64}`;
+      }
+    }
+    return '';
+  }
+
   // Trigger Google Flow's native 2K or 4K download/upscale for a generated image at `imageIndex`
   // via `<flow-image-tile>` -> `button[aria-label="More options"]` -> `Download` -> `2K Upscaled` / `4K Upscaled`.
   // If Google Flow does not have 4K/2K available on the user's account, returns { ok: false, fallbackToLocal: true }
@@ -1090,6 +1106,34 @@
     const scale = Number(payload.scaleFactor || payload.scale) === 2 ? 2 : 4;
     const resolution = scale === 2 ? '2K' : '4K';
     const imageIndex = Math.max(0, Number(payload.imageIndex) || 0);
+
+    let capturedViaEvent = '';
+    const onWindowMsg = (ev) => {
+      try {
+        const d = ev?.data;
+        if (d && d.__vpFlowUpscaleCaptured && d.dataUrl) {
+          const norm = normalizeImageDataUrlMime(String(d.dataUrl));
+          if (norm) capturedViaEvent = norm;
+        }
+      } catch (_) {}
+    };
+    const onRuntimeMsg = (msg) => {
+      try {
+        if (msg && msg.type === 'VP_FLOW_DOWNLOAD_CAPTURED' && msg.imageDataUrl) {
+          const norm = normalizeImageDataUrlMime(String(msg.imageDataUrl));
+          if (norm) capturedViaEvent = norm;
+        }
+      } catch (_) {}
+    };
+    window.addEventListener('message', onWindowMsg);
+    try { chrome.runtime.onMessage.addListener(onRuntimeMsg); } catch (_) {}
+
+    const cleanupWatch = () => {
+      document.documentElement.dataset.vpFlowUpscaleWatching = 'false';
+      document.documentElement.dataset.vpFlowCapturingUpscale = 'false';
+      window.removeEventListener('message', onWindowMsg);
+      try { chrome.runtime.onMessage.removeListener(onRuntimeMsg); } catch (_) {}
+    };
 
     try {
       const savedMediaIds = window.__vpLastFlowMediaIds || [];
@@ -1102,12 +1146,28 @@
       if (!targetImg && savedEls[imageIndex] && document.contains(savedEls[imageIndex])) {
         targetImg = savedEls[imageIndex];
       }
+      const tileImgs = Array.from(document.querySelectorAll('flow-image-tile img, img[alt*="Tile displaying" i]'));
+      if (!targetImg && payload.srcDataUrl && tileImgs.length > 0) {
+        const targetFp = await computeImageFingerprint(payload.srcDataUrl);
+        if (targetFp) {
+          for (const cand of tileImgs.slice(0, 12)) {
+            const ext = await extractGeneratedImageDataUrl(cand);
+            if (ext.imageDataUrl) {
+              const candFp = await computeImageFingerprint(ext.imageDataUrl);
+              if (candFp && isMatchingFingerprint(candFp, targetFp)) {
+                targetImg = cand;
+                break;
+              }
+            }
+          }
+        }
+      }
       if (!targetImg) {
-        const tileImgs = Array.from(document.querySelectorAll('flow-image-tile img, img[alt*="Tile displaying" i]'));
         targetImg = tileImgs[imageIndex] || tileImgs[0] || null;
       }
 
       if (!targetImg) {
+        cleanupWatch();
         return { ok: false, fallbackToLocal: true, error: 'Target generated image tile not found in Google Flow.' };
       }
 
@@ -1117,6 +1177,8 @@
         targetImg.parentElement;
 
       if (tile) {
+        try { tile.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (_) {}
+        await sleep(180);
         for (const el of [tile, targetImg, targetImg.parentElement]) {
           if (!el) continue;
           el.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true }));
@@ -1124,7 +1186,7 @@
           el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
           el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
         }
-        await sleep(300);
+        await sleep(320);
       }
 
       const moreBtn =
@@ -1135,6 +1197,7 @@
           ));
 
       if (!moreBtn) {
+        cleanupWatch();
         return { ok: false, fallbackToLocal: true, error: `Google Flow tile "More options" button not found.` };
       }
 
@@ -1148,6 +1211,7 @@
 
       if (!dlMenuItem) {
         document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
+        cleanupWatch();
         return { ok: false, fallbackToLocal: true, error: `Google Flow Download menu item not found.` };
       }
 
@@ -1168,6 +1232,7 @@
 
       if (!resItem) {
         document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
+        cleanupWatch();
         return {
           ok: false,
           fallbackToLocal: true,
@@ -1184,6 +1249,7 @@
 
       if (isDisabledOrLocked) {
         document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
+        cleanupWatch();
         return {
           ok: false,
           fallbackToLocal: true,
@@ -1191,7 +1257,8 @@
         };
       }
 
-      // Arm MAIN-world Blob/Anchor download capture before clicking 2K Upscaled / 4K Upscaled
+      // Arm MAIN-world Blob/Anchor/Fetch download capture before clicking 2K Upscaled / 4K Upscaled
+      document.documentElement.dataset.vpFlowUpscaleWatching = 'true';
       document.documentElement.dataset.vpFlowCapturingUpscale = 'true';
       document.documentElement.dataset.vpFlowUpscaleDataUrl = '';
       document.documentElement.dataset.vpFlowUpscaleUrl = '';
@@ -1199,11 +1266,24 @@
       radClick(resItem);
 
       const tWait = Date.now();
-      while (Date.now() - tWait < 28000) {
-        await sleep(500);
-        const capturedDataUrl = document.documentElement.dataset.vpFlowUpscaleDataUrl || '';
-        if (capturedDataUrl && capturedDataUrl.startsWith('data:image/')) {
-          document.documentElement.dataset.vpFlowCapturingUpscale = 'false';
+      while (Date.now() - tWait < 38000) {
+        await sleep(350);
+
+        if (capturedViaEvent) {
+          cleanupWatch();
+          return {
+            ok: true,
+            provider: 'flow',
+            resolution,
+            nativeDownloadTriggered: true,
+            imageDataUrl: capturedViaEvent,
+            imageUrl: ''
+          };
+        }
+
+        const capturedDataUrl = normalizeImageDataUrlMime(document.documentElement.dataset.vpFlowUpscaleDataUrl || '');
+        if (capturedDataUrl) {
+          cleanupWatch();
           return {
             ok: true,
             provider: 'flow',
@@ -1213,31 +1293,46 @@
             imageUrl: ''
           };
         }
+
         const capturedUrl = document.documentElement.dataset.vpFlowUpscaleUrl || '';
         if (capturedUrl) {
-          document.documentElement.dataset.vpFlowCapturingUpscale = 'false';
           const extracted = await extractGeneratedImageDataUrl({ currentSrc: capturedUrl, src: capturedUrl });
-          if (extracted.imageDataUrl || extracted.imageUrl) {
+          if (extracted.imageDataUrl) {
+            cleanupWatch();
             return {
               ok: true,
               provider: 'flow',
               resolution,
               nativeDownloadTriggered: true,
               imageDataUrl: extracted.imageDataUrl,
-              imageUrl: extracted.imageUrl
+              imageUrl: extracted.imageUrl || capturedUrl
+            };
+          }
+        }
+
+        // Check if Google Flow displayed a snackbar saying 4K/2K failed or requires an upgrade
+        const snack = document.querySelector('snack-bar-container, .mat-mdc-snack-bar-container, [role="alert"], [role="status"]');
+        if (snack && isVisible(snack)) {
+          const snackTxt = (snack.innerText || snack.textContent || '').trim();
+          if (/\b(upgrade|unavailable|failed|error|limit|not\s+supported|pro\s+only|ultra)\b/i.test(snackTxt)) {
+            cleanupWatch();
+            return {
+              ok: false,
+              fallbackToLocal: true,
+              error: `Google Flow ${resolution} unavailable: ${snackTxt}`
             };
           }
         }
       }
 
-      document.documentElement.dataset.vpFlowCapturingUpscale = 'false';
+      cleanupWatch();
       return {
         ok: false,
         fallbackToLocal: true,
         error: `Google Flow ${resolution} upscale timed out; falling back to VisionPilot upscale.`
       };
     } catch (err) {
-      document.documentElement.dataset.vpFlowCapturingUpscale = 'false';
+      cleanupWatch();
       return {
         ok: false,
         fallbackToLocal: true,

@@ -220,17 +220,88 @@
       });
     }
 
-    // MAIN-world download URL capture for Google Flow 2K / 4K upscale downloads
-    window.addEventListener('vp-flow-install-dl-hook', () => {
-      if (window.__vpFlowDlHooked) return;
+    // MAIN-world download & Blob capture for Google Flow 2K / 4K upscale downloads (runs in MAIN world, bypassing CSP)
+    if (!window.__vpFlowDlHooked) {
       window.__vpFlowDlHooked = true;
+      const blobMap = new Map();
+      const emitCapturedUpscale = (dataUrl, url = '', nativeDownloadTriggered = true) => {
+        if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:')) return;
+        try {
+          window.postMessage({
+            __vpFlowUpscaleCaptured: true,
+            dataUrl,
+            url: url || '',
+            nativeDownloadTriggered: Boolean(nativeDownloadTriggered)
+          }, '*');
+        } catch (_) {}
+      };
+      const readBlobToDataUrl = (blob, url = '', nativeDownloadTriggered = true) => {
+        try {
+          if (!blob || !(blob instanceof Blob) || blob.size < 15000) return;
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            if (typeof reader.result === 'string' && reader.result.startsWith('data:')) {
+              emitCapturedUpscale(reader.result, url, nativeDownloadTriggered);
+            }
+          };
+          reader.readAsDataURL(blob);
+        } catch (_) {}
+      };
+
+      const origCreateObjectURL = URL.createObjectURL.bind(URL);
+      URL.createObjectURL = function (obj) {
+        const objectUrl = origCreateObjectURL(obj);
+        try {
+          if (obj instanceof Blob && obj.size > 15000) {
+            blobMap.set(objectUrl, obj);
+            setTimeout(() => blobMap.delete(objectUrl), 120000);
+            if (document.documentElement.dataset.vpFlowUpscaleWatching === 'true') {
+              readBlobToDataUrl(obj, objectUrl, true);
+            }
+          }
+        } catch (_) {}
+        return objectUrl;
+      };
+
       const origA = HTMLAnchorElement.prototype.click;
       HTMLAnchorElement.prototype.click = function (...args) {
-        if (this && this.href && (this.hasAttribute('download') || /blob:|googleusercontent|storage\.googleapis|labs\.google|flow\.google/i.test(this.href))) {
-          document.documentElement.dataset.vpFlowUpscaleUrl = this.href;
-        }
+        try {
+          const href = this && this.href ? String(this.href) : '';
+          const isWatching = document.documentElement.dataset.vpFlowUpscaleWatching === 'true';
+          if (href && (this.hasAttribute('download') || isWatching || /blob:|googleusercontent|storage\.googleapis|labs\.google|flow\.google/i.test(href))) {
+            document.documentElement.dataset.vpFlowUpscaleUrl = href;
+            if (isWatching) {
+              if (blobMap.has(href)) {
+                readBlobToDataUrl(blobMap.get(href), href, true);
+              } else if (href.startsWith('data:image/')) {
+                emitCapturedUpscale(href, href, true);
+              } else {
+                fetch(href)
+                  .then(r => (r.ok ? r.blob() : null))
+                  .then(b => { if (b) readBlobToDataUrl(b, href, true); })
+                  .catch(() => {});
+              }
+            }
+          }
+        } catch (_) {}
         return origA.apply(this, args);
       };
-    });
+
+      const origFetch = window.fetch.bind(window);
+      window.fetch = async function (...args) {
+        const res = await origFetch(...args);
+        try {
+          if (document.documentElement.dataset.vpFlowUpscaleWatching === 'true') {
+            const ct = (res.headers?.get('content-type') || '').toLowerCase();
+            if (ct.startsWith('image/') || ct.includes('octet-stream')) {
+              res.clone().blob().then(b => {
+                if (b && b.size > 25000) readBlobToDataUrl(b, res.url || '', true);
+              }).catch(() => {});
+            }
+          }
+        } catch (_) {}
+        return res;
+      };
+    }
   } catch (e) {}
 })();
