@@ -1179,9 +1179,9 @@ body.img-gen-busy #pFocus .focus-shead-right .focus-pill .vf-sw-lbl,
 }
 .gen-img-model-bar{
   background:var(--panel-2);border:1px solid var(--accent);border-radius:9px;
-  padding:10px 11px;display:flex;flex-direction:column;justify-content:flex-start;gap:8px;
+  padding:8px 10px;display:flex;flex-direction:column;justify-content:flex-start;gap:6px;
   box-shadow:0 6px 18px var(--shadow);overflow-y:auto;overflow-x:hidden;box-sizing:border-box;
-  min-height:140px;
+  min-height:0;
 }
 .gen-img-model-head{
   display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:nowrap;flex:none;
@@ -1197,15 +1197,15 @@ body.img-gen-busy #pFocus .focus-shead-right .focus-pill .vf-sw-lbl,
 }
 .gen-img-model-close:hover{border-color:var(--accent);color:var(--accent)}
 .gen-img-model-opts{
-  display:grid;grid-template-columns:1fr 1fr;gap:8px;flex:1 1 auto;align-items:stretch;
+  display:grid;grid-template-columns:1fr 1fr;gap:8px;flex:1 1 auto;align-items:stretch;min-height:0;
 }
 @media (max-width:460px){.gen-img-model-opts{grid-template-columns:1fr}}
 .gen-img-model-opt{
-  display:flex;flex-direction:column;align-items:flex-start;justify-content:flex-start;gap:6px;
-  text-align:left;padding:11px 11px;border-radius:8px;
+  display:flex;flex-direction:column;align-items:flex-start;justify-content:flex-start;gap:3px;
+  text-align:left;padding:6px 9px;border-radius:8px;
   border:1px solid var(--line);background:var(--panel);color:var(--fg);
   cursor:pointer;transition:border-color .18s,background .18s,transform .12s;
-  min-width:0;box-sizing:border-box;
+  min-width:0;min-height:0;box-sizing:border-box;
 }
 .gen-img-model-opt:hover{
   border-color:var(--accent);background:var(--accent-glow);transform:translateY(-1px);
@@ -1219,15 +1219,15 @@ body.img-gen-busy #pFocus .focus-shead-right .focus-pill .vf-sw-lbl,
 .gen-img-model-opt .m-dot.gemini{background:#4285f4;box-shadow:0 0 6px #4285f4}
 .gen-img-model-opt .m-dot.gpt{background:#10a37f;box-shadow:0 0 6px #10a37f}
 .gen-img-model-opt b{
-  font-size:13px;font-weight:700;color:var(--fg);white-space:nowrap;line-height:1.25;
+  font-size:12px;font-weight:700;color:var(--fg);white-space:nowrap;line-height:1.18;
 }
 .gen-img-model-opt .gim-tag{
   display:inline-flex;align-items:center;align-self:flex-start;margin-left:0;
-  white-space:nowrap;width:fit-content;font-family:var(--f-mono);font-size:9.5px;font-weight:600;
-  padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--muted);line-height:1.2;
+  white-space:nowrap;width:fit-content;font-family:var(--f-mono);font-size:8.8px;font-weight:600;
+  padding:1px 7px;border-radius:99px;border:1px solid var(--line);color:var(--muted);line-height:1.18;
 }
 .gen-img-model-opt small{
-  font-size:10.5px;color:var(--muted);line-height:1.38;margin-top:2px;
+  font-size:9.3px;color:var(--muted);line-height:1.22;margin-top:0;
 }
 
 /* PART 5: Centered Result Window for Generated Image / Upscaled Image / Upscaled Video */

@@ -36,7 +36,7 @@ function pickBestClient() {
       continue;
     }
     const cmp = compareVersions(c.info?.version, best.info?.version);
-    if (cmp > 0) best = c;
+    if (cmp > 0 || (cmp === 0 && (c.info?.since || 0) >= (best.info?.since || 0))) best = c;
   }
   ext = best ? best.ws : null;
   extInfo = best ? best.info : null;

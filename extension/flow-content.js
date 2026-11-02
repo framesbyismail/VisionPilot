@@ -640,12 +640,17 @@
       const spinners = Array.from(
         document.querySelectorAll('mat-progress-spinner, [role="progressbar"], [class*="uploading" i], [class*="spinner" i]')
       ).filter(isVisible);
-      const newImgs = Array.from(document.querySelectorAll('img')).filter((im) => !preUploadImgs.has(im) && isVisible(im));
+      const ingBtns = Array.from(document.querySelectorAll('flow-ingredient-bar button[aria-label="Ingredient"], button[aria-label="Ingredient"]')).filter(isVisible);
+      const anyIngBusy = ingBtns.some((b) => b.getAttribute('aria-busy') === 'true');
+      const chipImgs = Array.from(document.querySelectorAll('flow-ingredient-bar img.chip-image, img.chip-image')).filter(isVisible);
+      const newImgs = chipImgs.length
+        ? chipImgs
+        : Array.from(document.querySelectorAll('img')).filter((im) => !preUploadImgs.has(im) && isVisible(im));
       const allNewImgsComplete =
         newImgs.length > 0 &&
         newImgs.every((im) => im.complete && (im.naturalWidth || 0) > 0 && !/^blob:/i.test(im.currentSrc || im.src || ''));
 
-      if (spinners.length === 0 && (allNewImgsComplete || (newImgs.length > 0 && Date.now() - tWaitLoad > 3500))) {
+      if (spinners.length === 0 && !anyIngBusy && (allNewImgsComplete || (newImgs.length > 0 && Date.now() - tWaitLoad > 4500))) {
         stableReadyTicks++;
         if (stableReadyTicks >= 4) break;
       } else {
@@ -671,32 +676,48 @@
     editor.focus();
     await sleep(100);
 
-    if (editor.tagName === 'TEXTAREA' || editor.tagName === 'INPUT') {
-      const proto = editor.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
-      const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-      if (setter) setter.call(editor, promptText);
-      else editor.value = promptText;
-      editor.dispatchEvent(new Event('input', { bubbles: true }));
-      editor.dispatchEvent(new Event('change', { bubbles: true }));
-    } else {
-      try {
-        const dt = new DataTransfer();
-        dt.setData('text/plain', promptText);
-        editor.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt }));
-      } catch (e) {}
-      await sleep(250);
+    // 1. Primary: MAIN-world ProseMirror / ClipboardEvent('paste') replacement (replaces existing text in-place without touching <flow-ingredient-bar>)
+    try {
+      document.documentElement.dataset.vpPromptTypedMethod = '';
+      window.dispatchEvent(new CustomEvent('vp-main-world-type-prompt', { detail: { text: promptText } }));
+    } catch (e) {}
+    await sleep(260);
 
-      const curText = (editor.innerText || editor.textContent || '').trim();
-      if (!curText || !curText.includes(promptText.slice(0, Math.min(12, promptText.length)))) {
+    const checkPrefix = promptText.slice(0, Math.min(16, promptText.length));
+    let curText = (editor.innerText || editor.textContent || '').trim();
+    if (!curText || (checkPrefix && !curText.includes(checkPrefix))) {
+      if (editor.tagName === 'TEXTAREA' || editor.tagName === 'INPUT') {
+        const proto = editor.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+        const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+        if (setter) setter.call(editor, promptText);
+        else editor.value = promptText;
+        editor.dispatchEvent(new Event('input', { bubbles: true }));
+        editor.dispatchEvent(new Event('change', { bubbles: true }));
+      } else {
         try {
           const sel = window.getSelection();
           const range = document.createRange();
           range.selectNodeContents(editor);
           sel.removeAllRanges();
           sel.addRange(range);
-          document.execCommand('insertText', false, promptText);
+          const dt = new DataTransfer();
+          dt.setData('text/plain', promptText);
+          editor.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt }));
         } catch (e) {}
-        await sleep(200);
+        await sleep(250);
+
+        curText = (editor.innerText || editor.textContent || '').trim();
+        if (!curText || (checkPrefix && !curText.includes(checkPrefix))) {
+          try {
+            const sel = window.getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(editor);
+            sel.removeAllRanges();
+            sel.addRange(range);
+            document.execCommand('insertText', false, promptText);
+          } catch (e) {}
+          await sleep(200);
+        }
       }
     }
 
@@ -876,9 +897,17 @@
         chrome.runtime.sendMessage({ type: 'VP_STAGE', reqId, stage: 'sending' });
       } catch (e) {}
 
+      try {
+        window.dispatchEvent(new CustomEvent('vp-main-world-submit-flow'));
+      } catch (e) {}
+      await sleep(120);
+
       const genBtn = findFlowGenerateButton(curEditor);
       if (genBtn) {
-        radClick(genBtn);
+        const liveTxtNow = curEditor ? (curEditor.innerText || curEditor.textContent || '').trim() : '';
+        if (liveTxtNow.length > 0) {
+          radClick(genBtn);
+        }
       } else {
         curEditor.dispatchEvent(
           new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true })
@@ -935,6 +964,10 @@
           const liveBtn = document.querySelector('button[aria-label="Start generation"]');
           if (liveTxt.length > 8 && liveBtn && !liveBtn.disabled && liveBtn.getAttribute('aria-disabled') !== 'true') {
             retrySendAttempts++;
+            try {
+              window.dispatchEvent(new CustomEvent('vp-main-world-submit-flow'));
+            } catch (e) {}
+            await sleep(100);
             radClick(liveBtn);
             if (liveEd) {
               liveEd.focus();
@@ -1054,43 +1087,6 @@
   // so VisionPilot falls back to its built-in 4K upscaler.
   async function runFlowImageUpscale(payload) {
     ensureMainWorldHooks();
-    if (payload && payload.resolution === '__DIAG__') {
-      const ed = findFlowEditor();
-      const sb = document.querySelector('button[aria-label="Start generation"]');
-      const box = document.querySelector('flow-base-prompt-box');
-      const edText = ed ? (ed.innerText || ed.textContent || '') : '';
-      const boxText = box ? (box.innerText || box.textContent || '').replace(/\s+/g, ' ').slice(0, 500) : '';
-      const sbFullHtml = sb ? sb.outerHTML : null;
-      const sbParentHtml = sb && sb.parentElement ? sb.parentElement.outerHTML : null;
-      const sbGrandParentHtml = sb && sb.parentElement && sb.parentElement.parentElement ? sb.parentElement.parentElement.outerHTML.slice(0, 1200) : null;
-      const form = (ed && ed.closest('form')) || (sb && sb.closest('form')) || document.querySelector('form');
-
-      // Also check all elements inside flow-base-prompt-box except svg and ProseMirror text
-      const boxClone = box ? box.cloneNode(true) : null;
-      if (boxClone) {
-        boxClone.querySelectorAll('svg, .ProseMirror').forEach(x => x.remove());
-      }
-      const boxStructure = boxClone ? boxClone.innerHTML.slice(0, 2000) : null;
-
-      return {
-        ok: false,
-        fallbackToLocal: true,
-        error: JSON.stringify({
-          edTextLen: edText.length,
-          edTextStart: edText.slice(0, 120),
-          edTextEnd: edText.slice(-120),
-          boxText,
-          hasForm: Boolean(form),
-          sbDisabled: sb ? sb.disabled : null,
-          sbAriaDisabled: sb ? sb.getAttribute('aria-disabled') : null,
-          sbClasses: sb ? sb.className : null,
-          sbFullHtml,
-          sbParentHtml,
-          sbGrandParentHtml,
-          boxStructure
-        })
-      };
-    }
     const scale = Number(payload.scaleFactor || payload.scale) === 2 ? 2 : 4;
     const resolution = scale === 2 ? '2K' : '4K';
     const imageIndex = Math.max(0, Number(payload.imageIndex) || 0);

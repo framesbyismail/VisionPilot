@@ -482,6 +482,7 @@ function ensureAdvMode(what) {
   return true;
 }
 // the one "Advanced mode needed" panel every locked control uses; auth.js fills in the sign-in / request buttons
+// Never opens or focuses any browser tab — only shows the in-page #advPop dialog.
 function needAdv(what) {
   // Never show the "Advanced mode needed" notification if the user already has Advanced mode ON
   if (PRO || S.mode === 'adv' || document.body.classList.contains('adv') || document.body.classList.contains('pro')) {
@@ -504,7 +505,8 @@ $('advClose').addEventListener('click', hideAdv);
 $('advPopBackdrop')?.addEventListener('click', hideAdv);
 document.addEventListener('keydown', e => { if (e.key === 'Escape') hideAdv(); });
 
-// Normal mode user reminder: every 15 minutes, show the centered Advanced Mode prompt window ONLY for Normal mode users
+// Normal mode user reminder: every 15 minutes, show the centered Advanced Mode prompt window ONLY for Normal mode users.
+// Shows the window quietly in-place without ever opening, activating, or switching to the web tab.
 const ADV_REMINDER_INTERVAL_MS = 15 * 60 * 1000;
 function triggerNormalModeAdvReminder() {
   if (!PRO && S.mode !== 'adv' && !document.body.classList.contains('adv') && !document.body.classList.contains('pro')) {
@@ -655,7 +657,7 @@ function openDD(sel) {
     closeDD();
     const optEl = [...sel.options].find(o => o.value === v);
     if (optEl?.hasAttribute('data-adv') && S.mode !== 'adv') {
-      if (!ensureAdvMode(`"${optEl.textContent.replace('…', '')}"`)) { d.btn.focus(); return; }
+      if (!ensureAdvMode(`"${optEl.textContent.replace('…', '')}"`)) return;
     }
     if (sel.value !== v) { sel.value = v; sel.dispatchEvent(new Event('change', {bubbles:true})); }
     refreshDD(sel); d.btn.focus();

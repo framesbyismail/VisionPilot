@@ -22,7 +22,13 @@ async function fetchWithTimeout(url, ms, asBuffer = false) {
 // the folder to serve: the newest good download, else the copy shipped with the app
 function activeSiteDir(userData, bundled) {
   const cur = path.join(userData, 'site-current');
-  if (fs.existsSync(path.join(cur, 'index.html')) && readJson(path.join(cur, 'version.json'))) return cur;
+  const curVer = fs.existsSync(path.join(cur, 'index.html')) ? readJson(path.join(cur, 'version.json')) : null;
+  const bunVer = bundled && fs.existsSync(path.join(bundled, 'index.html')) ? readJson(path.join(bundled, 'version.json')) : null;
+  if (curVer && bunVer && curVer.built && bunVer.built && Date.parse(bunVer.built) >= Date.parse(curVer.built)) {
+    try { fs.rmSync(cur, {recursive:true, force:true}); } catch (e) {}
+    return bundled;
+  }
+  if (curVer) return cur;
   return bundled;
 }
 

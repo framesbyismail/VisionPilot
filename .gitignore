@@ -4,4 +4,4 @@ node_modules/
 # desktop app: bundled site and installers are made by npm run dist:*
 desktop/site/
 desktop/release/
-visionpilot-ai-bridge-extension.zip
+desktop/*.exe

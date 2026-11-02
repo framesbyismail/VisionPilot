@@ -67,63 +67,158 @@
       return origClick.apply(this, args);
     };
 
-    // MAIN-world ProseMirror / React prompt setter for Google Flow and other editors
-    window.addEventListener('vp-main-world-type-prompt', (ev) => {
+    // Patch Google Flow's flow-base-prompt-box submit(a) so synthetic clicks & Enter submits work even when an Ingredient reference image is attached
+    const installFlowTrustedSubmitPatch = () => {
       try {
-        const detail = ev?.detail || {};
-        const text = String(detail.text || '');
-        const target =
-          document.querySelector('[aria-label="What do you want to create?"]') ||
-          document.querySelector('div.ProseMirror[contenteditable="true"]') ||
-          document.querySelector('div[contenteditable="true"][role="textbox"]') ||
-          document.querySelector('textarea');
-        if (!target) return;
-        target.focus();
-
-        // 1. Direct ProseMirror EditorView transaction (works even in unfocused background tabs!)
-        const pmView =
-          target.pmViewDesc?.view ||
-          target.querySelector?.('*')?.pmViewDesc?.view ||
-          target.__pmView;
-        if (pmView && pmView.state && typeof pmView.dispatch === 'function') {
-          const tr = pmView.state.tr.insertText(text, 0, pmView.state.doc.content.size);
-          pmView.dispatch(tr);
-          document.documentElement.dataset.vpPromptTypedMethod = 'pmView';
-          return;
-        }
-
-        // 2. MAIN-world ClipboardEvent('paste') with real MAIN-world DataTransfer
-        const dt = new window.DataTransfer();
-        dt.setData('text/plain', text);
-        const pasteEv = new window.ClipboardEvent('paste', {
-          bubbles: true,
-          cancelable: true,
-          composed: true,
-          clipboardData: dt
-        });
-        try {
-          if (!pasteEv.clipboardData || !pasteEv.clipboardData.getData('text/plain')) {
-            Object.defineProperty(pasteEv, 'clipboardData', { value: dt, configurable: true });
+        for (const winKey of Object.getOwnPropertyNames(window)) {
+          if (!/^default_|AiSandbox/i.test(winKey)) continue;
+          const ns = window[winKey];
+          if (!ns || typeof ns !== 'object') continue;
+          for (const prop of Object.getOwnPropertyNames(ns)) {
+            try {
+              const cls = ns[prop];
+              if (typeof cls !== 'function' || !cls.prototype || typeof cls.prototype.submit !== 'function') continue;
+              const fnStr = Function.prototype.toString.call(cls.prototype.submit);
+              if (!fnStr.includes('isTrusted') && !fnStr.includes('.prompt.') && !fnStr.includes('.xh.emit')) continue;
+              if (!cls.prototype.submit.__vpWrapped) {
+                const origSubmit = cls.prototype.submit;
+                const wrappedSubmit = function (a) {
+                  window.__vpFlowPromptBox = this;
+                  const trustedEvent =
+                    a && typeof a === 'object' && a.isTrusted === true
+                      ? a
+                      : {
+                          isTrusted: true,
+                          type: (a && a.type) || 'click',
+                          target: (a && a.target) || null,
+                          currentTarget: (a && a.currentTarget) || null,
+                          preventDefault() {},
+                          stopPropagation() {},
+                          stopImmediatePropagation() {}
+                        };
+                  return origSubmit.call(this, trustedEvent);
+                };
+                wrappedSubmit.__vpWrapped = true;
+                cls.prototype.submit = wrappedSubmit;
+              }
+              for (const m of ['isDisabled', 'Le', 'Nk', 'clear']) {
+                if (typeof cls.prototype[m] === 'function' && !cls.prototype[m].__vpWrapped) {
+                  const origM = cls.prototype[m];
+                  const wrappedM = function (...args) {
+                    window.__vpFlowPromptBox = this;
+                    return origM.apply(this, args);
+                  };
+                  wrappedM.__vpWrapped = true;
+                  cls.prototype[m] = wrappedM;
+                }
+              }
+            } catch (e) {}
           }
-        } catch (e) {}
-        target.dispatchEvent(pasteEv);
-        if ((target.innerText || target.textContent || '').trim().includes(text.slice(0, 12))) {
-          document.documentElement.dataset.vpPromptTypedMethod = 'mainPaste';
-          return;
         }
+      } catch (e) {}
+    };
 
-        // 3. Selection + execCommand('insertText') in MAIN world
-        const sel = window.getSelection();
-        const range = document.createRange();
-        range.selectNodeContents(target);
-        sel.removeAllRanges();
-        sel.addRange(range);
-        document.execCommand('insertText', false, text);
-        document.documentElement.dataset.vpPromptTypedMethod = 'mainExecCommand';
-      } catch (err) {
-        document.documentElement.dataset.vpPromptTypedMethod = 'error:' + (err?.message || String(err));
-      }
-    });
+    if (!window.__vpFlowMainHooksInstalled) {
+      window.__vpFlowMainHooksInstalled = true;
+
+      // MAIN-world ProseMirror / React prompt setter for Google Flow and other editors
+      window.addEventListener('vp-main-world-type-prompt', (ev) => {
+        try {
+          installFlowTrustedSubmitPatch();
+          const detail = ev?.detail || {};
+          const text = String(detail.text || '');
+          const target =
+            document.querySelector('[aria-label="What do you want to create?"]') ||
+            document.querySelector('div.ProseMirror[contenteditable="true"]') ||
+            document.querySelector('div[contenteditable="true"][role="textbox"]') ||
+            document.querySelector('textarea');
+          if (!target) return;
+          target.focus();
+
+          // 1. Direct ProseMirror EditorView transaction (works even in unfocused background tabs!)
+          const pmView =
+            target.pmViewDesc?.view ||
+            target.querySelector?.('*')?.pmViewDesc?.view ||
+            target.__pmView;
+          if (pmView && pmView.state && typeof pmView.dispatch === 'function') {
+            const tr = pmView.state.tr.insertText(text, 0, pmView.state.doc.content.size);
+            pmView.dispatch(tr);
+            document.documentElement.dataset.vpPromptTypedMethod = 'pmView';
+            return;
+          }
+
+          // Select existing contents inside ProseMirror first so pasting replaces rather than appends
+          try {
+            const sel = window.getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(target);
+            sel.removeAllRanges();
+            sel.addRange(range);
+          } catch (e) {}
+
+          // 2. MAIN-world ClipboardEvent('paste') with real MAIN-world DataTransfer
+          const dt = new window.DataTransfer();
+          dt.setData('text/plain', text);
+          const pasteEv = new window.ClipboardEvent('paste', {
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+            clipboardData: dt
+          });
+          try {
+            if (!pasteEv.clipboardData || !pasteEv.clipboardData.getData('text/plain')) {
+              Object.defineProperty(pasteEv, 'clipboardData', { value: dt, configurable: true });
+            }
+          } catch (e) {}
+          target.dispatchEvent(pasteEv);
+          if ((target.innerText || target.textContent || '').trim().includes(text.slice(0, 12))) {
+            document.documentElement.dataset.vpPromptTypedMethod = 'mainPaste';
+            return;
+          }
+
+          // 3. Selection + execCommand('insertText') in MAIN world
+          const sel = window.getSelection();
+          const range = document.createRange();
+          range.selectNodeContents(target);
+          sel.removeAllRanges();
+          sel.addRange(range);
+          document.execCommand('insertText', false, text);
+          document.documentElement.dataset.vpPromptTypedMethod = 'mainExecCommand';
+        } catch (err) {
+          document.documentElement.dataset.vpPromptTypedMethod = 'error:' + (err?.message || String(err));
+        }
+      });
+
+      // MAIN-world Google Flow submit trigger (bypasses isTrusted check when Ingredient image is attached)
+      window.addEventListener('vp-main-world-submit-flow', () => {
+        try {
+          installFlowTrustedSubmitPatch();
+          const boxEl = document.querySelector('flow-base-prompt-box');
+          if (boxEl && !window.__vpFlowPromptBox) {
+            try { boxEl.click(); } catch (e) {}
+          }
+          const sb = document.querySelector('button[aria-label="Start generation"]');
+          if (sb && !sb.disabled && sb.getAttribute('aria-disabled') !== 'true') {
+            sb.click();
+          }
+          setTimeout(() => {
+            try {
+              const ed = document.querySelector('[aria-label="What do you want to create?"]') || document.querySelector('div.ProseMirror[contenteditable="true"]');
+              const remTxt = ed ? (ed.innerText || ed.textContent || '').trim() : '';
+              if (remTxt.length > 0 && window.__vpFlowPromptBox && typeof window.__vpFlowPromptBox.submit === 'function') {
+                window.__vpFlowPromptBox.submit({
+                  isTrusted: true,
+                  type: 'click',
+                  preventDefault() {},
+                  stopPropagation() {},
+                  stopImmediatePropagation() {}
+                });
+              }
+            } catch (e) {}
+          }, 150);
+        } catch (e) {}
+      });
+    }
 
     // MAIN-world download URL capture for Google Flow 2K / 4K upscale downloads
     window.addEventListener('vp-flow-install-dl-hook', () => {

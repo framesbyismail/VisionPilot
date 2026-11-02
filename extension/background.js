@@ -207,6 +207,35 @@ async function getOwnedProviderTab(model) {
   const prov = PROVIDERS[model];
   if (!prov) return null;
 
+  // For Google Flow, ALWAYS reuse any existing open Google Flow tab (especially the Visionpilot project tab)
+  // rather than ever opening a duplicate Google Flow tab.
+  if (model === 'flow') {
+    try {
+      const allTabs = await chrome.tabs.query({});
+      const flowTabs = (allTabs || []).filter(
+        (t) => t && t.id && /^https:\/\/(labs\.google\/fx\/tools\/flow|(?:[\w-]+\.)?flow\.google\.com)/i.test(t.url || '')
+      );
+      if (flowTabs.length > 0) {
+        flowTabs.sort((a, b) => {
+          const aScore = (/\/project\//i.test(a.url || '') ? 10 : 0) + (/visionpilot/i.test(a.title || '') ? 5 : 0);
+          const bScore = (/\/project\//i.test(b.url || '') ? 10 : 0) + (/visionpilot/i.test(b.title || '') ? 5 : 0);
+          return bScore - aScore;
+        });
+        const bestFlowTab = flowTabs[0];
+        // Clean up any duplicate extra Google Flow tabs opened earlier so only 1 Flow tab remains
+        if (flowTabs.length > 1) {
+          for (let i = 1; i < flowTabs.length; i++) {
+            try { await chrome.tabs.remove(flowTabs[i].id); } catch (e) {}
+          }
+        }
+        activeProviderTabIds.flow = bestFlowTab.id;
+        freshChatStarted.flow = true;
+        await saveOwnedTabState();
+        return bestFlowTab;
+      }
+    } catch (e) {}
+  }
+
   if (activeProviderTabIds[model]) {
     try {
       const t = await chrome.tabs.get(activeProviderTabIds[model]);
@@ -234,35 +263,6 @@ async function getOwnedProviderTab(model) {
         freshChatStarted[model] = true;
         await saveOwnedTabState();
         return match;
-      }
-    } catch (e) {}
-  }
-
-  // For Google Flow, ALWAYS reuse any existing open Google Flow tab (especially the Visionpilot project tab)
-  // rather than ever opening a duplicate Google Flow tab.
-  if (model === 'flow') {
-    try {
-      const allTabs = await chrome.tabs.query({});
-      const flowTabs = (allTabs || []).filter(
-        (t) => t && t.id && /^https:\/\/(labs\.google\/fx\/tools\/flow|(?:[\w-]+\.)?flow\.google\.com)/i.test(t.url || '')
-      );
-      if (flowTabs.length > 0) {
-        flowTabs.sort((a, b) => {
-          const aScore = (/\/project\//i.test(a.url || '') ? 10 : 0) + (/visionpilot/i.test(a.title || '') ? 5 : 0);
-          const bScore = (/\/project\//i.test(b.url || '') ? 10 : 0) + (/visionpilot/i.test(b.title || '') ? 5 : 0);
-          return bScore - aScore;
-        });
-        const bestFlowTab = flowTabs[0];
-        // Clean up any duplicate extra Google Flow tabs opened earlier so only 1 Flow tab remains
-        if (flowTabs.length > 1) {
-          for (let i = 1; i < flowTabs.length; i++) {
-            try { await chrome.tabs.remove(flowTabs[i].id); } catch (e) {}
-          }
-        }
-        activeProviderTabIds.flow = bestFlowTab.id;
-        freshChatStarted.flow = true;
-        await saveOwnedTabState();
-        return bestFlowTab;
       }
     } catch (e) {}
   }
@@ -658,10 +658,62 @@ async function injectProviderHelpers(tabId, scriptFile) {
           });
         }
 
+        const installFlowTrustedSubmitPatch = () => {
+          try {
+            for (const winKey of Object.getOwnPropertyNames(window)) {
+              if (!/^default_|AiSandbox/i.test(winKey)) continue;
+              const ns = window[winKey];
+              if (!ns || typeof ns !== 'object') continue;
+              for (const prop of Object.getOwnPropertyNames(ns)) {
+                try {
+                  const cls = ns[prop];
+                  if (typeof cls !== 'function' || !cls.prototype || typeof cls.prototype.submit !== 'function') continue;
+                  const fnStr = Function.prototype.toString.call(cls.prototype.submit);
+                  if (!fnStr.includes('isTrusted') && !fnStr.includes('.prompt.') && !fnStr.includes('.xh.emit')) continue;
+                  if (!cls.prototype.submit.__vpWrapped) {
+                    const origSubmit = cls.prototype.submit;
+                    const wrappedSubmit = function (a) {
+                      window.__vpFlowPromptBox = this;
+                      const trustedEvent =
+                        a && typeof a === 'object' && a.isTrusted === true
+                          ? a
+                          : {
+                              isTrusted: true,
+                              type: (a && a.type) || 'click',
+                              target: (a && a.target) || null,
+                              currentTarget: (a && a.currentTarget) || null,
+                              preventDefault() {},
+                              stopPropagation() {},
+                              stopImmediatePropagation() {}
+                            };
+                      return origSubmit.call(this, trustedEvent);
+                    };
+                    wrappedSubmit.__vpWrapped = true;
+                    cls.prototype.submit = wrappedSubmit;
+                  }
+                  for (const m of ['isDisabled', 'Le', 'Nk', 'clear']) {
+                    if (typeof cls.prototype[m] === 'function' && !cls.prototype[m].__vpWrapped) {
+                      const origM = cls.prototype[m];
+                      const wrappedM = function (...args) {
+                        window.__vpFlowPromptBox = this;
+                        return origM.apply(this, args);
+                      };
+                      wrappedM.__vpWrapped = true;
+                      cls.prototype[m] = wrappedM;
+                    }
+                  }
+                } catch (e) {}
+              }
+            }
+          } catch (e) {}
+        };
+        installFlowTrustedSubmitPatch();
+
         if (!window.__vpFlowMainHooksInstalled) {
           window.__vpFlowMainHooksInstalled = true;
           window.addEventListener('vp-main-world-type-prompt', (ev) => {
             try {
+              installFlowTrustedSubmitPatch();
               const detail = ev?.detail || {};
               const text = String(detail.text || '');
               const target =
@@ -683,6 +735,14 @@ async function injectProviderHelpers(tabId, scriptFile) {
                 return;
               }
 
+              try {
+                const sel = window.getSelection();
+                const range = document.createRange();
+                range.selectNodeContents(target);
+                sel.removeAllRanges();
+                sel.addRange(range);
+              } catch (e) {}
+
               const dt = new window.DataTransfer();
               dt.setData('text/plain', text);
               const pasteEv = new window.ClipboardEvent('paste', {
@@ -691,6 +751,11 @@ async function injectProviderHelpers(tabId, scriptFile) {
                 composed: true,
                 clipboardData: dt
               });
+              try {
+                if (!pasteEv.clipboardData || !pasteEv.clipboardData.getData('text/plain')) {
+                  Object.defineProperty(pasteEv, 'clipboardData', { value: dt, configurable: true });
+                }
+              } catch (e) {}
               target.dispatchEvent(pasteEv);
               if ((target.innerText || target.textContent || '').trim().includes(text.slice(0, 12))) {
                 document.documentElement.dataset.vpPromptTypedMethod = 'mainPaste';
@@ -707,6 +772,35 @@ async function injectProviderHelpers(tabId, scriptFile) {
             } catch (err) {
               document.documentElement.dataset.vpPromptTypedMethod = 'error:' + (err?.message || String(err));
             }
+          });
+
+          window.addEventListener('vp-main-world-submit-flow', () => {
+            try {
+              installFlowTrustedSubmitPatch();
+              const boxEl = document.querySelector('flow-base-prompt-box');
+              if (boxEl && !window.__vpFlowPromptBox) {
+                try { boxEl.click(); } catch (e) {}
+              }
+              const sb = document.querySelector('button[aria-label="Start generation"]');
+              if (sb && !sb.disabled && sb.getAttribute('aria-disabled') !== 'true') {
+                sb.click();
+              }
+              setTimeout(() => {
+                try {
+                  const ed = document.querySelector('[aria-label="What do you want to create?"]') || document.querySelector('div.ProseMirror[contenteditable="true"]');
+                  const remTxt = ed ? (ed.innerText || ed.textContent || '').trim() : '';
+                  if (remTxt.length > 0 && window.__vpFlowPromptBox && typeof window.__vpFlowPromptBox.submit === 'function') {
+                    window.__vpFlowPromptBox.submit({
+                      isTrusted: true,
+                      type: 'click',
+                      preventDefault() {},
+                      stopPropagation() {},
+                      stopImmediatePropagation() {}
+                    });
+                  }
+                } catch (e) {}
+              }, 150);
+            } catch (e) {}
           });
         }
       }
@@ -1416,6 +1510,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === 'VP_OPEN_VISION_PILOT') {
+    // Only open or focus the VisionPilot web tab when the user explicitly clicks the button in the extension popup.
+    // Never automatically switch to or open the VisionPilot web tab from background events, content scripts, or popups/dialogs.
+    if (!msg.userInitiatedFromPopup || sender?.tab) {
+      sendResponse({ ok: false, ignored: true });
+      return false;
+    }
     (async () => {
       try {
         const tabs = await chrome.tabs.query({});
@@ -1541,49 +1641,6 @@ async function handleBridgeRequest(payload, senderTabId = null) {
     if (action === 'reload_extension') {
       setTimeout(() => { try { chrome.runtime.reload(); } catch (e) {} }, 150);
       return { ok: true, reloading: true };
-    }
-    if (action === 'inspect_flow_dom') {
-      const flowTab = await getOwnedProviderTab('flow');
-      const tabId = flowTab?.id || activeProviderTabIds.flow;
-      if (!tabId) return { ok: false, error: 'No open Flow tab found' };
-      const res = await chrome.scripting.executeScript({
-        target: { tabId },
-        func: () => {
-          const vis = (el) => {
-            if (!el) return false;
-            const r = el.getBoundingClientRect();
-            return r.width > 0 && r.height > 0;
-          };
-          const buttons = Array.from(document.querySelectorAll('button, [role="button"]')).filter(vis).map(b => ({
-            tag: b.tagName,
-            text: (b.innerText || b.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80),
-            aria: b.getAttribute('aria-label') || '',
-            disabled: Boolean(b.disabled),
-            ariaDisabled: b.getAttribute('aria-disabled') || '',
-            title: b.getAttribute('title') || '',
-            rect: (() => { const r = b.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; })(),
-            html: (b.outerHTML || '').slice(0, 220)
-          }));
-          const inputs = Array.from(document.querySelectorAll('textarea, input, [contenteditable="true"], [role="textbox"]')).filter(vis).map(i => ({
-            tag: i.tagName,
-            type: i.getAttribute('type') || '',
-            placeholder: i.getAttribute('placeholder') || i.getAttribute('data-placeholder') || '',
-            aria: i.getAttribute('aria-label') || '',
-            text: (i.value || i.innerText || i.textContent || '').trim().slice(0, 120),
-            html: (i.outerHTML || '').slice(0, 300)
-          }));
-          const imgs = Array.from(document.querySelectorAll('img')).filter(vis).map(im => ({
-            w: Math.round(im.getBoundingClientRect().width),
-            h: Math.round(im.getBoundingClientRect().height),
-            nw: im.naturalWidth,
-            nh: im.naturalHeight,
-            alt: (im.alt || '').slice(0, 40),
-            src: (im.currentSrc || im.src || '').slice(0, 90)
-          }));
-          return { url: location.href, title: document.title, buttons, inputs, imgs };
-        }
-      });
-      return { ok: true, tabId, dom: res?.[0]?.result || null };
     }
     if (action === 'open_external_url' && payload.url) {
       const targetWindowId = await desktopWorkWindow();
