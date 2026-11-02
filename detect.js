@@ -1362,14 +1362,31 @@ function pointInfo(det, x, y, preferredSubj = null) {
 }
 
 const detCache = new Map();
+const detInFlight = new Map();
 const detKey = img => { const s = img.currentSrc || img.src || ''; return s ? s.length + ':' + s.slice(0, 96) + s.slice(-96) + ':' + (img.naturalWidth || 0) + 'x' + (img.naturalHeight || 0) : ''; };
 async function analyzeKeep(img) {
   const key = detKey(img);
   let det;
   if (key && detCache.has(key)) det = JSON.parse(detCache.get(key));
-  else {
-    det = await analyze(img);
-    if (key) { detCache.set(key, JSON.stringify(det)); if (detCache.size > 16) detCache.delete(detCache.keys().next().value); }
+  else if (key && detInFlight.has(key)) {
+    // Multiple references can point at the same file. Share the first analysis
+    // instead of loading/running every local model again.
+    det = JSON.parse(await detInFlight.get(key));
+  } else {
+    const work = analyze(img).then(result => {
+      const json = JSON.stringify(result);
+      if (key) {
+        detCache.set(key, json);
+        if (detCache.size > 16) detCache.delete(detCache.keys().next().value);
+      }
+      return json;
+    });
+    if (key) detInFlight.set(key, work);
+    try {
+      det = JSON.parse(await work);
+    } finally {
+      if (key) detInFlight.delete(key);
+    }
   }
   Object.defineProperty(det, '_px', {value:pixelGrid(img), enumerable:false, configurable:true});
   return det;

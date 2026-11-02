@@ -4919,7 +4919,7 @@ function renderObjects() {
       $('objProps').innerHTML = `<div class="sep"></div>
         <div class="field"><label for="op_label">Name</label><input type="text" id="op_label" data-ok="label"></div>
         <div class="grid2"><div class="field"><label for="op_model">Model</label><select id="op_model" data-ok="model">${Object.entries(MODELS).filter(([k]) => (k !== 'group' || o.model === 'group') && (k !== 'custom' || o.model === 'custom')).map(([k, nm]) => `<option value="${k}">${nm}</option>`).join('')}</select></div>
-          <div class="field"><label for="op_img">Image</label><select id="op_img" data-ok="img"><option value="-1">None</option>${AC.refs.map((r, i) => `<option value="${i}">Image ${i + 1}${r.alpha ? ' (PNG)' : ''}</option>`).join('')}</select></div></div>
+          <div class="field"><label for="op_img">Image</label><select id="op_img" data-ok="img"><option value="-1">None</option>${AC.refs.map((r, i) => `<option value="${i}">IMG ${i + 1}${r.alpha ? ' (PNG)' : ''}</option>`).join('')}</select></div></div>
         ${poseHtml}
         <div class="grid2">${n('h', 'Height m', .01, .01, 50)}${n('w', 'Width m', .01, .01, 50)}</div>
         ${posHtml}
