@@ -712,11 +712,14 @@
             <div class="swrow sm"><span class="vf-sw-lbl"><i class="vf-gdot" aria-hidden="true"></i>Focus Marker</span><button class="switch" id="vfMarkOn" role="switch" aria-checked="false" aria-label="Show green focus marker in 3D viewport"></button></div>
           </div>
           <div class="field"><div class="labrow"><label><button class="kb vonly" data-kp="focus" aria-label="Keyframe focus subject"></button>Select Focus Subject</label></div><div class="chips fsubj-list vfsubj-list" id="vfSubjList"></div><select id="vfTarget" hidden></select></div>
-          <div class="field"><label for="vfNote">Short note</label><input type="text" id="vfNote" placeholder="e.g. red dress"></div>
           <div class="field"><span class="lbl"><button class="kb vonly" data-kp="focus.pos" aria-label="Keyframe focus position"></button>Focus position</span>
             <div class="xyz"><label for="vfX"><span class="ax x">X</span></label><label for="vfY"><span class="ax y">Y</span></label><label for="vfZ"><span class="ax z">Z</span></label>
               <input type="number" id="vfX" step="0.01" aria-label="Focus X"><input type="number" id="vfY" step="0.01" aria-label="Focus Y"><input type="number" id="vfZ" step="0.01" aria-label="Focus Z"></div></div>
-          <p class="hint" id="vfHint">Select focus subject(s) or edit X / Y / Z to aim.</p>
+          <div class="vf-subj-detail" id="vfSubjDetail">
+            <div class="labrow"><label for="vfSubjDetailDesc" id="vfSubjDetailLbl">Subject Detail</label><span class="hint" id="vfSubjDetailTarget"></span></div>
+            <textarea id="vfSubjDetailDesc" rows="4" placeholder="Describe the selected 3D subject for the AI prompt…"></textarea>
+            <button type="button" class="btn primary sm" id="vfSubjDetailSave">Save Subject Detail</button>
+          </div>
         </div>
       </div>
       <div class="vpbar">
@@ -761,8 +764,7 @@
           <span class="kfed" id="kfEdit" hidden>Key
             <select id="kfEase" aria-label="Keyframe easing"></select>
             <button class="tb" id="kfDel" title="Delete the selected keys">Delete</button></span>
-          <button class="tb" id="tlTracksBtn" aria-pressed="false" title="Show every animated value on its own row">Tracks</button>
-          <button class="tb subj-det-btn" id="tlSubjDetailBtn" type="button" aria-pressed="false" title="Edit Subject Detail for 3D objects">Subject Detail</button>
+           <button class="tb" id="tlTracksBtn" aria-pressed="false" title="Show every animated value on its own row">Tracks</button>
         </span>
         <span><input class="fr" id="tlEndF" type="number" min="1" step="1" aria-label="End frame (video length)" title="End frame: drag or type to change the video length"></span></div>
       <div class="tracks" id="tracks" hidden></div>
@@ -779,20 +781,6 @@
           </span>
         </div>
         <div class="gwrap" id="gWrap"><canvas id="graphC"></canvas><div class="gphead" id="gPhead"></div></div>
-      </div>
-      <div class="tl-subj-detail" id="tlSubjDetail" hidden>
-        <div class="labrow tl-subj-toprow">
-          <label for="tlSubjDetailDesc">Subject Detail</label>
-          <span class="hint">Click a 3D object or group to describe the real-world person, product or object for the AI prompt</span>
-        </div>
-        <div class="chips tl-subj-chips" id="tlSubjDetailList"></div>
-        <div class="field" id="tlSubjDetailEdit">
-          <div class="labrow tl-subj-edit-head">
-            <label for="tlSubjDetailDesc" id="tlSubjDetailLbl">Subject Detail</label>
-            <button type="button" class="btn primary sm" id="tlSubjDetailSave">Save</button>
-          </div>
-          <textarea id="tlSubjDetailDesc" rows="2" placeholder="Describe who or what this 3D object or group represents (e.g. 'young man in beige linen shirt', 'vintage red sports car')…"></textarea>
-        </div>
       </div>
     </div>
     <div class="obj-edit-bar vonly" id="objEditBar" role="region" aria-label="Edit 3D Object or Group">

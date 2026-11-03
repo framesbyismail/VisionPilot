@@ -721,35 +721,6 @@ function closeObjEditBar() {
   const bar = $('objEditBar');
   if (bar) bar.classList.remove('open');
 }
-function renderTlSubjDetail() {
-  const pane = $('tlSubjDetail'), list = $('tlSubjDetailList'), lbl = $('tlSubjDetailLbl'), desc = $('tlSubjDetailDesc');
-  if (!pane || !list) return;
-  const objs = V().objects || [];
-  if (!objs.length) {
-    list.innerHTML = '<span class="hint">No 3D objects in scene yet.</span>';
-    if (lbl) lbl.textContent = 'Subject Detail';
-    if (desc) desc.value = '';
-    return;
-  }
-  const active = (sel && sel !== 'camera' ? objById(sel) : null) || objs[0];
-  const dets = V().subjDetails || (V().subjDetails = {});
-  list.innerHTML = objs.map(x => `<button type="button" class="tog fsubj" data-tlsid="${escAttr(x.id)}" aria-pressed="${x.id === active.id}" style="--sc:${escAttr(x.color)}"><i class="sdot" style="background:${escAttr(x.color)}"></i><span>${esc(x.label)}${x.model === 'group' && x.children ? ` (${x.children.length})` : ''}</span></button>`).join('');
-  if (lbl) lbl.textContent = `${active.label} — Subject Detail`;
-  if (desc && document.activeElement !== desc) {
-    desc.value = dets[active.id] !== undefined ? dets[active.id] : (active.subjDesc || '');
-  }
-}
-function saveTlSubjDetail() {
-  const objs = V().objects || [];
-  const active = (sel && sel !== 'camera' ? objById(sel) : null) || objs[0];
-  if (!active) return;
-  const detVal = ($('tlSubjDetailDesc')?.value || '').trim();
-  const dets = V().subjDetails || (V().subjDetails = {});
-  dets[active.id] = detVal;
-  active.subjDesc = detVal;
-  AC.save(); AC.changed();
-  AC.toast(`Saved Subject Detail for "${active.label}"`);
-}
 function saveObjEditBar() {
   const o = objById(editingObjId || sel);
   if (o) {
@@ -4132,7 +4103,7 @@ function renderVP(sizeOverride) {
     const fLbl = fpPart
       ? `${fpPart.objectLabel} · ${fpPart.partName}`
       : (Array.isArray(fs.targets) && fs.targets.length ? fs.targets.join(', ') : (valueAt('focus', T, 'target', fs.target) || 'Focus'));
-    $('vpFocusLab').textContent = fLbl + (fs.note ? ' · ' + fs.note : '');
+    $('vpFocusLab').textContent = fLbl;
   } else f.hidden = true;
 }
 hooks.render = () => renderVP();
@@ -4919,7 +4890,7 @@ function renderObjects() {
       $('objProps').innerHTML = `<div class="sep"></div>
         <div class="field"><label for="op_label">Name</label><input type="text" id="op_label" data-ok="label"></div>
         <div class="grid2"><div class="field"><label for="op_model">Model</label><select id="op_model" data-ok="model">${Object.entries(MODELS).filter(([k]) => (k !== 'group' || o.model === 'group') && (k !== 'custom' || o.model === 'custom')).map(([k, nm]) => `<option value="${k}">${nm}</option>`).join('')}</select></div>
-          <div class="field"><label for="op_img">Image</label><select id="op_img" data-ok="img"><option value="-1">None</option>${AC.refs.map((r, i) => `<option value="${i}">Image ${i + 1}${r.alpha ? ' (PNG)' : ''}</option>`).join('')}</select></div></div>
+          <div class="field"><label for="op_img">Image</label><select id="op_img" data-ok="img"><option value="-1">None</option>${AC.refs.map((r, i) => `<option value="${i}">IMG ${i + 1}${r.alpha ? ' (PNG)' : ''}</option>`).join('')}</select></div></div>
         ${poseHtml}
         <div class="grid2">${n('h', 'Height m', .01, .01, 50)}${n('w', 'Width m', .01, .01, 50)}</div>
         ${posHtml}
@@ -4973,37 +4944,6 @@ $('objEditRename')?.addEventListener('keydown', e => {
 $('objEditDetail')?.addEventListener('keydown', e => {
   if (e.key === 'Escape') { e.preventDefault(); closeObjEditBar(); }
 });
-$('tlSubjDetailBtn')?.addEventListener('click', () => {
-  V().showSubjDetail = !V().showSubjDetail;
-  if (V().showSubjDetail) {
-    V().showTracks = false;
-    V().showGraph = false;
-    if (!sel || sel === 'camera') {
-      const firstId = V().objects[0]?.id;
-      if (firstId) selectObj(firstId, false);
-    }
-  }
-  renderObjects(); buildTimeline(); AC.save();
-  requestAnimationFrame(() => {
-    renderVP();
-    if (V().showSubjDetail) $('tlSubjDetailDesc')?.focus();
-  });
-});
-$('tlSubjDetailList')?.addEventListener('click', e => {
-  const b = e.target.closest('[data-tlsid]'); if (!b) return;
-  selectObj(b.dataset.tlsid, false);
-  renderObjects(); buildTimeline(); renderVP();
-  $('tlSubjDetailDesc')?.focus();
-});
-$('tlSubjDetailSave')?.addEventListener('click', saveTlSubjDetail);
-$('tlSubjDetailDesc')?.addEventListener('input', e => {
-  const active = (sel && sel !== 'camera' ? objById(sel) : null) || V().objects[0];
-  if (!active) return;
-  const dets = V().subjDetails || (V().subjDetails = {});
-  dets[active.id] = e.target.value;
-  active.subjDesc = e.target.value;
-});
-
 $('objList').addEventListener('click', e => {
   const b = e.target.closest('[data-oid]'); if (!b) return;
   selectObj(b.dataset.oid, e.shiftKey);
@@ -5463,12 +5403,7 @@ function buildTimeline() {
   }
   $('tracks').hidden = !V().showTracks; $('tlTracksBtn').setAttribute('aria-pressed', !!V().showTracks);
   $('graph').hidden = !V().showGraph; $('tlGraphBtn').setAttribute('aria-pressed', !!V().showGraph);
-  if ($('tlSubjDetail')) {
-    $('tlSubjDetail').hidden = !V().showSubjDetail;
-    $('tlSubjDetailBtn')?.setAttribute('aria-pressed', !!V().showSubjDetail);
-    if (V().showSubjDetail) renderTlSubjDetail();
-  }
-  const drawerOpen = !!(V().showTracks || V().showGraph || V().showSubjDetail);
+  const drawerOpen = !!(V().showTracks || V().showGraph);
   if ($('vThree')) {
     const wasHidden = $('vThree').hidden;
     $('vThree').hidden = drawerOpen;
@@ -6133,7 +6068,7 @@ $('graph').addEventListener('click', e => {
   if (ez) { const ks = selectedKeys(); if (!ks.length) AC.toast('Select keyframes in the graph first (click or drag a box)'); else setEase(ks, ez.dataset.ge); }
 });
 function toggleGraph() {
-  V().showGraph = !V().showGraph; if (V().showGraph) { V().showTracks = false; V().showSubjDetail = false; }
+  V().showGraph = !V().showGraph; if (V().showGraph) V().showTracks = false;
   AC.save(); buildTimeline(); requestAnimationFrame(() => { renderVP(); drawGraph(); });
 }
 $('tlGraphBtn').addEventListener('click', toggleGraph);
@@ -6146,7 +6081,6 @@ function resetTimeline() {
   S.video.autokey = true;
   S.video.showTracks = false;
   S.video.showGraph = false;
-  S.video.showSubjDetail = false;
   S.video.activePreset = null;
   S.video.activeAnimPreset = null;
   T = 0;
@@ -6219,7 +6153,7 @@ $('tlNextKey').addEventListener('click', () => {
 $('tlLoop').addEventListener('click', () => { V().loop = !V().loop; $('tlLoop').setAttribute('aria-pressed', V().loop); AC.save(); });
 $('tlAuto').addEventListener('click', () => { V().autokey = !V().autokey; $('tlAuto').setAttribute('aria-pressed', V().autokey); AC.save(); AC.toast(V().autokey ? 'Auto keying on' : 'Auto keying off'); });
 $('tlRec').addEventListener('click', recordAll);
-$('tlTracksBtn').addEventListener('click', () => { V().showTracks = !V().showTracks; if (V().showTracks) { V().showGraph = false; V().showSubjDetail = false; } AC.save(); buildTimeline(); requestAnimationFrame(() => renderVP()); });
+$('tlTracksBtn').addEventListener('click', () => { V().showTracks = !V().showTracks; if (V().showTracks) V().showGraph = false; AC.save(); buildTimeline(); requestAnimationFrame(() => renderVP()); });
 $('tlFrame').addEventListener('change', e => { const f = parseInt(e.target.value, 10); if (isFinite(f)) { stop(); setTime(f / fps()); } });
 $('tlFrame').addEventListener('input', e => { if (e.target.classList.contains('scrubbing')) { const f = parseInt(e.target.value, 10); if (isFinite(f)) { stop(); setTime(f / fps()); } } });
 function setDuration(sec) {
@@ -6487,7 +6421,6 @@ function syncVideoFocus() {
   if (fs.target && !labels.includes(fs.target)) fs.target = fs.targets[0] || '';
   $('vfTarget').value = fs.on ? (fs.target || '') : '';
   AC.refreshDD($('vfTarget'));
-  AC.setIfIdle($('vfNote'), fs.note || '');
   // Populate 3D Focus Subject buttons (multi-selectable, without close '×' buttons)
   const subjBox = $('vfSubjList');
   if (subjBox) {
@@ -6500,14 +6433,58 @@ function syncVideoFocus() {
       }).join('');
     }
   }
+  syncVideoSubjectDetail();
   syncFocusXYZ();
+}
+function focusSubjectForDetail() {
+  const fs = focusSt();
+  const labels = Array.isArray(fs.targets) ? fs.targets : [];
+  return objByLabel(fs.target) || objByLabel(labels[labels.length - 1]) || (sel && sel !== 'camera' ? objById(sel) : null) || null;
+}
+function syncVideoSubjectDetail() {
+  const desc = $('vfSubjDetailDesc'), target = $('vfSubjDetailTarget');
+  if (!desc) return;
+  const active = focusSubjectForDetail();
+  if (target) target.textContent = active ? active.label : 'Select a subject above';
+  desc.disabled = !active;
+  if (active && document.activeElement !== desc) {
+    const dets = V().subjDetails || (V().subjDetails = {});
+    desc.value = dets[active.id] !== undefined ? dets[active.id] : (active.subjDesc || '');
+  } else if (!active) {
+    desc.value = '';
+  }
+}
+function saveVideoSubjectDetail() {
+  const active = focusSubjectForDetail(), desc = $('vfSubjDetailDesc');
+  if (!active || !desc) { AC.toast('Select a 3D focus subject first'); return; }
+  const dets = V().subjDetails || (V().subjDetails = {}), value = desc.value.trim();
+  dets[active.id] = value;
+  active.subjDesc = value;
+  AC.save(); AC.changed();
+  syncVideoSubjectDetail();
+  AC.toast(`Saved Subject Detail for "${active.label}"`);
+}
+function aimCameraAtSelectedSubjects(previousCamera) {
+  if (!previousCamera || freeCamMode || vpViewMode !== 'orbit') return;
+  const tg = targetAt(T), p = camPan();
+  const dx = previousCamera.x - (tg.x + p.x), dy = previousCamera.y - (tg.y + p.y), dz = previousCamera.z - (tg.z + p.z);
+  const dist = Math.max(.25, Math.hypot(dx, dy, dz));
+  AC.setAz(rnd(norm360(deg(Math.atan2(dx, dz))), 1));
+  AC.setEl(rnd(clamp(deg(Math.asin(clamp(dy / dist, -.995, .995))), -89, 89), 1));
+  AC.setDist(rnd(dist, 2));
+  lastFramedSel = null;
+  zoomGoal = null;
 }
 $('vfSubjList')?.addEventListener('click', e => {
   const b = e.target.closest('[data-vfsubj]'); if (!b) return;
   const lbl = b.dataset.vfsubj, fs = focusSt();
+  const previousCamera = !freeCamMode && R && vpViewMode === 'orbit' ? camWorld(T) : null;
+  if (freeCamMode) toggleFreeCamMode(false);
+  if (vpViewMode !== 'orbit') setVpViewMode('orbit');
   if (!Array.isArray(fs.targets)) fs.targets = fs.target ? [fs.target] : [];
   if (fs.targets.includes(lbl)) {
     fs.targets = fs.targets.filter(t => t !== lbl);
+    if (fs.target === lbl) fs.target = fs.targets[fs.targets.length - 1] || '';
   } else {
     fs.targets.push(lbl);
   }
@@ -6519,6 +6496,7 @@ $('vfSubjList')?.addEventListener('click', e => {
     fs.target = '';
     if (!fs.showMark && !fs.pointPinned) fs.on = false;
   }
+  aimCameraAtSelectedSubjects(previousCamera);
   syncVideoFocus();
   renderVP();
   AC.changed();
@@ -6541,14 +6519,23 @@ $('vfMarkOn')?.addEventListener('click', () => {
 });
 $('vfTarget')?.addEventListener('change', e => {
   const fs = focusSt();
+  const previousCamera = !freeCamMode && R && vpViewMode === 'orbit' ? camWorld(T) : null;
   fs.target = e.target.value;
   fs.targets = e.target.value ? [e.target.value] : [];
   fs.pointPinned = false;
   if (e.target.value) fs.on = true;
   else if (!fs.showMark) fs.on = false;
+  aimCameraAtSelectedSubjects(previousCamera);
   AC.changed();
 });
-$('vfNote')?.addEventListener('input', e => { focusSt().note = e.target.value; AC.changed(); });
+$('vfSubjDetailSave')?.addEventListener('click', saveVideoSubjectDetail);
+$('vfSubjDetailDesc')?.addEventListener('input', e => {
+  const active = focusSubjectForDetail();
+  if (!active) return;
+  const dets = V().subjDetails || (V().subjDetails = {});
+  dets[active.id] = e.target.value;
+  active.subjDesc = e.target.value;
+});
 function go() {
   AC.switchModeState?.('video');
   focusSt().showMark = false;

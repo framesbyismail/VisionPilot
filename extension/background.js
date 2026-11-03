@@ -609,10 +609,10 @@ async function injectProviderHelpers(tabId, scriptFile) {
                   dropTarget.dispatchEvent(dropEv);
                 }
               }
-            } catch (err) {
-              console.warn('[VP MAIN Upload] Error:', err);
-            }
-          });
+             } catch (err) {
+               console.warn('[VP MAIN Upload] Error:', err);
+             }
+           });
 
           // MAIN-world generated image reader (converts blob: or page <img> into base64 dataUrl)
           window.addEventListener('vp-main-world-read-image', async (ev) => {
@@ -868,11 +868,11 @@ async function injectProviderHelpers(tabId, scriptFile) {
                   }
                 }
               }
-            } catch (_) {}
-            return origA.apply(this, args);
-          };
-        }
-      }
+             } catch (_) {}
+             return origA.apply(this, args);
+           };
+         }
+       }
     });
   } catch (e) {}
 
@@ -1053,9 +1053,11 @@ async function getOrOpenProviderTabForPrompt(model, senderTabId = null) {
   }
 }
 
-// Send a message to a provider tab with MV3 service-worker keep-alive and tab-close detection (no timeout while generating)
-async function sendTabMessageUntilComplete(tabId, provName, message) {
-  return new Promise((resolve, reject) => {
+// Send a message to a provider tab with MV3 service-worker keep-alive and tab-close detection (no timeout while generating).
+// A provider SPA can replace its content script after navigation; one quiet reinjection
+// makes image/focus tasks recover without asking the user to reload the extension.
+async function sendTabMessageUntilComplete(tabId, provName, message, scriptFile = '') {
+  const sendOnce = () => new Promise((resolve, reject) => {
     let settled = false;
     const keepAliveTimer = setInterval(() => {
       chrome.tabs.get(tabId).catch(() => {});
@@ -1094,6 +1096,20 @@ async function sendTabMessageUntilComplete(tabId, provName, message) {
         reject(err);
       });
   });
+  try {
+    return await sendOnce();
+  } catch (err) {
+    const text = String(err?.message || err || '');
+    const canRecover = scriptFile && /receiving end|could not establish connection|context invalidated|message port/i.test(text);
+    if (!canRecover) throw err;
+    try {
+      await chrome.scripting.executeScript({ target: { tabId }, files: [scriptFile] });
+      await sleep(450);
+      return await sendOnce();
+    } catch (retryErr) {
+      throw retryErr;
+    }
+  }
 }
 
 // Execute a real image + instruction prompt on the provider tab
@@ -1155,7 +1171,7 @@ async function runProviderPrompt(model, payload, senderTabId = null) {
       step: payload.step || '',
       subjects,
       expectedCount
-    });
+    }, prov.scriptFile);
 
     // Do NOT forcibly activate senderTabId so the user stays on whichever tab they are currently viewing
 
@@ -1232,8 +1248,8 @@ async function readImageInPage(tabId, src) {
             const d = c.toDataURL('image/png'); if (d.startsWith('data:image/')) return { ok: true, dataUrl: d };
           } catch (e) {}
         }
-        return { ok: false, error: 'The image is visible in the AI tab but could not be read.' };
-      }
+         return { ok: false, error: 'The image is visible in the AI tab but could not be read.' };
+       }
     });
     return res?.result || { ok: false, error: 'Reading the image failed.' };
   } catch (err) {
@@ -1436,7 +1452,7 @@ async function runProviderImageGeneration(model, payload, senderTabId = null) {
               refId,
               reqId
             }
-          });
+          }, prov.scriptFile);
 
           if (isCancelledNow()) return;
 
@@ -1562,7 +1578,7 @@ async function runProviderImageGeneration(model, payload, senderTabId = null) {
         refId,
         reqId
       }
-    });
+    }, prov.scriptFile);
 
     if (isCancelledNow()) {
       return { ok: false, cancelled: true, error: 'Image generation cancelled.' };
@@ -1731,7 +1747,7 @@ async function runFlowImageUpscale(payload, senderTabId = null) {
         srcDataUrl: payload.srcDataUrl || '',
         reqId: payload.reqId || ''
       }
-    });
+    }, prov.scriptFile);
     cleanupDlListeners();
 
     if ((!res || !res.ok) && !capturedDownloadDataUrl) {

@@ -309,7 +309,7 @@ const DEF_FOCUS = () => ({
   on:false, showMark:true, mode:'single', img:0, x:.5, y:.5, target:'', note:'', where:'',
   detail:false, detailCm:6, desc:'', descPinned:false, singleActive:false, singleKey:'', zoom:1, zoomV2:true, vzoom:3, zoomLocked:false,
   multiSel:'', multiEditOpen:true, multiEdits:{}, multiPart:'', multiWhere:'', multiPartColor:'',
-  subjectItems:[], activeSubj:'', activeSubjs:[], lastPointKey:''
+  subjectItems:[], activeSubj:'', activeSubjs:[], lastPointKey:'', focusDefaultsV2:true
 });
 const DEF = {app:'image', mode:'normal', aiModel:'visionpilot', az:35, el:12, dist:2.4, roll:0, bodyId:'iphone18pro', lensId:'ip24', focal:24 / 3.67, sensorW:9.8, aperture:1.78, dof:true, camDefV2:true,
   offX:0, offY:0, subjType:'person', count:1, types:[], subjCm:175, subjColor:'#e85d2b', subjDesc:'', descPinned:false, descPinnedAt:0, descUserEdited:false, refView:'front', refBg:0,
@@ -355,8 +355,15 @@ try {
     S.subjDesc = '';
     S.descUserEdited = false;
     S.focus = {...DEF_FOCUS(), ...(saved.focus || {}), desc:'', multiEdits:{}, multiMarkerText:'', subjectItems:[], activeSubjs:[], activeSubj:'', target:'', singleActive:false};
-    if (S.focus.mode === 'multi') S.focus.showMark = false;
-    else if (saved.focus?.showMark === undefined) S.focus.showMark = true;
+    // Detection is opt-in in both Normal and Advanced modes. The green marker is the independent default.
+    if (!saved.focus?.focusDefaultsV2) {
+      S.focus.on = false;
+      S.focus.showMark = true;
+      S.focus.markerControlsUnlocked = false;
+      S.focus.focusDefaultsV2 = true;
+    } else if (saved.focus?.showMark === undefined) {
+      S.focus.showMark = true;
+    }
     S.focus.multiEditOpen = true;
     if (!saved.focus?.zoomV2) { S.focus.zoom = 1; S.focus.zoomV2 = true; }
     S.focus.zoom = clamp(+S.focus.zoom || 1, 1, 8);
@@ -460,8 +467,9 @@ function enforce() {
     document.body.classList.add('adv', 'pro');
     hideAdv();
   }
-  // Image Detection & Focus is part of Advanced mode: in Normal mode it always stays off (whatever turned it on)
-  if (S.mode !== 'adv' && S.focus && S.focus.on) S.focus.on = false;
+  // Image Detection & Focus is always opt-in and is unavailable in Normal mode.
+  if (S.mode !== 'adv' && S.focus) S.focus.on = false;
+  if (S.focus && S.focus.showMark === undefined) S.focus.showMark = true;
 }
 // If the user has Advanced mode (PRO) and clicks an off/locked control while in Normal mode, automatically switch to Advanced mode
 function ensureAdvMode(what) {
@@ -1129,6 +1137,7 @@ async function ensureVpRefDesc(ref, opts = {}) {
 }
 
 function updateAutoDescription(force = false) {
+  if (!S.focus.on || S.mode !== 'adv') return;
   if (S.descUserEdited && !force) return;
   const activeModel = S.aiModel || 'visionpilot';
   const myEpoch = aiModelSessionEpoch;
@@ -1183,7 +1192,7 @@ function updateAutoDescription(force = false) {
   }
 }
 function applySummary(forceDesc = false) {
-  if (!refs.length) return;
+  if (!refs.length || !S.focus.on || S.mode !== 'adv') return;
   if (S.refBg >= refs.length) S.refBg = 0;
   if (S.focus.img >= refs.length) S.focus.img = 0;
 
@@ -1273,7 +1282,7 @@ const TYPE_MAP = {person:'person', product:'product', phone:'phone', smartphone:
 const queue = [];
 let busyDetect = false, detectFailMsg = '';
 async function runQueue() {
-  if (busyDetect) return;
+  if (busyDetect || !S.focus.on || S.mode !== 'adv') return;
   busyDetect = true;
   if (typeof syncFocusLockState === 'function') syncFocusLockState();
   while (queue.length) {
@@ -1343,6 +1352,12 @@ function setDescLoading(loading, customMsg = '') {
 }
 async function detectRef(ref, opts = {}) {
   if (!ref || ref.cancelled || !refs.includes(ref)) return;
+  // Adding a reference never starts AI work by itself. Detection starts only after
+  // the user enables Image Detection & Focus in Advanced mode.
+  if (!S.focus.on || S.mode !== 'adv') {
+    if (ref.status === 'wait' || ref.status === 'busy') ref.status = 'ok';
+    return;
+  }
   const myEpoch = aiModelSessionEpoch;
   const activeModel = S.aiModel || 'visionpilot';
   const info = window.VPAIBridge?.getModelInfo ? window.VPAIBridge.getModelInfo(activeModel) : {name:activeModel};
@@ -1612,11 +1627,11 @@ async function detectRefAI(ref, opts = {}) {
 }
 function renderRefs() {
   $('refGrid').innerHTML = refs.map((r, i) => {
-    const labs = `Image ${i + 1}`;
+    const labs = `IMG ${i + 1}`;
     return `<div class="reftile"><img src="${r.src}" alt="Reference ${i + 1}"><span class="num">${i + 1}</span>`
       + `<button type="button" class="x" data-rm="${r.id}" aria-label="Remove image ${i + 1}" title="Remove image"><svg viewBox="0 0 12 12"><path d="m2 2 8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>`
       + (r.status === 'busy' ? '<span class="busy"><span class="spin"></span></span>' : '')
-      + `<span class="lab" title="${escAttr(labs)}">${esc(r.status === 'busy' ? 'Detecting…' : labs || 'Subject')}${r.alpha ? ' · PNG' : ''}</span></div>`;
+      + `<span class="lab" title="${escAttr(labs)}">${esc(r.status === 'busy' ? 'Analyzing…' : labs || 'Subject')}${r.alpha ? ' · PNG' : ''}</span></div>`;
   }).join('') + `<label class="addtile" id="addTile" for="file"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>${refs.length ? 'Add more' : 'Add images'}</label>`;
   const add = $('addTile');
   ['dragenter', 'dragover'].forEach(t => add.addEventListener(t, e => { e.preventDefault(); add.classList.add('over'); }));
@@ -1730,14 +1745,11 @@ function addFiles(list) {
   const files = arr.filter(f => f.type && f.type.startsWith('image/'));
   if (!files.length) { toast('Choose image files (JPG, PNG or WebP)'); return; }
   batchFolderState = null;
-  // Bug Fix 2: When an image is dropped/added, "Image Detection and Focus" button automatically turns ON,
-  // while Focus pointer/marker controls below the button remain DISABLED (locked) until the user enables them via the button.
+  // Reference import is passive. Detection is deliberately opt-in so Normal mode
+  // and a fresh Advanced session never spend time analyzing an image unexpectedly.
   S.descUserEdited = false;
   S.focus.desc = '';
-  S.focus.on = true;
-  S.focus.showMark = false;
   S.focus.markerControlsUnlocked = false;
-  setDescLoading(true);
   files.slice(0, 12).forEach(file => {
     const ref = {id:'r' + (++refId), file, src:'', img:new Image(), name:file.name || `pasted-${refId}.png`, status:'wait', subjects:[], view:'front', alpha:false, cancelled:false};
     ref.ready = new Promise((res, rej) => { ref.img.addEventListener('load', res, {once:true}); ref.img.addEventListener('error', rej, {once:true}); });
@@ -1764,12 +1776,12 @@ function addFiles(list) {
       if (typeof syncBgRemoverUI === 'function') syncBgRemoverUI();
     };
     fr.readAsDataURL(file);
-    queue.push(ref);
+    if (S.focus.on && S.mode === 'adv') queue.push(ref);
   });
   renderRefs();
   if (typeof syncImageUpscalerUI === 'function') syncImageUpscalerUI();
   if (typeof syncBgRemoverUI === 'function') syncBgRemoverUI();
-  runQueue();
+  if (queue.length) runQueue();
 }
 // CHANGE 2: Clicking the cross removes the image, stops loading immediately, and cancels any pending AI request so no late reply is pasted afterwards.
 function removeRef(id) {
@@ -1828,7 +1840,7 @@ function renderRefBg(force) {
   $('refBgField').hidden = refs.length < 2;
   if (key === refBgKey && !force) return;
   refBgKey = key;
-  $('refBg').innerHTML = refs.map((r, i) => `<option value="${i}">Image ${i + 1}</option>`).join('') + '<option value="-1">Output background setting</option>';
+  $('refBg').innerHTML = refs.map((r, i) => `<option value="${i}">IMG ${i + 1}</option>`).join('') + '<option value="-1">Output background setting</option>';
   $('refBg').value = String(S.refBg);
   refreshDD($('refBg'));
 }
@@ -2002,6 +2014,7 @@ function selectMultiSubject(key, toggleIfSame = true) {
 }
 function syncFocus() {
   S.focus.mode = S.focus.mode === 'multi' ? 'multi' : 'single';
+  if (S.mode !== 'adv') S.focus.on = false;
   if (S.focus.showMark === undefined) S.focus.showMark = S.app === 'video' ? false : (S.focus.mode !== 'multi');
   S.focus.multiEdits = S.focus.multiEdits || {};
   S.focus.multiEditOpen = true;
@@ -2052,7 +2065,7 @@ function syncFocus() {
     const tabCount = refs.length;
     $('focusTabs').innerHTML = tabCount > 0
       ? Array.from({length: tabCount}, (_, i) =>
-          `<button type="button" data-fimg="${i}" aria-pressed="${i === S.focus.img}">Image ${i + 1}</button>`
+          `<button type="button" data-fimg="${i}" aria-pressed="${i === S.focus.img}">IMG ${i + 1}</button>`
         ).join('')
       : '';
     const r = refs[S.focus.img];
@@ -2178,7 +2191,9 @@ function placeMark() {
   if (!img.clientWidth) { m.hidden = true; return; }
   previewZoom();
   placeBoxes();
-  m.hidden = !S.focus.on || !S.focus.showMark;
+  // Keep the marker's default visible state independent from AI detection. The
+  // image remains non-interactive until Image Detection & Focus is enabled.
+  m.hidden = !S.focus.showMark;
   m.style.left = (img.offsetLeft + fz.tx + S.focus.x * img.clientWidth * fz.z) + 'px';
   m.style.top = (img.offsetTop + fz.ty + S.focus.y * img.clientHeight * fz.z) + 'px';
 }
@@ -2208,7 +2223,7 @@ function syncActiveSingleItem() {
 async function runMultiModeAIStep(ref) {
   const myEpoch = aiModelSessionEpoch;
   const activeModel = S.aiModel || 'visionpilot';
-  if (!ref || ref.cancelled || !refs.includes(ref)) return;
+  if (!ref || ref.cancelled || !refs.includes(ref) || !S.focus.on || S.mode !== 'adv') return;
 
   if (activeModel === 'visionpilot') {
     if (!window.VPLocalWriter?.writeMultipleModeDetails || !ref.img) return;
@@ -2420,7 +2435,7 @@ async function runMultiModeAIStep(ref) {
 
 // image mode: what is under the focus point? (VisionPilot built-in AI or connected Claude / GPT / Gemini AI)
 async function identifyAt(ref, x, y) {
-  if (!ref || ref.cancelled || !refs.includes(ref)) return;
+  if (!ref || ref.cancelled || !refs.includes(ref) || !S.focus.on || S.mode !== 'adv') return;
   const myEpoch = aiModelSessionEpoch;
   const subs = currentImgSubjects();
   const isMulti = S.focus.mode === 'multi';
@@ -3298,6 +3313,7 @@ $('themeBtn').addEventListener('click', () => {
 $('modeNormal').onclick = () => {
   S.mode = 'normal';
   S.focus.on = false;
+  S.focus.showMark = true;
   S.lightOn = false;
   document.body.classList.remove('adv');
   renderDock(); afterLayout();
@@ -3510,8 +3526,9 @@ $('focusMarkOn')?.addEventListener('click', () => {
   if (!S.focus.showMark && !ensureAdvMode('Image Detection & Focus')) return;
   S.focus.showMark = !S.focus.showMark;
   if (S.focus.showMark) {
-    S.focus.on = true;
-    S.focus.markerControlsUnlocked = true;
+    // The marker is independent from Image Detection & Focus. Turning it on
+    // must not silently start an AI job.
+    S.focus.markerControlsUnlocked = Boolean(S.focus.on);
   }
   if (!S.focus.showMark && S.focus.multiSel === '__marker') {
     S.focus.multiSel = '';
@@ -3530,7 +3547,7 @@ $('focusTabs').addEventListener('click', e => {
   const b = e.target.closest('[data-fimg]'); if (!b) return;
   const idx = +b.dataset.fimg;
   if (idx > 0 && idx >= refs.length) {
-    toast(`Upload Image ${idx + 1} in Reference Images to switch to it`);
+    toast(`Upload IMG ${idx + 1} in Reference Images to switch to it`);
     return;
   }
   S.focus.img = idx; S.focus.multiSel = ''; S.focus.multiEditOpen = true;
@@ -3544,10 +3561,9 @@ $('focusModeBar').addEventListener('click', async e => {
   if (S.mode !== 'adv' && !ensureAdvMode('Image Detection & Focus')) return;
   const wantMulti = b.dataset.fmode === 'multi';
   S.focus.mode = wantMulti ? 'multi' : 'single';
-  S.focus.on = true;
-  // In Multiple Mode, the focus marker is off by default.
-  // In Single Mode, the green focus marker works as normal and built-in image detection stays OFF.
-  S.focus.showMark = !wantMulti;
+  // Switching Single/Multiple changes the workflow only. Detection still
+  // starts exclusively when the main Image Detection & Focus switch is on.
+  S.focus.showMark = true;
   if (!S.focus.showMark && S.focus.multiSel === '__marker') {
     S.focus.multiSel = '';
   }
@@ -3557,7 +3573,7 @@ $('focusModeBar').addEventListener('click', async e => {
   focusKey = ''; changed();
 
   // Requirement 2: Built-in image detection turns ON only when Multiple Mode is turned ON.
-  if (wantMulti && refs.length) {
+  if (wantMulti && refs.length && S.focus.on) {
     for (const r of refs) {
       if (!r.cancelled && (!r.det || !Array.isArray(r.subjects) || !r.subjects.length)) {
         await detectRef(r, { forMultiMode: true, skipRefStep: true, skipFollowup: true, forceDesc: true });
@@ -3570,7 +3586,7 @@ $('focusModeBar').addEventListener('click', async e => {
     if (refs[S.focus.img]) {
       await runMultiModeAIStep(refs[S.focus.img]);
     }
-  } else if (!wantMulti && refs[S.focus.img] && (S.aiModel || 'visionpilot') === 'visionpilot') {
+  } else if (!wantMulti && refs[S.focus.img] && S.focus.on && (S.aiModel || 'visionpilot') === 'visionpilot') {
     const curRef = refs[S.focus.img];
     if (!curRef.vpSingleFocusDesc) {
       await identifyAt(curRef, S.focus.x, S.focus.y);
@@ -7666,7 +7682,7 @@ async function selectAIModel(modelId) {
     setDescLoading(false);
     syncAIModelUI();
     syncUI();
-    if (refs.length) {
+    if (refs.length && S.focus.on && S.mode === 'adv') {
       const fRef = refs.find(r => r.id === S.focus.img) || refs[0];
       if (fRef && !fRef.vpRefDesc && window.VPLocalWriter) {
         updateAutoDescription(true);
@@ -7689,11 +7705,9 @@ async function selectAIModel(modelId) {
     S.mode = 'adv';
     document.body.classList.add('adv');
   }
-  if (S.mode === 'adv' && !S.focus.on) {
-    S.focus.on = true;
-  }
-  // In Multiple Mode (Image Mode) or Video/3D Mode, focus marker is off by default; in Single Mode (Image Mode), focus marker is on
-  S.focus.showMark = S.app === 'video' ? false : (S.focus.mode !== 'multi');
+  // Selecting an external model connects the bridge but does not enable image
+  // detection or change the user's marker preference.
+  if (S.focus.showMark === undefined) S.focus.showMark = S.app === 'video' ? false : true;
 
   syncAIModelUI();
   syncUI();
@@ -7719,7 +7733,7 @@ async function selectAIModel(modelId) {
   toast(`Connected to fresh ${info.name} chat tab`);
 
   S.descUserEdited = false;
-  if (refs.length) {
+  if (refs.length && S.focus.on && S.mode === 'adv') {
     for (const ref of refs) {
       if (myEpoch !== aiModelSessionEpoch || S.aiModel !== modelId) return;
       await detectRef(ref, {forceDesc:true, skipFollowup:true});
@@ -8016,7 +8030,9 @@ function fitPrompt() {
   const refRect = refEl?.getBoundingClientRect();
   const colRect = col.getBoundingClientRect();
   const targetBottom = S.app === 'video'
-    ? (colRect.bottom - 24)
+    // Keep the Video prompt's lower edge on the same baseline as the
+    // timeline, rather than leaving a floating gap above it.
+    ? ((refRect && refRect.height > 20) ? refRect.bottom : colRect.bottom)
     : ((refRect && refRect.height > 20) ? (refRect.bottom - 1) : (colRect.bottom - 12));
   const availColH = Math.max(500, targetBottom - colRect.top);
   // Set top box (#pOutput / #pPresets / #pAnimPresets) fixed height so EXTRA NOTES + button are 100% visible and bottom #pPrompt has comfortable fixed height
