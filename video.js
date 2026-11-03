@@ -4309,8 +4309,12 @@ function bindViewportPicking() {
         };
       } else {
         const cw = camWorld(T), p0 = camPan();
+        const focusLocked = getSelectedFocusObjects().length > 0;
         vpDrag = {
-          mode:pan ? 'sceneCamPan' : 'sceneCamOrbit',
+          // A selected focus subject must stay in the center. Treat a pan
+          // gesture as an orbit while focus is locked instead of shifting the
+          // camera and aim point together.
+          mode:pan && !focusLocked ? 'sceneCamPan' : 'sceneCamOrbit',
           x0:e.clientX, y0:e.clientY,
           az0:S.az, el0:S.el,
           cx0:cw.x, cy0:cw.y, cz0:cw.z,
@@ -6445,7 +6449,10 @@ function syncVideoSubjectDetail() {
   const desc = $('vfSubjDetailDesc'), target = $('vfSubjDetailTarget');
   if (!desc) return;
   const active = focusSubjectForDetail();
-  if (target) target.textContent = active ? active.label : 'Select a subject above';
+  if (target) {
+    target.textContent = active ? active.label : 'Select a subject above';
+    target.style.setProperty('--sc', active?.color || '#e85d2b');
+  }
   desc.disabled = !active;
   if (active && document.activeElement !== desc) {
     const dets = V().subjDetails || (V().subjDetails = {});
@@ -6475,12 +6482,16 @@ function aimCameraAtSelectedSubjects(previousCamera) {
   lastFramedSel = null;
   zoomGoal = null;
 }
-$('vfSubjList')?.addEventListener('click', e => {
+const toggleVideoFocusSubject = e => {
   const b = e.target.closest('[data-vfsubj]'); if (!b) return;
   const lbl = b.dataset.vfsubj, fs = focusSt();
   const previousCamera = !freeCamMode && R && vpViewMode === 'orbit' ? camWorld(T) : null;
   if (freeCamMode) toggleFreeCamMode(false);
   if (vpViewMode !== 'orbit') setVpViewMode('orbit');
+  // A focus subject owns the center of the camera view. Clear any earlier pan
+  // offset before changing the target, otherwise the old pan moves the subject
+  // away from the middle as soon as the camera is scrolled or dragged.
+  V().camPan = null;
   if (!Array.isArray(fs.targets)) fs.targets = fs.target ? [fs.target] : [];
   if (fs.targets.includes(lbl)) {
     fs.targets = fs.targets.filter(t => t !== lbl);
@@ -6500,7 +6511,8 @@ $('vfSubjList')?.addEventListener('click', e => {
   syncVideoFocus();
   renderVP();
   AC.changed();
-});
+};
+$('vfSubjList')?.addEventListener('click', toggleVideoFocusSubject);
 $('vfOn')?.addEventListener('click', () => {
   const fs = focusSt();
   fs.on = !fs.on;
@@ -6520,6 +6532,7 @@ $('vfMarkOn')?.addEventListener('click', () => {
 $('vfTarget')?.addEventListener('change', e => {
   const fs = focusSt();
   const previousCamera = !freeCamMode && R && vpViewMode === 'orbit' ? camWorld(T) : null;
+  V().camPan = null;
   fs.target = e.target.value;
   fs.targets = e.target.value ? [e.target.value] : [];
   fs.pointPinned = false;

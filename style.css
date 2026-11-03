@@ -412,7 +412,7 @@ body.video .prompt{height:420px}
 #tlTracksBtn:not([aria-pressed="true"]):hover{border-color:var(--fg-2)}
 
 /* video: viewer */
-.viewer{display:grid;grid-template-columns:minmax(0,1fr) 200px;background:#111;min-height:240px}
+.viewer{display:grid;grid-template-columns:minmax(0,1fr) 230px;background:#111;min-height:240px}
 @media (max-width:620px){.viewer{grid-template-columns:1fr}}
 .vpwrap{position:relative;display:flex;align-items:center;justify-content:center;min-height:220px;height:min(54vh,540px);padding:8px}
 .vpframe{position:relative;line-height:0;box-shadow:0 0 0 1px rgba(255,255,255,.18);
@@ -904,11 +904,15 @@ body.gated:not(.pro):not(.adv) .focus-shead-right .focus-pill .switch{
   width:9px;height:9px;border-radius:50%;border:2px solid #3fb950;
   box-shadow:0 0 4px var(--green-glow);flex:none;display:inline-block;box-sizing:border-box;
 }
-.vfsubj-list{max-height:84px;overflow-y:auto;padding:3px 2px 4px 1px}
-.vf-subj-detail{display:flex;flex-direction:column;gap:6px;flex:none;padding-top:2px;border-top:1px solid var(--line)}
+.vf-subj-head{align-items:center}
+.vf-subj-head label{white-space:nowrap}
+.vfsubj-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));max-height:84px;overflow-y:auto;padding:3px 2px 4px 1px}
+.vfsubj-list .fsubj{min-width:0;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vf-subj-detail{display:flex;flex-direction:column;gap:5px;flex:none;margin-top:4px;padding-top:6px;border-top:1px solid var(--line)}
 .vf-subj-detail .labrow{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .vf-subj-detail .labrow label{font-family:var(--f-mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
-.vf-subj-detail textarea{width:100%;min-height:78px;resize:vertical;box-sizing:border-box;font-size:12px;line-height:1.35}
+.vf-subj-detail .hint{display:inline-flex;align-items:center;max-width:145px;padding:3px 7px;border:1px solid color-mix(in srgb,var(--sc,var(--accent)),#fff 18%);border-radius:5px;background:color-mix(in srgb,var(--sc,var(--accent)) 14%,transparent);color:var(--fg-2);font:600 10px var(--f-mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.vf-subj-detail textarea{width:100%;min-height:70px;height:70px;resize:vertical;box-sizing:border-box;font-size:12px;line-height:1.35}
 .vf-subj-detail .btn{align-self:stretch}
 /* Video & 3D: Orbit, Top View, Side View buttons inside the three boxes below the camera view */
 body.video #vThree .view .vtag{
